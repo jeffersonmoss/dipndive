@@ -305,6 +305,9 @@ _PAYWALL = re.compile(r"(subscribe to (continue|read)|sign in to (continue|read)
 def fetch_article(url: str) -> Source:
     import trafilatura
     html, final = _fetch_html(url)
+    if re.search(r'"isAccessibleForFree"\s*:\s*(false|"False"|"false")', html):
+        # schema.org paywall declaration: the page body is only a teaser, never summarize it.
+        raise DipDiveError("no_article_text", "page declares isAccessibleForFree=false (paywalled)")
     text = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
     if len(text) < MIN_ARTICLE_CHARS or (_PAYWALL.search(text) and len(text) < 3000):
         raise DipDiveError("no_article_text", f"extracted {len(text)} chars (login, paywall or no article)")

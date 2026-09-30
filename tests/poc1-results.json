@@ -5,7 +5,7 @@
   "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
   "error_code": null,
   "error_message": null,
-  "text": "Yes, Robinson argues schools systematically kill creativity by stigmatizing mistakes, prioritizing academic subjects over the arts, and measuring intelligence narrowly through academic ability alone. Children naturally take creative risks and aren't afraid of being wrong, but education systems discipline this out of them, causing talented people to think they're uncreative simply because their strengths weren't valued in school. He contends that the hierarchy favoring math and languages reflects industrial-era priorities, not human potential, and that schools function mainly to produce university professors rather than cultivate diverse talents. Robinson calls for reconceiving human intelligence as diverse, dynamic, and distinct across many domains—particularly including movement, music, and artistic expression—rather than just academic reasoning.",
+  "text": "Yes, Robinson argues schools systematically kill creativity by stigmatizing mistakes, establishing hierarchies that subordinate arts below academics, and educating children \"out of\" their natural willingness to take creative risks. All children possess tremendous creative talent, but the education system's focus on academic ability and standardized subjects (rooted in 19th-century industrialism) causes most people to lose their capacity for original thinking by adulthood. He uses choreographer Gillian Lynne as an example: labeled as having a learning disorder for fidgeting in class, she flourished once placed in an environment valuing kinesthetic intelligence. Robinson calls for reconceiving education to develop the full range of human capacities, not just those valued by universities and employers.",
   "meta": {
    "duration": 1203,
    "track": "en",
@@ -14,8 +14,8 @@
    "kind": "youtube",
    "chars": 17574
   },
-  "fetch_s": 3.4,
-  "seconds": 14.1,
+  "fetch_s": 2.6,
+  "seconds": 12.7,
   "n": 1,
   "name": "manual English captions (TED)"
  },
@@ -25,7 +25,7 @@
   "title": "Time… a programmer's worst enemy // The Code Report",
   "error_code": null,
   "error_message": null,
-  "text": "Time is a programmer's worst enemy due to several compounding factors: the Gregorian calendar's inconsistent month lengths, complicated time zone rules with daylight savings and arbitrary offsets (like Nepal's 5:45), leap seconds required by Earth's uneven rotation, and most critically, JavaScript's Date API—still based on 1995 Java code that Java itself abandoned in 1997. The video explores these absurdities, from calendar oddities to the nightmare of timezone calculations, while advocating for better systems like the 1902 Cotsworth Plan's 13-month calendar with uniform 28-day months. A Stage 3 proposal for JavaScript's Temporal API would address many issues by providing timezone-aware objects and cleaner date math. The speaker notes that eliminating daylight savings would require tedious refactoring of legacy code that nobody wants to touch.",
+  "text": "Time is a programmer's worst enemy because real-world timekeeping is chaotic: the Earth rotates unevenly (requiring leap seconds), time zones have arbitrary offsets including half-hour and quarter-hour variations plus daylight savings complications, and the Gregorian calendar inconsistently assigns 28–31 days to different months. JavaScript's Date API, inherited from Java in 1995, is universally hated and makes working with dates and time zones unnecessarily painful. The proposed Temporal API aims to fix this by providing time-zone-aware objects and finer time precision (microseconds, nanoseconds). Eliminating daylight savings would ironically force programmers who've already buried themselves in complex time-handling code to update legacy systems all over again.",
   "meta": {
    "duration": 186,
    "track": "en-orig",
@@ -34,8 +34,8 @@
    "kind": "youtube",
    "chars": 3782
   },
-  "fetch_s": 4.0,
-  "seconds": 15.6,
+  "fetch_s": 2.4,
+  "seconds": 12.4,
   "n": 2,
   "name": "automatic captions only"
  },
@@ -45,7 +45,7 @@
   "title": "Ist die Zukunft schon Vergangenheit? – Das Zeit-Paradox",
   "error_code": null,
   "error_message": null,
-  "text": "According to Einstein's relativity theory, yes: past, present, and future all coexist simultaneously in a four-dimensional spacetime block, equally real and perceived differently by observers in different reference frames. However, quantum mechanics complicates this—since quantum events are fundamentally unpredictable, the future cannot be completely fixed, suggesting instead a \"growing block\" model where time actively unfolds and creates new moments. Multiple competing theories exist (some deny time exists at all), and physicists don't yet know which is correct. The video explores how your experience of present choice conflicts with a deterministic past-and-future block, resolving it through quantum uncertainty and personal reference frames.",
+  "text": "According to relativity's \"block universe\" model, yes—your past, present, and future all exist simultaneously and equally in spacetime; different observers experience different \"nows\" depending on their motion through space, suggesting all moments are equally real. However, quantum mechanics complicates this: since quantum processes are fundamentally random and unpredictable, the future cannot be completely predetermined, suggesting a \"growing block\" model where time genuinely moves forward as quantum events occur. The video presents three competing models of time but concludes that physicists don't actually know which one is correct. The transcript covers the implications for free will, the nature of \"now,\" and the question of whether the future is predetermined or still open.",
   "meta": {
    "duration": 628,
    "track": "de",
@@ -54,8 +54,8 @@
    "kind": "youtube",
    "chars": 9165
   },
-  "fetch_s": 3.0,
-  "seconds": 14.2,
+  "fetch_s": 2.6,
+  "seconds": 13.0,
   "n": 3,
   "name": "non-English (German, manual de)"
  },
@@ -66,7 +66,7 @@
   "error_code": "no_captions",
   "error_message": "no usable manual or original-language caption track",
   "text": null,
-  "seconds": 2.4,
+  "seconds": 2.2,
   "n": 4,
   "name": "no captions (8 h rain sounds)"
  },
@@ -76,7 +76,7 @@
   "title": "Deep Dive into LLMs like ChatGPT",
   "error_code": null,
   "error_message": null,
-  "text": "ChatGPT and similar models work through three training stages: absorbing internet text, learning from human-written example conversations, then reinforcing successful problem-solving through trial-and-error. The magic is largely statistical pattern-matching, not reasoning.\n\n**The pipeline:**\n\nPre-training dumps ~44 terabytes of filtered internet text (44TB fits on a few USB drives) into a 100-billion–parameter model that learns to predict the next token. Common Crawl provides 2.7 billion indexed web pages as the source. The model compresses this into parameters as lossy knowledge. At inference, it's just an expensive autocomplete.\n\nPost-training swaps internet data for ~1 million human-written conversations where labelers followed company instructions (\"be helpful, truthful, harmless\"). The model learns these conversations statistically and imitates that simulated data-labeler. GPT-4's 100,277-token vocabulary exists because a thousand-word book would create massive sequences; grouping common byte-pairs into new symbols shrinks sequence length without sacrificing expressiveness.\n\n**Why models hallucinate:**\n\nTraining data shows confident answers. When asked something the model doesn't know, it copies the *style* of confident answers from training rather than saying \"I don't know\"—unless you explicitly train it not to. Meta fixed this by probing models to find gaps in their knowledge, then adding training examples where the right answer is \"I don't know.\"\n\n**The Swiss-cheese problem:**\n\nModels excel at PhD-level physics but fail randomly on 9.11 vs 9.9 (Biblical verse format apparently triggers confusion). They're excellent at math but only if you let them *think across tokens*—rushing to an answer in one token fails. They can't count letters because they see words as *tokens*, not characters.\n\n**Reasoning and computation:**\n\nEach token gets a fixed, finite amount of neural computation (~100 layers in modern models). You can't do arbitrary work in one forward pass. That's why models trained with reinforcement learning (Deep Seek R1, GPT-o3) naturally discovered chain-of-thought reasoning—they spread problem-solving across many tokens. The model learns to backtrack, re-evaluate, and try multiple approaches, all emergent from trying to solve harder problems. AlphaGo's Move 37 analogy: the model discovered a move with 1-in-10,000 probability from humans but it was brilliant. RL can find solutions beyond human strategy.\n\n**What you're actually talking to:**\n\nNot an oracle. A neural network imitating the statistical behavior of OpenAI's data-labelers following their instruction documents. Your context window (recent conversation) is working memory; the model's parameters are vague long-term memory. Put exact text in the context window (copy-paste a Wikipedia article or PDF) and the model can use it directly; relying on what's in parameters risks hallucination and mental-arithmetic errors.\n\n**Mitigations that work:**\n\nWeb search refreshes working memory with current data. Code execution outsources arithmetic to Python. Thinking models (o3, Deep Seek R1) use RL to discover their own reasoning strategies, but RL is constrained: RLHF (learning from human feedback) only works ~100–300 steps before the reward model gets gamed into praising nonsense. Real RL (math, code with verifiable answers) can run indefinitely.\n\n**Economics:**\n\nTraining GPT-2 (1.6B params, 100B tokens) cost ~$40k in 2019. Today: ~$600 on 8 H100 GPUs for a day. Data quality and hardware speed improved dramatically. A 405-billion-parameter model (llama 3.1) on 15 trillion tokens is commodity-ish now.\n\n**Future:** Multimodal (audio/images tokenized alongside text), long-running agents supervised by humans, tool-use (keyboard/mouse control), test-time parameter updates (models learning during use, not just during training). Still open questions on whether reasoning strategies learned in verifiable domains (math, code) transfer to creative tasks.\n\n**Where to find them:** Chat.openai.com and Gemini.google.com for proprietary; together.ai or Hyperbolic for open-weights models like Deep Seek and Llama; LM Studio to run smaller models locally. El Marina leaderboard tracks performance (increasingly gamed, so verify empirically).",
+  "text": "# Deep Dive into LLMs like ChatGPT\n\nWhen you use ChatGPT, you're sampling from a statistical model trained in three stages—not one monolithic system. Here's what matters.\n\n## The training pipeline\n\n**Pre-training** (three months, thousands of GPUs): Compress internet text into 15 trillion tokens and 405 billion parameters. Despite the internet's vastness, the final dataset is only ~44 terabytes (fits on a hard drive) after aggressive filtering for quality. The model learns patterns but generates internet remixes, not answers.\n\n**Supervised fine-tuning** (three hours, expensive but brief): Replace internet text with ~1 million human-curated conversations. Humans follow labeling instructions to write ideal responses. GPT-4's familiarity comes from imitating these labeled examples, not from reasoning.\n\n**Reinforcement learning** (experimental; Deep Seek R1, GPT-O1/O3 only): Sample thousands of solutions to math/code problems. Keep only the correct ones. Train on them. Repeat. This stage is magical: models spontaneously discover chain-of-thought reasoning, backtracking, and re-evaluation—no one hardcoded these strategies. The model learns *how to think* by trial and error, like AlphaGo discovering Move 37 (a 1-in-10,000 human probability that was brilliant).\n\n## Why models hallucinate—and how to fix it\n\nModels don't know what they don't know. Training data shows confident answers to every question—no \"I don't know\" examples. Solution: interrogate the model on the boundary of its knowledge, then add training data where the correct answer is \"I don't know.\" Web search works too: when uncertain, the model learns to emit special tokens that pause generation, fetch web results, and inject them into context as working memory.\n\n## Why they fail randomly (the \"Swiss cheese\" model)\n\n- **Can't count letters or do mental arithmetic**: Each token gets ~100 layers of computation. Too much work per token breaks it. Workaround: ask for code, let Python count.\n- **Can't compare 9.11 vs 9.9**: Internal neurons fire for Bible verse associations (9:11, 9:9) and override math. Random and reproducible failure.\n- **Solve PhD physics but can't count Rs in \"strawberry\"**: Don't see characters, see tokens. \"Strawberry\" is one token. Character-level tasks are invisible to them.\n\nThe solution: use tools (code interpreter, web search) rather than asking the model to do mental work.\n\n## Reasoning is emergent, not programmed\n\nDeep Seek R1 and GPT-O3 train via reinforcement learning. On the author's same apple/orange math problem:\n- GPT-4o (SFT only): one clean solution\n- Deep Seek R1 (RL): thinks aloud—\"wait, let me re-evaluate,\" tries different angles, double-checks, offers an alternate approach, *then* writes a polished answer\n\nThis hidden thinking—bloating response length—emerges unprompted. No human wrote \"re-evaluate steps.\" The model discovered it increases accuracy on practice problems.\n\n## Concrete limitations of RLHF (the dirty secret)\n\nMost models use RLHF (reinforcement learning from human feedback), not real RL. A separate neural network learns to score outputs based on human orderings. Problem: after ~100–200 training updates, this reward model can be \"gamed.\" The RL optimizer finds adversarial inputs that score perfectly but output gibberish. You have to stop training early. It's not RL in the magical sense—it's a fine-tuning hack.\n\n## What's actually running when you chat\n\nYour prompt is tokenized (GPT-4 uses 100,277 token IDs), inserted into a protocol format with special tokens like `im_start` and `im_end`, then becomes a one-dimensional sequence. The model statefully samples one token at a time—each token is a biased coin flip from a probability distribution. Same prompt, slightly different answer each time.\n\nThink of it as: **simulation of a data labeler who learned from Open AI's labeling instructions**—not a person, not a search engine, not reasoning in your sense. It's a statistical pattern matching system constrained to finite computation per token.\n\n## Cost and scale\n\nGPT-2 cost $40,000 to train in 2019; reproducible today for ~$600 (author did it) or $100 with optimization. The author trained on 8× H100 GPUs rented for $3/GPU/hour from Lambda Labs. Hardware speed and software efficiency, not data, drove the cost collapse.\n\n## Practical use\n\n- For arithmetic/counting/current facts: **use tools** (code interpreter, web search).\n- For math/code: **use thinking models** (O3, Deep Seek R1), which spend 30 seconds reasoning.\n- For factual questions: **regular models** (GPT-4o) are fast enough.\n- Always verify; models hallucinate even after mitigations.\n- Provide context in the prompt if possible (models access context window better than vague memory).\n\nThe frontier is long-horizon agent tasks with human supervision—models won't yet self-correct over hours without help.",
   "meta": {
    "duration": 12683,
    "track": "en-orig",
@@ -85,19 +85,28 @@
    "kind": "youtube",
    "chars": 215359
   },
-  "fetch_s": 5.2,
-  "seconds": 38.8,
+  "fetch_s": 5.4,
+  "seconds": 45.5,
   "n": 5,
   "name": "over 2 hours (3 h 31 m, auto captions)"
  },
  {
-  "url": "https://www.youtube.com/shorts/MNoEtQXekBM",
+  "url": "https://www.youtube.com/shorts/kKJr6eiLcoE",
   "mode": "claude-dip",
-  "title": null,
-  "error_code": "no_captions",
-  "error_message": "no usable manual or original-language caption track",
-  "text": null,
-  "seconds": 2.3,
+  "title": "Why Is the Sky Blue? 🌌 The Science Behind It Explained! #Shorts #Science",
+  "error_code": null,
+  "error_message": null,
+  "text": "The sky is blue because blue light from sunlight has a shorter wavelength, and atmospheric molecules like nitrogen and oxygen scatter short-wavelength light much more strongly than longer wavelengths. This scattered blue light reaches your eyes from all directions across the sky. At sunset, sunlight travels through much more atmosphere, so blue light gets scattered away further, leaving red and orange wavelengths to reach your eyes instead.",
+  "meta": {
+   "duration": 62,
+   "track": "en-orig",
+   "auto": true,
+   "language": "en",
+   "kind": "youtube",
+   "chars": 612
+  },
+  "fetch_s": 2.5,
+  "seconds": 9.4,
   "n": 6,
   "name": "Short (youtube.com/shorts)"
  },
@@ -107,7 +116,7 @@
   "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
   "error_code": null,
   "error_message": null,
-  "text": "Yes, Robinson argues schools systematically kill creativity by structuring education around a hierarchy that devalues arts, emphasizing academic subjects and punishing mistakes rather than encouraging risk-taking. He contends that all children are naturally creative and unafraid of being wrong, but education systems—designed for 19th-century industrialism—progressively eliminate this capacity as children grow up. He illustrates how schools teach children to think narrowly (focusing on the head while ignoring the body and kinesthetic learning) and how talented individuals often believe they aren't creative simply because their strengths weren't valued by the school system. Robinson concludes we must radically rethink intelligence as diverse and dynamic, and educate children's \"whole being\" rather than narrowing their capacities to fit an outdated model.",
+  "text": "Robinson argues that yes, schools kill creativity by systematically devaluing artistic subjects and fostering fear of being wrong, which suppresses the natural willingness to take chances that all children possess. Education systems worldwide were built to serve industrialism and prioritize academic ability—producing university professors as the ideal output—effectively \"educating people out of their creative capacities.\" He contends that children are born with tremendous creative potential but by adulthood have lost it, citing the example of choreographer Gillian Lynne, misdiagnosed with a learning disorder when she simply needed to move to think. The solution is to rethink education fundamentally: treat creativity with the same status as literacy, value diverse forms of intelligence, and educate children's \"whole being\" to prepare them for an unpredictable future.",
   "meta": {
    "duration": 1203,
    "track": "en",
@@ -117,7 +126,7 @@
    "chars": 17574
   },
   "fetch_s": 2.6,
-  "seconds": 12.8,
+  "seconds": 13.6,
   "n": 7,
   "name": "Gmail-wrapped link to TED video"
  },
@@ -127,13 +136,13 @@
   "title": "Do Things that Don't Scale",
   "error_code": null,
   "error_message": null,
-  "text": "Startups must do labor-intensive, manually executed things initially because that's the only realistic way to gain traction and achieve growth—you can't wait for customers to find you. Founders should manually recruit users one at a time, provide obsessively great service (like Airbnb going door-to-door in New York or Stripe physically setting up accounts), and focus on narrow markets first to build critical mass. Counterintuitively, this hands-on approach isn't just necessary but beneficial: it teaches you what users actually need, builds company culture around customer obsession, and prevents premature optimization. Big launches and partnerships rarely work; growth comes from compound weekly growth rates starting with small numbers, not from grand gestures.",
+  "text": "Startups should manually recruit users and obsessively delight them personally in the early stages, even though this labor doesn't scale, because that unscalable effort is what actually generates the growth momentum needed to succeed. Examples include Stripe's founders personally setting up clients' accounts (\"Collison installation\"), Airbnb going door-to-door in New York, and Wufoo sending handwritten thank-you notes to each new user. This hands-on engagement produces the product feedback and customer loyalty that matter far more than big launches or partnerships; it also becomes embedded in the company's culture permanently. Graham argues startups should think of their idea as a vector with two components: what you build *and* the unscalable efforts required to launch it.",
   "meta": {
    "kind": "article",
    "chars": 24765
   },
-  "fetch_s": 2.4,
-  "seconds": 13.6,
+  "fetch_s": 0.8,
+  "seconds": 11.4,
   "n": 8,
   "name": "plain blog post (Paul Graham)"
  },
@@ -143,24 +152,29 @@
   "title": "Do Things that Don't Scale",
   "error_code": null,
   "error_message": null,
-  "text": "Startups succeed because founders manually recruit users and obsess over early-stage customer experience—not because good products grow on their own. The unscalable work you do at the start shapes your company permanently.\n\n**Concrete growth math**: 10% weekly user growth compounds hard. 100 users → 14,000 after one year, 2 million after two. Graham uses this to explain why founders overlook small early numbers.\n\n**Stripe's \"Collison installation\"**: When prospects agreed to try Stripe, the Collison brothers didn't email a link. They said \"give me your laptop\" and set them up live. This became the named technique at YC for early user acquisition. Stripe was famous internally for aggression even though payment processing should have been easy to sell.\n\n**Airbnb's 30-day fragility window**: The company was so shaky that manual door-to-door recruitment in NYC (founders showing up to YC dinners with rolly bags after trips) made the difference between survival and failure.\n\n**Facebook's contained fire**: Started only at Harvard (maybe 5,000 potential users). Made it *feel* like home by manually creating course lists for each school they expanded to. Kept geographically narrow before going broad.\n\n**Hardware's manual phase**: Pebble assembled watches themselves; Meraki hand-built routers. Solves the catch-22: can't get factory money without users, can't get users without a real product. Manual fabrication teaches things (Pebble learned \"how valuable it was to source good screws\") you'd never discover in manufacturing.\n\n**Stripe faked the feature**: \"Instant\" merchant accounts were actually founders manually signing users up for traditional accounts behind the scenes—software was just theater until the back-end was real.\n\n**Viaweb-as-service**: When merchants refused to use their online store software, they built stores *for* them (selling luggage, pens, men's shirts). Learned real problems from doing the customer's work themselves. Sometimes implemented needed features mid-project.\n\n**Ben Silbermann's targeting move**: Noticed early Pinterest users cared about design. Instead of a broad launch, went to a design blogger conference to recruit. (Answering the practical question: how do you find the *right* users to recruit manually?)\n\n**Launch size doesn't correlate with success**: \"How many successful startup launches do you remember?\" A big launch (8 publications, timed for Tuesday) gets you an initial core. How happy you make them determines your trajectory weeks later. Graham notes inverse correlation—he remembers Google Wave and the Segway, both famous flops.\n\n**Engineer resistance to handholding**: Founders trained in engineering avoid customer service (it's not \"robust and elegant\"), but being small lets you deliver service no big company can. Tim Cook doesn't handwrite thank-you notes. You can.\n\n**One-user consulting model**: Pick a single customer, build exactly for them like a consultant. Tweak until perfect, then you've accidentally solved a category. (Exception: if there's literally no way to find users, it's a bad idea.)",
+  "text": "**Startups don't grow by making something great and waiting for demand. Founders must manually recruit users one by one and obsess over their experience—counterintuitively, these labor-intensive tasks become permanent strengths.**\n\n**Growth math**: 10% weekly growth from 100 users yields 14,000 after a year, 2 million after two. That's why the first step of recruiting 10 users matters despite seeming inconsequential.\n\n**Stripe's \"Collison installation\"**: Most beta users got a link. Patrick and John Collison would demand \"Give me your laptop\" and set them up live on the spot. Obsessive manual setup became their recruiting method.\n\n**Airbnb's 30-day escape hatch**: The founders traveled door-to-door in NYC recruiting users and fixing host listings. Graham notes they arrived at YC dinners with rolly bags because they were constantly flying somewhere. That month of in-person engagement made the difference between success and failure—the company was that fragile.\n\n**Bill Gates returned to Harvard**: He took a semester after starting Microsoft because he didn't realize it would become important. Inexperienced founders constantly underestimate their own startups; you must push back against your own skepticism.\n\n**Manual ops disguised as features**: Stripe gave users \"instant\" merchant accounts by manually signing them up for traditional accounts behind the scenes. Viaweb built e-commerce stores for merchants by hand before automating; in the process, they discovered what merchants actually needed. Pebble assembled watches themselves before Kickstarter; when they finally mass-produced, they'd learned lessons (like sourcing good screws) they'd never have discovered from a factory.\n\n**Facebook started narrow**: Just Harvard students—a few thousand market. Zuckerberg manually created course lists for each school to make students feel it was *their* natural home. Only after critical mass did he expand to other colleges, then everywhere.\n\n**Why big launches flop**: Founders believe broadcasting their existence will bring users. Actually, novel things take time to reach people's attention. The launches people remember are famous failures (Segway, Google Wave).\n\n**The \"insanely great\" trap**: Steve Jobs meant obsessive design quality on the Mac. Early-stage founders misread this as \"build a perfect product.\" Actually, it means deliver an insanely great *user experience* with a buggy product—make up the gap with attentiveness. A hand-written thank-you note (Wufoo's tactic) and perfect setup (Stripe) matter more than polish.\n\n**Ben Silbermann found his vector**: Pinterest's early users were interested in design. Instead of waiting for organic growth, he went to a design blogger conference to recruit deliberately. This works because early adopters reveal which subset of the market will take off.\n\n**Think of startups as vectors, not scalars**: A startup is (1) what you build *plus* (2) the specific unscalable thing you do to launch it. Founders who skip the second part—expecting partnerships or launches to do the work—fail. The unscalable part often becomes permanent culture: if you're aggressive recruiting users at 10, you'll be aggressive at 10,000.",
   "meta": {
    "kind": "article",
    "chars": 24765
   },
-  "fetch_s": 0.4,
-  "seconds": 28.8,
+  "fetch_s": 2.8,
+  "seconds": 33.0,
   "n": 9,
   "name": "plain blog post (Paul Graham)"
  },
  {
-  "url": "https://www.nytimes.com/2024/06/10/technology/ai-chatbots-hallucinations.html",
+  "url": "https://www.nytimes.com/2026/09/30/technology/meta-ai-data-centers-taxes.html",
   "mode": "claude-dip",
-  "title": null,
-  "error_code": "extract_failed",
-  "error_message": "HTTP 404",
-  "text": null,
-  "seconds": 0.8,
+  "title": "How Meta Uses A.I. Data Centers to Avoid Billions in Federal Taxes",
+  "error_code": null,
+  "error_message": null,
+  "text": "Meta classifies its multibillion-dollar AI data centers as experimental \"pilot models\" to claim a research-and-experimentation tax credit created in the 1980s, allowing it to discount the cost of expensive AI chips it buys from Nvidia and others. This lets the company claim billions in tax credits despite publicly saying these centers are central to its business success. Meta's own accountants acknowledge the strategy is legally risky and vulnerable to IRS challenge.",
+  "meta": {
+   "kind": "article",
+   "chars": 2060
+  },
+  "fetch_s": 0.7,
+  "seconds": 8.0,
   "n": 10,
   "name": "paywalled article (NYT)"
  },
@@ -169,7 +183,7 @@
   "mode": "codex-dip",
   "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
   "error_code": "auth",
-  "error_message": "::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n2026-09-30T23:22:32.052686Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses",
+  "error_message": "::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n2026-09-30T23:26:30.524219Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses",
   "text": null,
   "meta": {
    "duration": 1203,
@@ -179,10 +193,21 @@
    "kind": "youtube",
    "chars": 17574
   },
-  "fetch_s": 2.9,
-  "seconds": 20.8,
+  "fetch_s": 5.0,
+  "seconds": 24.0,
   "n": 11,
   "name": "codex isolation of a real source (TED)"
+ },
+ {
+  "url": "https://www.youtube.com/shorts/MNoEtQXekBM",
+  "mode": "claude-dip",
+  "title": null,
+  "error_code": "no_captions",
+  "error_message": "no usable manual or original-language caption track",
+  "text": null,
+  "seconds": 2.0,
+  "n": 12,
+  "name": "Short without captions"
  },
  {
   "url": "https://www.youtube.com/watch?v=7xTGNNLPyMI",
@@ -199,9 +224,9 @@
    "kind": "youtube",
    "chars": 215359
   },
-  "fetch_s": 10.8,
-  "seconds": 10.8,
-  "n": 12,
+  "fetch_s": 7.9,
+  "seconds": 7.9,
+  "n": 13,
   "name": "over 2 hours, source only"
  }
 ]
