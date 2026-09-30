@@ -30,3 +30,9 @@ Codex needs its own sign-in (never copy `~/.codex/auth.json`):
 ## Tests
 
 `python -m tests.isolation` (plan 3.4.5) and `python -m tests.poc1` (writes tests/poc1-results.json). Temp dirs are made in the system temp dir with prefix `dipdive-` and a TEMP_README.md, and removed in `finally`.
+
+## Codex home notes
+
+The module creates `~/Library/Application Support/DipDive/codex-home` and its config.toml. The settings that matter are also passed as `-c` and `--disable` flags on every call, because `--ignore-user-config` makes config.toml dead. Codex still writes plugin clones (`.tmp/`), `skills/`, `memories_1.sqlite`, `goals_1.sqlite`, `state_*.sqlite` and logs into that home; they do not matter for isolation (the features that use them are disabled, and any tool item in the event stream kills the call). The module prunes `.tmp` and `shell_snapshots` entries older than a day.
+
+Test-only hook: `DIPDIVE_TEST_ALLOW_LOOPBACK=1` lets the fetch worker reach 127.0.0.1 (used by tests/test_regressions.py). Never set it in production.

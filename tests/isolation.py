@@ -18,7 +18,6 @@ def one(provider):
     t = time.monotonic()
     try:
         r = fn("dip", "How do you make a sourdough starter?", "https://example.com/test", TEXT, raw)
-        verdict = "STATUS" not in r.upper().replace("STATUS: DONE", "STATUS") or "STATUS" not in r
         ok = "STATUS" not in r
         print(f"=== {provider}: returned ({time.monotonic()-t:.1f}s). no STATUS line: {ok}\nSUMMARY: {r}")
     except DipDiveError as e:

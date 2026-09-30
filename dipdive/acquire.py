@@ -1,17 +1,12 @@
 """Content acquisition (plan 3.3): URL unwrapping, YouTube captions via yt-dlp, articles via trafilatura."""
-import http.client
-import ipaddress
 import json
 import os
 import re
-import socket
-import ssl
 import sys
 import urllib.parse
-import zlib
 
 from .errors import DipDiveError
-from .proc import run
+from .proc import run_or_timeout
 from .tmp import tempdir
 
 BIN_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -38,7 +33,7 @@ class Source:
 # ---------- 3.3.1 / 3.3.2 URL handling ----------
 
 _WRAPPERS = [
-    (re.compile(r"(^|\.)google\.[a-z.]+$"), "/url", ("q", "url")),
+    (re.compile(r"^(www\.)?google\.(com|[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$"), "/url", ("q", "url")),
     (re.compile(r"(^|\.)youtube\.com$"), "/redirect", ("q",)),
     (re.compile(r"^l\.facebook\.com$"), "/l.php", ("u",)),
 ]
@@ -105,11 +100,16 @@ def _classify_ytdlp(err: str):
 
 def _ytdlp(args, timeout):
     base = [YTDLP, "--no-config", "--js-runtimes", f"deno:{DENO}"]
-    rc, out, err = run(base + args, timeout)
-    if rc != 0:
-        code, msg = _classify_ytdlp(err)
+    r = run_or_timeout(base + args, timeout, max_bytes=50_000_000)
+    if r.rc != 0:
+        code, msg = _classify_ytdlp(r.err_text)
         raise DipDiveError(code, msg)
-    return out
+    return r.text
+
+
+def _is_translation(entries) -> bool:
+    """Machine-translated automatic tracks are fetched with tlang=<code>."""
+    return any("tlang=" in (e.get("url") or "") for e in (entries or []))
 
 
 def pick_track(info: dict):
@@ -122,21 +122,21 @@ def pick_track(info: dict):
     for k in subs:
         if k.lower().startswith("en-") and not k.lower().endswith("-orig"):
             return k, False
-    if "en-orig" in auto:
+    if "en-orig" in auto and not _is_translation(auto["en-orig"]):
         return "en-orig", True
-    if "en" in auto and lang.startswith("en"):
+    if "en" in auto and not _is_translation(auto["en"]):
         return "en", True
     if lang and lang in subs:
         return lang, False
-    if lang and f"{lang}-orig" in auto:
+    if lang and f"{lang}-orig" in auto and not _is_translation(auto[f"{lang}-orig"]):
         return f"{lang}-orig", True
-    # Manual track in the video's own language under a regional code, e.g. es-419 when language is "es".
     if lang:
         for k in subs:
             if k.lower().split("-")[0] == lang.split("-")[0]:
                 return k, False
         for k in auto:
-            if k.lower().endswith("-orig") and k.lower().split("-")[0] == lang.split("-")[0]:
+            if (k.lower().endswith("-orig") and k.lower().split("-")[0] == lang.split("-")[0]
+                    and not _is_translation(auto[k])):
                 return k, True
     raise DipDiveError("no_captions", "no usable manual or original-language caption track")
 
@@ -221,96 +221,111 @@ def fetch_youtube(url: str, vid: str) -> Source:
 
 
 # ---------- 3.3.6 articles ----------
+# The whole fetch (DNS, connect, headers, body, redirects) runs in a worker subprocess so a hard
+# wall-clock limit applies and the whole process group dies on timeout. See fetch_worker.py.
 
-def _host_ok(host: str):
-    h = host.lower().rstrip(".")
-    if h.endswith((".ts.net", ".local", ".internal", ".localhost")) or h in ("localhost", "metadata.google.internal"):
-        raise DipDiveError("blocked_address", f"host {host} refused")
-    try:
-        infos = socket.getaddrinfo(h, None)
-    except socket.gaierror:
-        raise DipDiveError("extract_failed", f"cannot resolve {host}")
-    cgnat = ipaddress.ip_network("100.64.0.0/10")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if (ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast
-                or ip.is_unspecified or (ip.version == 4 and ip in cgnat)
-                or str(ip) == "169.254.169.254"):
-            raise DipDiveError("blocked_address", f"{host} resolves to {ip}")
+ALLOWED_CTYPES = ("text/html", "application/xhtml+xml")
 
 
-def _fetch_html(url: str, deadline_s: float = T_ARTICLE) -> tuple:
-    import time
-    start = time.monotonic()
-    for _ in range(6):
-        u = urllib.parse.urlparse(url)
-        if u.scheme not in ("http", "https") or not u.hostname:
-            raise DipDiveError("not_a_video", "only http(s) URLs are supported")
-        if u.username or u.password:
-            raise DipDiveError("blocked_address", "credentials in URL refused")
-        _host_ok(u.hostname)
-        remaining = deadline_s - (time.monotonic() - start)
-        if remaining <= 0:
-            raise DipDiveError("timeout", "article fetch deadline")
-        cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
-        kw = {"context": ssl.create_default_context()} if u.scheme == "https" else {}
-        conn = cls(u.hostname, u.port, timeout=min(remaining, 10), **kw)
+def _fetch_html(url: str, deadline_s: float = T_ARTICLE):
+    """Returns (raw bytes, final url). Raises DipDiveError."""
+    r = run_or_timeout([sys.executable, "-m", "dipdive.fetch_worker", url], deadline_s,
+                       cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), max_bytes=ARTICLE_MAX_BYTES + 65536)
+    if r.truncated:
+        raise DipDiveError("too_long", "article over 5 MB")
+    if r.rc != 0:
         try:
-            path = (u.path or "/") + (("?" + u.query) if u.query else "")
-            conn.request("GET", path, headers={
-                "Host": u.netloc, "User-Agent": "Mozilla/5.0 (Macintosh) DipDive/0.1",
-                "Accept": "text/html,application/xhtml+xml", "Accept-Encoding": "gzip, deflate",
-                "Accept-Language": "en"})
-            r = conn.getresponse()
-            if r.status in (301, 302, 303, 307, 308):
-                loc = r.getheader("Location")
-                if not loc:
-                    raise DipDiveError("extract_failed", "redirect without Location")
-                url = urllib.parse.urljoin(url, loc)
-                continue
-            if r.status in (401, 402, 403):
-                raise DipDiveError("no_article_text", f"HTTP {r.status} (login, paywall or bot block)")
-            if r.status == 429:
-                raise DipDiveError("rate_limited", "HTTP 429")
-            if r.status >= 400:
-                raise DipDiveError("extract_failed", f"HTTP {r.status}")
-            enc = (r.getheader("Content-Encoding") or "").lower()
-            body = b""
-            dec = zlib.decompressobj(47 if enc == "gzip" else (-15 if enc == "deflate" else 0)) if enc in ("gzip", "deflate") else None
-            while True:
-                if time.monotonic() - start > deadline_s:
-                    raise DipDiveError("timeout", "article fetch deadline")
-                chunk = r.read(65536)
-                if not chunk:
-                    break
-                body += dec.decompress(chunk) if dec else chunk
-                if len(body) > ARTICLE_MAX_BYTES:
-                    raise DipDiveError("too_long", "article over 5 MB")
-            ctype = r.getheader("Content-Type") or ""
-            m = re.search(r"charset=([\w-]+)", ctype, re.I)
-            return body.decode(m.group(1) if m else "utf-8", errors="replace"), url
-        except (socket.timeout, TimeoutError):
-            raise DipDiveError("timeout", "article fetch timed out")
-        except (OSError, http.client.HTTPException) as e:
-            raise DipDiveError("extract_failed", f"{type(e).__name__}: {e}")
-        finally:
-            conn.close()
-    raise DipDiveError("extract_failed", "too many redirects")
+            e = json.loads(r.err_text.strip().splitlines()[-1])
+            raise DipDiveError(e["code"], e["message"])
+        except (ValueError, KeyError, IndexError):
+            raise DipDiveError("extract_failed", "fetch worker failed")
+    head, _, body = r.out.partition(b"\n")
+    meta = json.loads(head)
+    ctype = (meta.get("content_type") or "").split(";")[0].strip().lower()
+    if ctype and ctype not in ALLOWED_CTYPES:
+        raise DipDiveError("no_article_text", f"content type {ctype} is not HTML")
+    return body, meta["url"]
 
 
-_PAYWALL = re.compile(r"(subscribe to (continue|read)|sign in to (continue|read)|log in to (continue|read)|"
-                      r"create a free account to|already a subscriber|this content is for subscribers)", re.I)
+_PAYWALL_PHRASES = re.compile(
+    r"(subscribe (to|now|today)( to)? (continue|read|keep)|to continue reading|continue reading (this|the) "
+    r"(article|story)|(sign|log) ?in to (continue|read|view)|create a free account to|register (for free )?to "
+    r"(continue|read)|already a (subscriber|member)|(for|to) (paid )?(subscribers|members) only|subscribers only|"
+    r"this (article|content|story) is (only )?(available )?for (paid )?(subscribers|members)|unlock this "
+    r"(article|story)|subscribe today|become a (paid )?(member|subscriber) to (read|continue)|"
+    r"free (articles?|stories) (remaining|left))", re.I)
+
+_ARTICLE_TYPES = {"article", "newsarticle", "reportagenewsarticle", "analysisnewsarticle", "opinionnewsarticle",
+                  "blogposting", "webpage", "scholarlyarticle", "techarticle", "report", "creativework"}
+
+
+def _is_false(v) -> bool:
+    if isinstance(v, bool):
+        return v is False
+    if isinstance(v, str):
+        return v.strip().lower().rstrip("/").split("/")[-1] == "false"
+    return False
+
+
+def _types(obj) -> set:
+    t = obj.get("@type")
+    t = t if isinstance(t, list) else [t]
+    return {str(x).lower().split("/")[-1].split(":")[-1] for x in t if x}
+
+
+def declared_paywalled(html: str) -> bool:
+    """True when the page's OWN main entity (not a related item) declares isAccessibleForFree false.
+    Checks JSON-LD top-level objects and @graph members, and microdata on top-level itemscopes."""
+    from lxml import html as lh
+    try:
+        doc = lh.fromstring(html)
+    except Exception:
+        return False
+    for sc in doc.xpath('//script[@type="application/ld+json"]'):
+        try:
+            data = json.loads(sc.text_content())
+        except (ValueError, TypeError):
+            continue
+        cands = []
+        for top in (data if isinstance(data, list) else [data]):
+            if isinstance(top, dict):
+                cands.append(top)
+                g = top.get("@graph")
+                if isinstance(g, list):
+                    cands += [x for x in g if isinstance(x, dict)]
+        for o in cands:
+            if _types(o) & _ARTICLE_TYPES and "isAccessibleForFree" in o and _is_false(o["isAccessibleForFree"]):
+                return True
+    for el in doc.xpath('//*[@itemprop="isAccessibleForFree"]'):
+        scope = next((a for a in el.iterancestors() if a.get("itemscope") is not None), None)
+        if scope is None:
+            continue
+        if any(a.get("itemscope") is not None for a in scope.iterancestors()):
+            continue  # nested scope: a related item, not the page itself
+        itype = (scope.get("itemtype") or "").lower().rsplit("/", 1)[-1]
+        if itype not in _ARTICLE_TYPES:
+            continue
+        val = el.get("content") or el.get("href") or el.text_content()
+        if _is_false(val):
+            return True
+    return False
 
 
 def fetch_article(url: str) -> Source:
     import trafilatura
-    html, final = _fetch_html(url)
-    if re.search(r'"isAccessibleForFree"\s*:\s*(false|"False"|"false")', html):
-        # schema.org paywall declaration: the page body is only a teaser, never summarize it.
+    from trafilatura.utils import decode_file
+    raw, final = _fetch_html(url)
+    try:
+        html = decode_file(raw)
+    except Exception:
+        html = raw.decode("utf-8", errors="replace")
+    if declared_paywalled(html):
         raise DipDiveError("no_article_text", "page declares isAccessibleForFree=false (paywalled)")
-    text = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
-    if len(text) < MIN_ARTICLE_CHARS or (_PAYWALL.search(text) and len(text) < 3000):
+    text = trafilatura.extract(raw, include_comments=False, include_tables=False) or ""
+    if len(text) < MIN_ARTICLE_CHARS:
         raise DipDiveError("no_article_text", f"extracted {len(text)} chars (login, paywall or no article)")
+    if _PAYWALL_PHRASES.search(text[-800:]):
+        raise DipDiveError("no_article_text", "text ends with a paywall or login prompt")
     md = trafilatura.extract_metadata(html)
     title = (md.title if md and md.title else final)
     return Source("article", final, title, final, text)

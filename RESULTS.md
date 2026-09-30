@@ -42,6 +42,8 @@ Timings are wall clock for the whole job (fetch plus model). Limits: Dip 45 s, D
 | 12 | Short without captions<br>`https://www.youtube.com/shorts/MNoEtQXekBM` | claude-dip | error (expected failure) | no_captions | 2.0 (within 45s) | no usable manual or original-language caption track |
 | 13 | over 2 hours, source only<br>`https://www.youtube.com/watch?v=7xTGNNLPyMI` | source | ok (source text) | - | 7.9 (n/a) | [215359 chars] hi everyone so I've wanted to make this video for a while it is a comprehensive but General audience introduction to large language models like Chachi PT and what I'm hoping to achieve in this video is to give you kind of mental models for thinking through what it is that this tool is it is obviousl ... h ask them questions but always check and verify and you will be very successful in your work if you do so uh so I hope this video was useful and interesting to you I hope you had it fun and uh it's already like very long so I apologize for that but I hope it was useful and yeah I will see you later |
 
+(Rows 1, 5, 8 and 10 were re-run after the review fixes below: 13.3 s, 46.7 s, 11.8 s and `no_article_text` in 0.5 s, same outcomes. Rows in the table are from the first run.)
+
 Extra checks of the guards (no model call, all refused as intended): 127.0.0.1 and 169.254.169.254 (`blocked_address`), a `*.ts.net` host (`blocked_address`), credentials in URL (`blocked_address`), a playlist-only YouTube link (`not_a_video`).
 
 ## 3. Timing summary
@@ -66,3 +68,27 @@ Extra checks of the guards (no model call, all refused as intended): 127.0.0.1 a
 
 1. Codex login missing (see section 1). All Codex rows and the Codex isolation test are pending.
 2. Dive on only one provider so far (Claude), on two sources (the over-2-hours video and a blog post).
+
+## 6. Review fixes (REVIEW-opus.md, findings 1 to 12, 14, 15, 16; 13 left open as accepted by the plan)
+
+Regression tests: `.venv/bin/python -m unittest tests.test_regressions` (28 tests, no network, no Codex login; model binaries are faked; all pass). Claude isolation test re-run: PASS (normal summary, no STATUS line).
+
+1. Codex: isolation is now passed as `-c` overrides (`web_search="disabled"`, `mcp_servers={}`, approval and sandbox) plus `--disable` for 20 features (shell_tool, unified_exec, apps, plugins, hooks, memories, multi_agent, view_image, browser_use*, computer_use, image_generation, goals, skill_search, remote_plugin, tool_suggest, worktrees, write_stdin_approval, workspace_dependencies), with `--ignore-user-config` kept. The module creates CODEX_HOME and a belt-and-braces config.toml itself and prunes `.tmp` and `shell_snapshots` entries older than a day. Verified the flags are accepted by 0.159.2 (`codex features list` reflects them); an actual `exec` with them is untested until the Codex login exists.
+2. Article fetches run in a worker subprocess (`dipdive/fetch_worker.py`) under a hard 10 s wall clock covering DNS, connect, headers and body; the process group is killed on timeout. Header-drip and body-drip tests return `timeout` in about 3 s.
+3. Paywall: JSON-LD (top-level objects and @graph members only) and microdata (top-level itemscope only) parsed properly; accepts false, "false", "False", schema.org/False in http and https; nested or related items ignored; phrase check now runs on the last 800 characters of any-length text with many variants. Some teasers will still slip: a site that serves a truncated body with no marker and no closing phrase is indistinguishable from a short article.
+4. `run_job` catches every exception (`internal_error`, traceback in the job log) and validates `mode` (`invalid_mode`). The four crash inputs (zlib deflate, bad charset, port 99999, overlong or empty DNS label) now give classified errors.
+5. Errors are classified from structured fields: Claude `is_error`, `api_error_status`, `result` of an error result; Codex `error` and `turn.failed` events only. Never model output or token counts. Quota is checked before auth, with word-boundary regexes.
+6. `proc.run` reads pipes in threads with a byte cap applied while capturing, kills the whole group on timeout, and does not wait for a descendant that detached with setsid (test: returns at the timeout, not 20 s later).
+7. Completion is required: Claude `subtype == success` and `stop_reason == end_turn`; Codex `turn.completed`. Output over 20,000 characters is the error `output_truncated`, not a cut.
+8. Decompression is bounded while streaming (`max_length`), bytearray accumulation; a 200 MB gzip bomb is refused as `too_long`.
+9. Codex events are scanned as they arrive against an allowlist (`agent_message`, `reasoning`); the first other item type kills the process group at once. Non-object lines are ignored.
+10. Each model call writes a JSON log (stderr, result fields, tool events, errors) to `~/Library/Application Support/DipDive/logs`, pruned after 30 days. The job result does not carry the stderr itself, only the log path on internal errors.
+11. `<source` and `</source` in the source text are neutralized.
+12. Automatic tracks whose format URLs contain `tlang=` are rejected; the metadata `language` heuristic for automatic `en` is gone.
+14. Raw bytes go to trafilatura (charset sniffing); non-HTML content types are refused as `no_article_text`.
+15. See 4.
+16. Claude cwd is now an empty `work` subfolder; TEMP_README uses the real hostname; Claude binary path prefers the absolute `~/.local/bin/claude`; the Google-wrapper regex is anchored; unused variable removed.
+
+Codex home: plugin clones, skills, `memories_1.sqlite`, `goals_1.sqlite`, logs and state DBs appear in codex-home when Codex runs. With plugins, memories, goals, hooks and skill_search disabled they should stay empty or unused; they are in DipDive's own home so they do not touch `~/.codex`. They are not a leak path because every tool type that could read them is disabled and the stream allowlist kills any tool item.
+
+Finding 13 (DNS rebinding) is left open, as the plan accepts it.

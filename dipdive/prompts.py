@@ -1,4 +1,5 @@
 """Versioned prompts (plan section 3.5). The version is part of the cache key."""
+import re
 
 PROMPT_VERSION = "p1"
 
@@ -32,5 +33,14 @@ def system_prompt(level: str) -> str:
     return HEADER + "\n\n" + (DIP if level == "dip" else DIVE)
 
 
+_DELIM = re.compile(r"<(\s*/?\s*)source", re.I)
+
+
+def neutralize(text: str) -> str:
+    """Stop the source from closing or opening the <source> delimiter."""
+    return _DELIM.sub(lambda m: "< " + m.group(1).strip() + " source" if m.group(1).strip() else "< source", text)
+
+
 def user_message(title: str, url: str, text: str) -> str:
+    text = neutralize(text)
     return f"Title: {title}\nURL: {url}\n\n<source>\n{text}\n</source>\n"

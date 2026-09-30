@@ -3,22 +3,25 @@ import contextlib
 import datetime
 import os
 import shutil
+import socket
 import tempfile
 import time
 
 
 @contextlib.contextmanager
 def tempdir(purpose: str):
+    """Yields a folder containing TEMP_README.md and an empty `work` subfolder (use it as cwd)."""
     d = tempfile.mkdtemp(prefix="dipdive-")
     try:
         with open(os.path.join(d, "TEMP_README.md"), "w") as f:
             f.write(
                 f"# Temporary folder\n\nPurpose: {purpose}\n"
-                "Made by: dipdive companion (chat: T1 Dip Dive PoC 1, machine: Thing 1)\n"
+                f"Made by: dipdive companion (PoC 1) on {socket.gethostname()}\n"
                 f"Date: {datetime.date.today()}\n"
                 "Needed until: the single call that created it returns (seconds).\n"
                 "Costly to recreate: no.\n"
             )
+        os.mkdir(os.path.join(d, "work"))
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)

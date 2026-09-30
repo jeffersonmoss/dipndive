@@ -4,6 +4,7 @@ import time
 
 from .acquire import acquire
 from .errors import DipDiveError
+from . import joblog
 from .models import call_model
 from .tmp import sweep_stale
 
@@ -12,6 +13,9 @@ MODES = ("claude-dip", "claude-dive", "codex-dip", "codex-dive", "source")
 
 def run_job(url: str, mode: str) -> dict:
     t0 = time.monotonic()
+    if mode not in MODES:
+        return {"url": url, "mode": mode, "title": None, "error_code": "invalid_mode",
+                "error_message": f"unknown mode {mode!r}", "text": None, "seconds": 0.0}
     res = {"url": url, "mode": mode, "title": None, "error_code": None, "error_message": None, "text": None}
     try:
         src = acquire(url)
@@ -25,6 +29,13 @@ def run_job(url: str, mode: str) -> dict:
             res["text"] = call_model(prov, level, src.title, src.url, src.text)
     except DipDiveError as e:
         res["error_code"], res["error_message"] = e.code, e.message
+    except Exception as e:  # never let an input error escape to the server's worker
+        import traceback
+        res["error_code"], res["error_message"] = "internal_error", f"{type(e).__name__}: {e}"
+        try:
+            res["log"] = joblog.write({"internal_error": traceback.format_exc(), "url": url, "mode": mode})
+        except OSError:
+            pass
     res["seconds"] = round(time.monotonic() - t0, 1)
     return res
 
