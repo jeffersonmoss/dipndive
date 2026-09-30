@@ -1,0 +1,5 @@
+[project]
+name="dipdive"
+version="0.1.0"
+[project.scripts]
+dipdive="dipdive.cli:main"
