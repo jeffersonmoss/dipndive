@@ -21,6 +21,7 @@ from dipdive.cli import run_job  # noqa: E402
 from dipdive.errors import DipDiveError  # noqa: E402
 from dipdive.proc import run  # noqa: E402
 
+_BINS = []
 ARTICLE = "<html><head><title>T</title>%s</head><body><article>%s</article></body></html>"
 PARAS = "".join(f"<p>Paragraph number {i} has its own distinct words about topic {i*7919} and more.</p>" for i in range(40))
 
@@ -53,6 +54,7 @@ def send(h, body, ctype="text/html; charset=utf-8", enc=None):
 
 def fake_bin(body: str):
     d = tempfile.mkdtemp(prefix="dipdive-test-bin-")
+    _BINS.append(d)
     p = os.path.join(d, "fake")
     open(p, "w").write(f"#!{sys.executable}\n" + body)
     os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
@@ -308,6 +310,8 @@ class FakeModels(unittest.TestCase):
 def tearDownModule():
     import shutil
     shutil.rmtree(_SUP, ignore_errors=True)
+    for d in _BINS:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

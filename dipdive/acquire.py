@@ -11,7 +11,7 @@ from .tmp import tempdir
 
 BIN_DIR = os.path.dirname(os.path.abspath(sys.executable))
 YTDLP = os.path.join(BIN_DIR, "yt-dlp")
-DENO = "/opt/homebrew/bin/deno"
+DENO = os.environ.get("DIPDIVE_DENO") or "/opt/homebrew/bin/deno"
 
 T_META, T_CAPS, T_ARTICLE = 30, 60, 10
 ARTICLE_MAX_BYTES = 5 * 1024 * 1024

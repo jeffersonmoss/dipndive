@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@REPO@/.venv/bin/python</string>
+    <string>-m</string>
+    <string>dipdive.server</string>
+    <string>@PORT@</string>
+  </array>
+  <key>WorkingDirectory</key><string>@REPO@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>@PATH@</string>
+    <key>HOME</key><string>@HOME@</string>
+    <key>DIPDIVE_DENO</key><string>@DENO@</string>
+    <key>DIPDIVE_PORT</key><string>@PORT@</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>@HOME@/Library/Application Support/DipDive/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Application Support/DipDive/launchd.err.log</string>
+</dict>
+</plist>

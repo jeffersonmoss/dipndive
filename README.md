@@ -8,6 +8,16 @@ PoC 1 of the Dip & Dive companion: acquisition (plan 3.3), isolated model calls 
 
 Prints the summary, or `ERROR <code>: <message>` on stderr with exit status 1. The later HTTP server imports `dipdive.cli.run_job(url, mode)`, `dipdive.acquire.acquire(url)` and `dipdive.models.call_model(...)`.
 
+## Server (plan 3.2, Stage A)
+
+    .venv/bin/python -m dipdive.server [port]     # default 8765, binds 127.0.0.1 only
+
+Files: `dipdive/service.py` (job store, source cache, workers, health), `dipdive/server.py` (HTTP, auth). State lives in `~/Library/Application Support/DipDive/` (override with `DIPDIVE_SUPPORT`): `jobs/`, `sources/`, `results/`, `logs/`, `state.json` (clear generation), `token` (0600, created on first start, never printed). Requests need `Authorization: Bearer <token>`; requests with a web-page `Origin` or a non-loopback, non-`*.ts.net` Host are refused; there is no CORS.
+
+Endpoints: `POST /jobs {url, mode, requestId, force?}` (202 new, 200 existing, 429 `queue_full`), `GET /jobs/{id}`, `GET /source?job=<id>` (cache only, never fetches), `POST /clear`, `GET /health`. Dedupe key is sha256 of normalized source id, mode, model id and prompt version; the result cache additionally includes a hash of the source text.
+
+iMac deployment (written, not loaded anywhere): `deploy/install-imac.sh [--dry-run] [--port N]` renders `deploy/com.jeffersonmoss.dipdive.plist.template` (RunAtLoad, KeepAlive, ThrottleInterval 10, explicit PATH, `DIPDIVE_DENO`), bootstraps it into the GUI session, and runs `tailscale serve --bg --https=443`. It prints the `pmset` command (needs sudo, run by hand).
+
 ## Setup
 
     python3 -m venv .venv && .venv/bin/pip install "yt-dlp[default]" yt-dlp-ejs trafilatura
@@ -29,7 +39,7 @@ Codex needs its own sign-in (never copy `~/.codex/auth.json`):
 
 ## Tests
 
-`python -m tests.isolation` (plan 3.4.5) and `python -m tests.poc1` (writes tests/poc1-results.json). Temp dirs are made in the system temp dir with prefix `dipdive-` and a TEMP_README.md, and removed in `finally`.
+`python -m unittest tests.test_regressions tests.test_server` (44 tests), `python -m tests.isolation` (plan 3.4.5) and `python -m tests.poc1` (writes tests/poc1-results.json). Temp dirs are made in the system temp dir with prefix `dipdive-` and a TEMP_README.md, and removed in `finally`.
 
 ## Codex home notes
 
