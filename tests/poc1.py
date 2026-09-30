@@ -36,4 +36,9 @@ if __name__ == "__main__":
             r["text"] = f"[{len(r['text'])} chars] " + r["text"][:300] + " ... " + r["text"][-300:]
         out.append(r)
         print(i, name, mode, r["error_code"], r["seconds"], flush=True)
+    import os
+    if os.path.exists("tests/poc1-results.json"):
+        old = {r["n"]: r for r in json.load(open("tests/poc1-results.json"))}
+        old.update({r["n"]: r for r in out})
+        out = [old[k] for k in sorted(old)]
     json.dump(out, open("tests/poc1-results.json", "w"), indent=1, ensure_ascii=False)

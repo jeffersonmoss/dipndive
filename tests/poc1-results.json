@@ -165,16 +165,11 @@
  {
   "url": "https://www.nytimes.com/2026/09/30/technology/meta-ai-data-centers-taxes.html",
   "mode": "claude-dip",
-  "title": "How Meta Uses A.I. Data Centers to Avoid Billions in Federal Taxes",
-  "error_code": null,
-  "error_message": null,
-  "text": "Meta classifies its multibillion-dollar AI data centers as experimental \"pilot models\" to claim a research-and-experimentation tax credit created in the 1980s, allowing it to discount the cost of expensive AI chips it buys from Nvidia and others. This lets the company claim billions in tax credits despite publicly saying these centers are central to its business success. Meta's own accountants acknowledge the strategy is legally risky and vulnerable to IRS challenge.",
-  "meta": {
-   "kind": "article",
-   "chars": 2060
-  },
-  "fetch_s": 0.7,
-  "seconds": 8.0,
+  "title": null,
+  "error_code": "no_article_text",
+  "error_message": "page declares isAccessibleForFree=false (paywalled)",
+  "text": null,
+  "seconds": 0.7,
   "n": 10,
   "name": "paywalled article (NYT)"
  },
