@@ -105,7 +105,11 @@ try {
     await shot("dive", { params: dive, md: DIVE, ready: has("refuge") });
     await shot("recording", { params: dip, md: DIP, ready: has("pyrite"), flow: listen });
     await shot("pressed", { params: dip, md: DIP, ready: has("pyrite"),
-      clip: `(() => { const r = document.getElementById("buttons").getBoundingClientRect(); return { x: 0, y: r.top - 30, width: 360, height: r.height + 46 }; })()` });
+      clip: `(() => { const r = document.getElementById("buttons").getBoundingClientRect(); return { x: 0, y: r.top - 16, width: 360, height: r.height + 24 }; })()` });
+    await shot("history", { params: dip, md: DIP, ready: has("pyrite"), flow: async (page) => {
+      await page.eval(`document.getElementById("historylink").click()`);
+      if (!await until(() => page.eval(`document.querySelectorAll("#historylist .hentry").length > 0`), 15000)) throw new Error("the history list never filled");
+    } });
   });
 } finally {
   stopHarness(harness);

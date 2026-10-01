@@ -21,13 +21,14 @@ import time
 os.environ["DIPDIVE_TEST_ALLOW_LOOPBACK"] = "1"
 ROOT = tempfile.mkdtemp(prefix="dipdive-harness-")
 os.environ["DIPDIVE_SUPPORT"] = os.path.join(ROOT, "support")
+os.environ["DIPDIVE_LOG_PATH"] = os.path.join(ROOT, "Dip-n-Dive Log.md")  # never the real ~/Public log
 with open(os.path.join(ROOT, "TEMP_README.md"), "w") as f:
     f.write("# Temporary folder\n\nPurpose: extension panel dev harness (fake model binaries, local pages)\n"
             f"Made by: T1 Dip Dive chat on this Mac, {time.strftime('%Y-%m-%d')}\n"
             "Needed until: the harness process exits (it deletes this folder).\nCostly to recreate: no.\n")
 atexit.register(lambda: shutil.rmtree(ROOT, ignore_errors=True))
 
-from dipdive import joblog, models, server  # noqa: E402
+from dipdive import historylog, joblog, models, server  # noqa: E402
 
 EXT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension")
 CLAUDE_OUT = ("Yes, the **crater** was habitable for up to 8 million years.\n\n- Hot water and nutrients\n- Only 8 of 70 similar craters "
@@ -65,6 +66,15 @@ class Pages(http.server.BaseHTTPRequestHandler):
         page = f"<html><head><title>Page {self.path}</title></head><body><article>{body}</article></body></html>".encode()
         self.send_response(200); self.send_header("Content-Type", "text/html"); self.send_header("Content-Length", str(len(page)))
         self.end_headers(); self.wfile.write(page)
+
+
+def seed_history(n):
+    """DIPDIVE_HARNESS_HISTORY=<n>: start with n entries in the (temp) history log, so the panel's History view has something to show."""
+    modes = ["claude-dip", "claude-dive", "codex-dip", "codex-dive"]
+    for i in range(n):
+        historylog.append(f"Seeded video number {i}: a title long enough to wrap onto a second line in the panel", modes[i % 4], f"https://example.com/watch?v={i}",
+                          f"Summary of **item {i}**.\n\n- first point about {i}\n- second point with a [link](https://example.com/{i})\n\nRaw HTML stays inert: <img src=x onerror=alert(1)>",
+                          channel=f"Channel {i % 5}" if i % 3 else None)
 
 
 def make_front(comp_port, token):
@@ -112,6 +122,8 @@ def main():
     models.CLAUDE = fake(f"time.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nres = ASK_OUT.format(q=asked, n=turns, s='yes' if has_summary else 'no') if asked else {CLAUDE_OUT!r}\nprint(json.dumps({{'subtype':'success','stop_reason':'end_turn','is_error':False,'result':res,'permission_denials':[]}}))\n".replace("ASK_OUT", repr(ASK_OUT)))
     models.CODEX = fake("o=sys.argv[sys.argv.index('-o')+1]\ntime.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nopen(o,'w').write(%r.format(q=asked, n=turns, s='yes' if has_summary else 'no') if asked else %r)\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'x'}}))\nprint(json.dumps({'type':'turn.completed'}))\n" % (CODEX_ASK_OUT, CODEX_OUT))
     models._features_verified = True
+    if os.environ.get("DIPDIVE_HARNESS_HISTORY"):
+        seed_history(int(os.environ["DIPDIVE_HARNESS_HISTORY"]))
     models.CODEX_HOME = os.path.join(ROOT, "support", "codex-home")
     token = server.load_token(os.path.join(ROOT, "support", "token"))
     comp = server.make_server(0, None, token)

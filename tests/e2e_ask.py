@@ -55,7 +55,8 @@ def main(argv):
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(143))
     try:
         port = 8700 + os.getpid() % 200
-        env = dict(os.environ, DIPDIVE_SUPPORT=os.path.join(tmp, "support"))
+        env = dict(os.environ, DIPDIVE_SUPPORT=os.path.join(tmp, "support"),
+                   DIPDIVE_LOG_PATH=os.path.join(tmp, "history-log.md"))  # never the real ~/Public log
         proc = subprocess.Popen([sys.executable, "-m", "dipdive.server", str(port)], cwd=ROOT, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         proc.stdout.readline()  # "dipdive listening ..."

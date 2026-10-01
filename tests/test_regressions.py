@@ -18,6 +18,7 @@ from dipdive.tmp import sweep_stale  # noqa: E402
 sweep_stale(600)  # leftovers of crashed earlier runs
 _SUP = tempfile.mkdtemp(prefix="dipdive-test-support-")
 os.environ["DIPDIVE_SUPPORT"] = _SUP
+os.environ["DIPDIVE_LOG_PATH"] = os.path.join(_SUP, "history-log", "log.md")  # never the real ~/Public log
 
 from dipdive import acquire, joblog, models, prompts  # noqa: E402
 from dipdive.cli import run_job  # noqa: E402
@@ -475,7 +476,7 @@ class Round3(unittest.TestCase):
 
 def tearDownModule():
     import shutil
-    shutil.rmtree(_SUP, ignore_errors=True)
+    shutil.rmtree(_SUP, ignore_errors=True)  # also holds this module's history-log folder
     for d in _BINS:
         shutil.rmtree(d, ignore_errors=True)
 

@@ -185,6 +185,15 @@ def _dedupe(lines):
     return " ".join(out)
 
 
+def channel_name(info) -> str:
+    """The channel from yt-dlp metadata: `channel`, else `uploader`, else empty (never raises)."""
+    for k in ("channel", "uploader"):
+        v = info.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
 def fetch_youtube(url: str, vid: str) -> Source:
     canon = f"https://www.youtube.com/watch?v={vid}"
     with tempdir("yt-dlp metadata and one caption track") as d:
@@ -217,7 +226,7 @@ def fetch_youtube(url: str, vid: str) -> Source:
         raise DipDiveError("no_captions", "caption track was empty")
     return Source("youtube", vid, info.get("title") or vid, canon, text,
                   {"duration": info.get("duration"), "track": lang, "auto": is_auto,
-                   "language": info.get("language")})
+                   "language": info.get("language"), "channel": channel_name(info)})
 
 
 # ---------- 3.3.6 articles ----------
@@ -392,7 +401,8 @@ def fetch_article(url: str) -> Source:
         raise DipDiveError("no_article_text", "text ends with a paywall or login prompt")
     md = trafilatura.extract_metadata(html)
     title = (md.title if md and md.title else final)
-    return Source("article", final, title, final, text)
+    site = getattr(md, "sitename", None) if md else None
+    return Source("article", final, title, final, text, {"channel": site.strip() if isinstance(site, str) else ""})
 
 
 def acquire(url: str) -> Source:

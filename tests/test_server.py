@@ -19,6 +19,13 @@ from dipdive.tmp import sweep_stale  # noqa: E402
 sweep_stale(600)  # leftovers of crashed earlier runs
 _SUP = tempfile.mkdtemp(prefix="dipdive-test-support-")
 os.environ["DIPDIVE_SUPPORT"] = _SUP
+_LOGDIR = tempfile.mkdtemp(prefix="dipdive-test-log-")  # the history log lives here, never in the real ~/Public
+with open(os.path.join(_LOGDIR, "TEMP_README.md"), "w") as _f:
+    _f.write("# Temporary folder\n\nPurpose: DIPDIVE_LOG_PATH target for tests/test_server.py\n"
+             "Made by: T1 Dip Dive chat on this Mac\nNeeded until: the test module ends (tearDownModule deletes it)\n"
+             "Costly to recreate: no.\n")
+LOG = os.path.join(_LOGDIR, "Dip'n'Dive Log.md")
+os.environ["DIPDIVE_LOG_PATH"] = LOG
 
 from dipdive import joblog, models, server, service  # noqa: E402
 
@@ -67,6 +74,9 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.saved = models.CLAUDE
+        os.environ["DIPDIVE_LOG_PATH"] = LOG  # other modules in a combined run set their own
+        if os.path.isfile(LOG):
+            os.remove(LOG)
         shutil.rmtree(_SUP, ignore_errors=True)
         os.makedirs(_SUP)
         joblog.LOG_DIR = os.path.join(_SUP, "logs")
@@ -242,7 +252,9 @@ class Lifecycle(Base):
     def test_health_cached_60s(self):
         calls = []
         self.svc._compute_health = lambda: calls.append(1) or {"ok": True}
-        self.assertEqual(self.req("GET", "/health")[1], {"state": "starting"})
+        h = self.req("GET", "/health")[1]
+        self.assertEqual((h.pop("log_path"), h.pop("log_writable")), (LOG, True))
+        self.assertEqual(h, {"state": "starting"})
         time.sleep(0.3)
         for _ in range(3):
             self.assertEqual(self.req("GET", "/health")[0], 200)
@@ -374,7 +386,7 @@ class Round2(Base):
         ts = [threading.Thread(target=lambda: res.append(self.req("GET", "/health")[1])) for _ in range(8)]
         [t.start() for t in ts]; [t.join() for t in ts]
         self.assertEqual(len(calls), 1)
-        self.assertTrue(all(r == {"state": "starting"} for r in res))
+        self.assertTrue(all({k: v for k, v in r.items() if not k.startswith("log_")} == {"state": "starting"} for r in res))
         time.sleep(0.8)
         self.assertEqual(self.req("GET", "/health")[1]["state"], "error")
         self.req("GET", "/health")
@@ -523,6 +535,7 @@ class StaleClearGeneration(Base):
 
 def tearDownModule():
     shutil.rmtree(_SUP, ignore_errors=True)
+    shutil.rmtree(_LOGDIR, ignore_errors=True)
     for d in _BINS:
         shutil.rmtree(d, ignore_errors=True)
 
