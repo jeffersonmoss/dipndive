@@ -9,14 +9,14 @@ import threading
 import time
 import uuid
 
-from . import joblog
+from . import ask, joblog
 from .acquire import Source, acquire, unwrap, youtube_id
 from .errors import DipDiveError
 from .models import CLAUDE, CLAUDE_MODEL, CODEX, CODEX_HOME, CODEX_MODEL, call_model, ensure_codex_home
 from .proc import run
 from .prompts import PROMPT_VERSION
 
-MODES = ("claude-dip", "claude-dive", "codex-dip", "codex-dive", "source")
+MODES = ("claude-dip", "claude-dive", "codex-dip", "codex-dive", "source") + ask.ASK_MODES
 ACTIVE = ("queued", "fetching", "summarizing")
 REQUIRED_KEYS = ("job_id", "request_id", "state", "pre_key", "norm_id", "url", "mode", "generation", "updated")
 MAX_FETCH, MAX_MODEL, QUEUE_CAP, WORKERS = 2, 2, 20, 6
@@ -126,17 +126,19 @@ class Service:
             self._save(j)
 
     # ---------- API ----------
-    def submit(self, url, mode, request_id, force=False):
-        """Returns (http_status, body). Atomic check-and-enqueue under the lock."""
+    def submit(self, url, mode, request_id, force=False, question=None, history=None):
+        """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question and
+        the capped history are part of every key (raises ask.AskError on a bad question or history)."""
         norm = norm_source_id(url)
-        pre_key = _sha(norm, mode, model_id(mode), PROMPT_VERSION)
+        question, history, qkey = ask.prepare(mode, question, history)
+        pre_key = _sha(norm, mode, model_id(mode), PROMPT_VERSION, *([qkey] if qkey else []))
         with self.lock:
             jid = self.by_request.get(request_id)
             if jid and jid in self.jobs:
                 old = self.jobs[jid]
-                if old["norm_id"] != norm or old["mode"] != mode:
+                if old["norm_id"] != norm or old["mode"] != mode or old.get("qkey") != qkey:
                     return 409, {"error_code": "request_id_conflict",
-                                 "error_message": "requestId was already used for a different url or mode"}
+                                 "error_message": "requestId was already used for a different url, mode or question"}
                 return 200, {"job_id": jid, "clear_generation": self.generation}
             if not force:
                 jid = self.by_prekey.get(pre_key)
@@ -147,7 +149,8 @@ class Service:
             if sum(1 for x in self.jobs.values() if x["state"] in ACTIVE) >= QUEUE_CAP:
                 return 429, {"error_code": "queue_full", "error_message": f"more than {QUEUE_CAP} jobs waiting"}
             j = {"job_id": uuid.uuid4().hex, "request_id": request_id, "pre_key": pre_key, "norm_id": norm,
-                 "url": url, "mode": mode, "state": "queued", "title": None, "result_markdown": None,
+                 "url": url, "mode": mode, "question": question, "history": history, "qkey": qkey,
+                 "state": "queued", "title": None, "result_markdown": None,
                  "error_code": None, "error_message": None, "force": bool(force),
                  "generation": self.generation, "created": time.time(), "updated": time.time()}
             self.jobs[j["job_id"]] = j
@@ -171,7 +174,7 @@ class Service:
 
     def public(self, j):
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"],
-                "url": j["url"], "result_markdown": j["result_markdown"], "error_code": j["error_code"],
+                "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
                 "error_message": j["error_message"], "clear_generation": self.generation}
 
     def get_job(self, jid):
@@ -300,7 +303,7 @@ class Service:
                 return
             prov, level = j["mode"].split("-")
             fullkey = _sha(j["norm_id"], j["mode"], model_id(j["mode"]), PROMPT_VERSION,
-                           s["hash"])
+                           s["hash"], *([j["qkey"]] if j.get("qkey") else []))
             rp = os.path.join(self.res_dir, fullkey + ".json")
             cached = None
             if not j["force"]:
@@ -311,7 +314,8 @@ class Service:
             if cached is None:
                 self._set(j, state="summarizing")
                 with self.model_sem:
-                    cached = call_model(prov, level, s["title"], s["url"], s["text"])
+                    cached = call_model(prov, level, s["title"], s["url"], s["text"],
+                                        question=j.get("question"), history=j.get("history"))
                 with self.lock:
                     if j["generation"] == self.generation:
                         _atomic_write(rp, {"result": cached, "created": time.time()})

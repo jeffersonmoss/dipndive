@@ -33,12 +33,20 @@ EXT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 CLAUDE_OUT = ("Yes, the **crater** was habitable for up to 8 million years.\n\n- Hot water and nutrients\n- Only 8 of 70 similar craters "
               "show life\n\nSee [the study](https://example.com/study). Raw HTML stays inert: <img src=x onerror=alert(1)> "
               "and ![pic](https://example.com/p.png).")
+ASK_OUT = ("The chocolate is **mentioned** near the end: it was a *test batch*, not the main product. "
+           "(Fake Claude answer to: {q}; earlier turns sent: {n}.) See [the page](https://example.com/choc). "
+           "Raw HTML stays inert: <img src=x onerror=alert(1)>.")
+CODEX_ASK_OUT = "Codex answer to: {q}. Earlier turns sent: {n}. The source does not cover anything else."
 CODEX_OUT = "Codex says: the answer is **no**, schools do not need to kill creativity.\n\nThe source is [here](javascript:alert(1))."
 
 
 def fake(body):
     p = os.path.join(ROOT, f"fake-{abs(hash(body)) % 10**6}")
-    open(p, "w").write(f"#!{sys.executable}\nimport sys, json, time, os\nsys.stdin.read()\n" + body)
+    open(p, "w").write(f"#!{sys.executable}\nimport sys, json, time, os, re\ninp = sys.stdin.read()\n"
+                       "m = re.search(r'<question>\\n(.*?)\\n</question>', inp, re.S)\n"
+                       "asked = m.group(1) if m else None\n"
+                       "turns = inp.count('\\nQ: ')\n"
+                       + body)
     os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
     return p
 
@@ -100,8 +108,8 @@ def make_front(comp_port, token):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8790
-    models.CLAUDE = fake(f"time.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nprint(json.dumps({{'subtype':'success','stop_reason':'end_turn','is_error':False,'result':{CLAUDE_OUT!r},'permission_denials':[]}}))\n")
-    models.CODEX = fake("o=sys.argv[sys.argv.index('-o')+1]\ntime.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nopen(o,'w').write(%r)\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'x'}}))\nprint(json.dumps({'type':'turn.completed'}))\n" % CODEX_OUT)
+    models.CLAUDE = fake(f"time.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nres = ASK_OUT.format(q=asked, n=turns) if asked else {CLAUDE_OUT!r}\nprint(json.dumps({{'subtype':'success','stop_reason':'end_turn','is_error':False,'result':res,'permission_denials':[]}}))\n".replace("ASK_OUT", repr(ASK_OUT)))
+    models.CODEX = fake("o=sys.argv[sys.argv.index('-o')+1]\ntime.sleep(float(os.environ.get('DIPDIVE_FAKE_DELAY','2.5')))\nopen(o,'w').write(%r.format(q=asked, n=turns) if asked else %r)\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'x'}}))\nprint(json.dumps({'type':'turn.completed'}))\n" % (CODEX_ASK_OUT, CODEX_OUT))
     models._features_verified = True
     models.CODEX_HOME = os.path.join(ROOT, "support", "codex-home")
     token = server.load_token(os.path.join(ROOT, "support", "token"))

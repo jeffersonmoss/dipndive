@@ -8,7 +8,7 @@ import time
 from . import joblog
 from .errors import DipDiveError
 from .proc import run
-from .prompts import system_prompt, user_message
+from .prompts import ask_message, system_prompt, user_message
 from .tmp import tempdir
 
 _LOCAL_CLAUDE = os.path.expanduser("~/.local/bin/claude")
@@ -17,8 +17,8 @@ CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
 CODEX_HOME = os.path.join(joblog.SUPPORT, "codex-home")
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 CODEX_MODEL = "gpt-5.6-luna"
-TIMEOUT = {"dip": 45, "dive": 90}
-EFFORT = {"dip": "low", "dive": "medium"}
+TIMEOUT = {"dip": 45, "dive": 90, "ask": 45}
+EFFORT = {"dip": "low", "dive": "medium", "ask": "low"}
 OUT_CAP = 20_000
 STDERR_LOG_CAP = 20_000
 
@@ -144,12 +144,18 @@ def _finish(text: str) -> str:
     return text
 
 
-def call_claude(level: str, title: str, url: str, text: str, raw_out: dict = None) -> str:
+def _message(level, title, url, text, question, history):
+    if level == "ask":
+        return ask_message(title, url, text, question, history or [])
+    return user_message(title, url, text)
+
+
+def call_claude(level: str, title: str, url: str, text: str, raw_out: dict = None, question=None, history=None) -> str:
     args = [CLAUDE, "-p", "--output-format", "json", "--safe-mode", "--strict-mcp-config",
             "--tools", "", "--no-session-persistence", "--model", CLAUDE_MODEL,
             "--system-prompt", system_prompt(level)]
     with tempdir("empty cwd for an isolated claude call") as d:
-        r = run(args, TIMEOUT[level], user_message(title, url, text), cwd=os.path.join(d, "work"),
+        r = run(args, TIMEOUT[level], _message(level, title, url, text, question, history), cwd=os.path.join(d, "work"),
                 max_bytes=2_000_000)
     if raw_out is not None:
         raw_out.update(rc=r.rc, stdout=r.text, stderr=r.err_text)
@@ -202,7 +208,7 @@ def _codex_event_check(tool_events):
     return on_line
 
 
-def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None) -> str:
+def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None, question=None, history=None) -> str:
     ensure_codex_home()
     verify_codex_features()
     env = dict(os.environ, CODEX_HOME=CODEX_HOME)
@@ -218,7 +224,7 @@ def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None
         for f in CODEX_DISABLED_FEATURES:
             args += ["--disable", f]
         args += ["-C", work, "-o", outfile, "-"]
-        prompt = system_prompt(level) + "\n\n" + user_message(title, url, text)
+        prompt = system_prompt(level) + "\n\n" + _message(level, title, url, text, question, history)
         r = run(args, TIMEOUT[level], prompt, cwd=work, env=env, max_bytes=5_000_000,
                 on_line=_codex_event_check(tool_events))
         final = open(outfile).read() if os.path.exists(outfile) else ""
@@ -256,7 +262,10 @@ def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None
     return _finish(final)
 
 
-def call_model(provider: str, level: str, title: str, url: str, text: str) -> str:
-    if provider not in ("claude", "codex") or level not in ("dip", "dive"):
+def call_model(provider: str, level: str, title: str, url: str, text: str, question=None, history=None) -> str:
+    if provider not in ("claude", "codex") or level not in ("dip", "dive", "ask"):
         raise DipDiveError("invalid_mode", f"{provider}-{level}")
-    return (call_claude if provider == "claude" else call_codex)(level, title, url, text)
+    if level == "ask" and not (isinstance(question, str) and question.strip()):
+        raise DipDiveError("invalid_mode", f"{provider}-ask needs a question")
+    return (call_claude if provider == "claude" else call_codex)(level, title, url, text, question=question,
+                                                                   history=history)

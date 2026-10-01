@@ -1,0 +1,29 @@
+[
+ {
+  "question": "Okay, what's the deal with the dancer he talks about?",
+  "history_turns": 0,
+  "state": "done",
+  "answer": "Gillian Lynne was a choreographer who, as a child in the 1930s, was considered a problem student—fidgeting, unable to concentrate, disturbing others. The school told her parents she had a learning disorder. A doctor examined her and, recognizing what was really happening, turned on the radio; she immediately jumped up and danced. He told her parents she wasn't sick but a dancer, and sent her to dance school. She went on to become a soloist at the Royal Ballet, founded her own dance company, created hit musicals like \"Cats\" and \"Phantom of the Opera,\" and became a multimillionaire. Robinson uses her story to illustrate how schools fail to recognize and nurture different forms of intelligence and talent—she could have been medicated instead.",
+  "error": null,
+  "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
+  "seconds": 12.7
+ },
+ {
+  "question": "And what did the doctor tell her mother?",
+  "history_turns": 1,
+  "state": "done",
+  "answer": "The doctor told her mother: \"Mrs. Lynne, Gillian isn't sick. She's a dancer. Take her to a dance school.\" He said this after turning on the radio and having her mother watch Gillian immediately get up and dance to the music.",
+  "error": null,
+  "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
+  "seconds": 6.1
+ },
+ {
+  "question": "What is the capital of Australia?",
+  "history_turns": 2,
+  "state": "done",
+  "answer": "The source does not cover this topic.",
+  "error": null,
+  "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
+  "seconds": 5.1
+ }
+]

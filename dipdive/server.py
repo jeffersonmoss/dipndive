@@ -10,6 +10,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import joblog
+from .ask import AskError
 from .service import LAUNCHD_LOGS, MODES, Service
 from .tmp import sweep_stale
 
@@ -151,12 +152,16 @@ def make_handler(svc: Service, token: str):
             try:
                 if u.path == "/jobs":
                     url, mode, rid, force = d.get("url"), d.get("mode"), d.get("requestId"), d.get("force", False)
+                    question, history = d.get("question"), d.get("history")
                     if (not isinstance(url, str) or not re.match(r"^https?://", url) or len(url) > 4096
                             or mode not in MODES or not isinstance(rid, str) or not 1 <= len(rid) <= 128
                             or not isinstance(force, bool)):
                         return self._send(400, {"error_code": "bad_request",
                                                 "error_message": "need url (http/https), mode, requestId, optional force:boolean"})
-                    return self._send(*svc.submit(url, mode, rid, force))
+                    try:
+                        return self._send(*svc.submit(url, mode, rid, force, question, history))
+                    except AskError as e:
+                        return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
             except Exception as e:
