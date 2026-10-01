@@ -121,15 +121,58 @@ test("panel has the question box below the result, a mic button next to it, and 
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   assert.ok(h.indexOf('id="result"') < h.indexOf('id="askform"'), "box is below the result");
   assert.match(h, /<form id="askform"/);
-  assert.match(h, /id="askinput"[^>]*placeholder="Ask about this source"/);
+  assert.match(h, /id="askinput"[^>]*placeholder="Ask a question"/);
   assert.ok(h.indexOf('id="askinput"') < h.indexOf('id="mic"'), "mic is next to the box");
-  assert.match(h, /<button id="mic" type="button" aria-pressed="false"/);
+  assert.match(h, /<button id="mic" type="button" data-state="idle"/);
   assert.match(h, /<button id="micsetup" type="button" hidden>Enable microphone<\/button>/);
   assert.match(h, /<button id="askgo" type="submit">Ask<\/button>/);
-  // messages sit BELOW the controls: a line appearing while listening must not push the mic button away from the cursor
-  assert.ok(h.indexOf('id="askform"') < h.indexOf('id="micmsg"') && h.indexOf('id="askform"') < h.indexOf('id="micsetup"'));
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  assert.match(css, /#mic\[aria-pressed="true"\]/, "recording has its own visual state");
+  assert.match(css, /#mic\[data-state="listening"\]/, "recording has its own visual state");
+});
+
+test("the question controls are docked below the scrolling page, with every message above them, so nothing can move the mic button", () => {
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  // #ask is a sibling after #page, not inside it, and the result, thread and footer are all inside #page
+  const pageEnd = h.indexOf("</div>\n  <section id=\"ask\"");
+  assert.ok(pageEnd > 0, "the docked bar follows the closing tag of #page");
+  for (const id of ["result", "thread", "error", "status"]) assert.ok(h.indexOf(`id="${id}"`) < pageEnd, `${id} scrolls inside #page`);
+  for (const id of ["askform", "mic", "askinput", "micmsg", "micsetup", "askerror"]) assert.ok(h.indexOf(`id="${id}"`) > pageEnd, `${id} is in the docked bar`);
+  // messages grow upward from the controls (the bar is anchored at the bottom), never below them
+  for (const id of ["micmsg", "micsetup", "askerror"]) assert.ok(h.indexOf(`id="${id}"`) < h.indexOf('id="askform"'), `${id} is above the controls`);
+  assert.match(css, /body \{[^}]*height: 100vh; overflow: hidden/);
+  assert.match(css, /#page \{[^}]*flex: 1; min-height: 0; overflow-y: auto/);
+  assert.match(css, /#ask \{ flex: none;/);
+  assert.match(css, /#mic \{[^}]*width: 92px/, "the mic button keeps its width whatever its label says");
+});
+
+test("mic button accessibility: its name is its visible label, no changing aria-label, and the recording colour has AA contrast in both themes", () => {
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  assert.ok(!/<button id="mic"[^>]*aria-(label|pressed)/.test(h));
+  assert.ok(!/mic\.setAttribute\("aria-/.test(js), "the label changes with the state, so no aria-pressed or aria-label rides along");
+  assert.ok(!/#mic\[aria-pressed/.test(css));
+  const lum = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const light = css.match(/--rec: (#[0-9a-f]{6});/)[1];
+  const dark = css.match(/--rec: (#[0-9a-f]{6}); --rec-edge: #8f150c; --q-bg: #34322e/)[1];
+  assert.ok(contrast("#ffffff", light) >= 4.5, `light ${contrast("#ffffff", light)}`);
+  assert.ok(contrast("#ffffff", dark) >= 4.5, `dark ${contrast("#ffffff", dark)}`);
+});
+
+test("the panel stops listening when it is hidden or closed", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(js, /visibilitychange", \(\) => \{ if \(document\.hidden\) ctl\.pauseMic\(\); else ctl\.refreshMic\(\); \}\)/);
+  assert.match(js, /"pagehide", \(\) => ctl\.pauseMic\(\)/);
+});
+
+test("no CSS font shorthand ends in the keyword inherit (that makes the whole declaration invalid and drops it)", () => {
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  assert.ok(!/font:\s*[^;]*\binherit\s*;/.test(css.replace(/font:\s*inherit\s*;/g, "")));
 });
 
 test("microphone setup page: one-time getUserMedia in a normal tab, tracks stopped at once, back to the panel", () => {
@@ -140,7 +183,7 @@ test("microphone setup page: one-time getUserMedia in a normal tab, tracks stopp
   assert.ok(j.indexOf("getUserMedia") < j.indexOf("t.stop()"), "the tracks are stopped after the grant");
   assert.match(j, /go back to the Dip'n'Dive panel/);
   assert.match(j, /chrome:\/\/settings\/content\/siteDetails/, "blocked case points at the Chrome setting");
-  assert.match(h, /Allow<\/b> \(not "Allow this time"\)/);
+  assert.match(h, /Allow while visiting the site<\/b> \(not "Allow this time"\)/);
   const p = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(p, /getURL\("mic\.html"\)/);
 });

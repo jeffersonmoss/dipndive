@@ -1,5 +1,7 @@
 // One-time microphone permission for the side panel. Side panels cannot show Chrome's permission prompt, so this
 // normal tab asks (getUserMedia), then stops the tracks at once and tells the user to go back to the panel.
+import { ALLOW_BUTTON, BUSY_HELP, SYSTEM_BLOCK_HELP, classifyMicError } from "./lib/micerrors.js";
+
 const $ = (id) => document.getElementById(id);
 const say = (text, cls = "") => { $("msg").textContent = text; $("msg").className = cls; };
 
@@ -9,7 +11,7 @@ async function permissionState() {
 
 async function ask() {
   $("retry").hidden = $("settings").hidden = $("close").hidden = true;
-  say("Chrome should now ask to use your microphone. Click Allow (not \"Allow this time\").");
+  say(`Chrome should now ask to use your microphone. Click "${ALLOW_BUTTON}" (not "Allow this time").`);
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());  // switch the microphone straight back off
@@ -18,14 +20,18 @@ async function ask() {
     try { chrome.runtime.sendMessage({ type: "dipdive-mic-granted" }).catch(() => {}); } catch { /* the panel also notices by itself */ }
     return;
   } catch (e) {
-    const state = await permissionState();
-    if (e && e.name === "NotFoundError") {
+    const kind = classifyMicError(e && e.name, e && e.message, await permissionState());
+    if (kind === "no-device") {
       say("No microphone was found. Connect one, then try again.", "bad");
-    } else if (state === "denied") {
+    } else if (kind === "chrome-blocked") {
       say("Chrome has blocked the microphone for Dip'n'Dive. Open the setting below and change Microphone to Allow, then try again.", "bad");
       $("settings").hidden = false;
+    } else if (kind === "system-blocked") {
+      say(`${SYSTEM_BLOCK_HELP} Then click Try again.`, "bad");
+    } else if (kind === "busy") {
+      say(BUSY_HELP, "bad");
     } else {
-      say("The prompt was closed without an answer. Click Try again, then click Allow.", "bad");
+      say(`The prompt was closed without an answer. Click Try again, then click "${ALLOW_BUTTON}".`, "bad");
     }
     $("retry").hidden = false;
   }

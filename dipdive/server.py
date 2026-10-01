@@ -152,18 +152,20 @@ def make_handler(svc: Service, token: str):
             try:
                 if u.path == "/jobs":
                     url, mode, rid, force = d.get("url"), d.get("mode"), d.get("requestId"), d.get("force", False)
-                    question, history = d.get("question"), d.get("history")
+                    question, history, summary = d.get("question"), d.get("history"), d.get("summary")
                     if (not isinstance(url, str) or not re.match(r"^https?://", url) or len(url) > 4096
                             or mode not in MODES or not isinstance(rid, str) or not 1 <= len(rid) <= 128
                             or not isinstance(force, bool)):
                         return self._send(400, {"error_code": "bad_request",
                                                 "error_message": "need url (http/https), mode, requestId, optional force:boolean"})
                     try:
-                        return self._send(*svc.submit(url, mode, rid, force, question, history))
+                        return self._send(*svc.submit(url, mode, rid, force, question, history, summary))
                     except AskError as e:
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
+            except UnicodeError:  # text that cannot be encoded (a lone surrogate in url or requestId): the client's mistake
+                return self._send(400, {"error_code": "bad_request", "error_message": "text is not valid unicode"})
             except Exception as e:
                 return self._send(500, {"error_code": "internal_error", "error_message": type(e).__name__})
             self._send(404, {"error_code": "not_found"})

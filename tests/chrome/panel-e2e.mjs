@@ -20,7 +20,8 @@ const check = (name, ok, detail) => { report.checks.push({ name, ok: !!ok, ...(d
 async function until(fn, ms = 10000, step = 150) {
   const end = Date.now() + ms;
   for (;;) {
-    const v = await fn();
+    let v = null;
+    try { v = await fn(); } catch { /* the page may still be loading: look again */ }
     if (v) return v;
     if (Date.now() > end) return null;
     await sleep(step);
@@ -127,7 +128,7 @@ try {
     // 6. Allow (stand-in): mic.html succeeds, switches the mic off again, the panel notices without being clicked
     await b.send("Browser.grantPermissions", { origin, permissions: ["audioCapture"] });
     await mic.send("Page.reload"); await sleep(300); await mic.send("Page.bringToFront");
-    const ok = await until(() => mic.eval(`document.getElementById("msg").className === "ok"`), 8000);
+    const ok = await until(() => mic.eval(`document.getElementById("msg").className === "ok"`), 20000);  // the first getUserMedia can take a while to start the audio stack
     const okText = await mic.eval(`document.getElementById("msg").textContent`);
     check("mic.html: getUserMedia succeeded and it says to go back to the panel", ok && /go back to the Dip'n'Dive panel/.test(okText), okText);
     check("mic.html offers Close this tab", await mic.eval(`!document.getElementById("close").hidden`));
@@ -141,9 +142,20 @@ try {
     // 7. the real recognizer: click to start, click to stop
     await q(`document.getElementById("mic").click()`);
     const listening = await until(() => q(`document.getElementById("mic").dataset.state === "listening"`), 6000);
-    check("mic click: red listening state with Stop label", listening && await q(`document.getElementById("mic").getAttribute("aria-pressed") === "true" && document.getElementById("miclabel").textContent === "Stop"`));
+    check("mic click: red listening state with Stop label", listening && await q(`document.getElementById("mic").dataset.state === "listening" && document.getElementById("miclabel").textContent === "Stop"`));
     const layout1 = await q(`JSON.stringify(document.getElementById("mic").getBoundingClientRect())`);
-    await sleep(5000);
+    // The summary above the question box changing size while recording (a Dip finishing, a button pressed again) must not
+    // move the mic button: the second click has to land where the first one did.
+    await q(`document.querySelector('button.mode[data-mode="claude-dip"]').click()`);
+    const rects = new Set(), heights = new Set();
+    for (let i = 0; i < 12; i++) {
+      rects.add(await q(`JSON.stringify(document.getElementById("mic").getBoundingClientRect())`));
+      heights.add(await q(`document.getElementById("result").offsetHeight`));
+      await sleep(250);
+    }
+    check("the mic button stays put while the summary above it empties and refills during a recording", rects.size === 1 && heights.size >= 2 && rects.has(layout1), { rects: rects.size, resultHeights: [...heights] });
+    check("recording went on through the re-run", await q(`document.getElementById("mic").dataset.state === "listening"`));
+    await sleep(1500);  // the whole recording must stay under Chrome's 8 s no-speech limit in a quiet room
     const layout2 = await q(`JSON.stringify(document.getElementById("mic").getBoundingClientRect())`);
     check("the mic button does not move while listening", layout1 === layout2);
     const words = await q(`document.getElementById("askinput").value.split(/\\s+/).filter(Boolean).length`);

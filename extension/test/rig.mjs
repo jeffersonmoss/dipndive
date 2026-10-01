@@ -20,21 +20,29 @@ export function makeSpeech() {
   return { SR: MockSpeechRecognition, recs, get last() { return recs[recs.length - 1]; } };
 }
 
-// A fake navigator.permissions: query() always hands back the same PermissionStatus object.
+// A fake navigator.permissions. Like Chrome, query() hands back a NEW PermissionStatus object every time, and every
+// object that was handed out follows the permission and gets the change event.
 export function makePermissions(state = "granted") {
-  const status = { state, onchange: null };
-  return { query: async () => status, status, set(s) { status.state = s; if (status.onchange) status.onchange(); } };
+  let current = state;
+  const all = [];
+  return {
+    query: async () => { const st = { state: current, onchange: null }; all.push(st); return st; },
+    all,
+    get liveHandlers() { return all.filter((st) => st.onchange).length; },
+    set(s) { current = s; for (const st of [...all]) { st.state = s; if (st.onchange) st.onchange(); } },
+  };
 }
 
-export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions } = {}) {
+// Two panels can share one fake companion (`server`) and one storage (`shared`); with a `bus` array every storage write is
+// delivered to every controller on it (the writer included), the way chrome.storage.onChanged reaches every window.
+export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions, server: sharedServer, bus } = {}) {
   const store = shared || { ...cfg, ...(mode ? { mode } : {}), ...(slot ? { [slotKey(1)]: slot } : {}) };
   const log = { fetches: [], tabs: [], clip: [], order: [] };
   const timers = [];
   const vtimers = [];
   const state = { last: null };
   const holds = []; // pending fetch resolvers for race tests
-  let jobSeq = 0;
-  const server = { jobs, clearGen: 0, hold: null, fail: null, sources: {}, health: health || { state: "starting" }, conflictOnce: false };
+  const server = sharedServer || { jobs, clearGen: 0, hold: null, fail: null, sources: {}, health: health || { state: "starting" }, conflictOnce: false, seq: 0 };
   const fetchImpl = async (url, init) => {
     const path = url.replace("http://c.test", "");
     const body = init.body ? JSON.parse(init.body) : null;
@@ -45,7 +53,7 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
       if (path === "/health") return respond(200, server.health);
       if (init.method === "POST" && path === "/jobs") {
         if (server.conflictOnce) { server.conflictOnce = false; return respond(409, { error_code: "request_id_conflict" }); }
-        const id = `job${++jobSeq}`;
+        const id = `job${++server.seq}`;
         if (server.postStatus) return respond(server.postStatus, { error_code: server.postError || "bad_request", error_message: null });
         server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history };
         return respond(202, { job_id: id, clear_generation: server.clearGen });
@@ -70,8 +78,16 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
   };
   const c = new Controller({
     storage: { get: async (keys) => keys === null ? { ...store } : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((k) => k in store).map((k) => [k, store[k]])),
-               set: async (o) => { Object.assign(store, o); },
-               remove: async (keys) => { for (const k of (Array.isArray(keys) ? keys : [keys])) delete store[k]; } },
+               set: async (o) => {
+                 const ch = {}; for (const [k, v] of Object.entries(o)) ch[k] = { oldValue: store[k], newValue: v };
+                 Object.assign(store, o);
+                 for (const x of bus || []) x.onStorageChange(ch, "local");
+               },
+               remove: async (keys) => {
+                 const ch = {};
+                 for (const k of (Array.isArray(keys) ? keys : [keys])) { if (k in store) ch[k] = { oldValue: store[k] }; delete store[k]; }
+                 for (const x of bus || []) x.onStorageChange(ch, "local");
+               } },
     fetch: fetchImpl,
     clipboard: { writeText: async (t) => { if (server.clipFail) throw new Error("denied"); log.order.push("clip"); log.clip.push(t); } },
     openTab: (u) => { log.order.push("tab"); log.tabs.push(u); },
@@ -85,6 +101,7 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
     setVoiceTimer: (f, ms) => { vtimers.push({ f, ms }); return vtimers.length; },
     clearVoiceTimer: (id) => { if (vtimers[id - 1]) vtimers[id - 1].cleared = true; },
   });
+  if (bus) bus.push(c);
   const tick = async () => { const f = timers.shift(); if (f) await f(); };
   return { c, store, log, server, state, tick, timers, holds, vtimers, speech, permissions };
 }

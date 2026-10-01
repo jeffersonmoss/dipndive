@@ -2,7 +2,7 @@
 import { ApiError, request } from "./api.js";
 import { pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, sourceKey } from "./urls.js";
-import { ASK_LIMITS, askProvider, capHistory, cleanQuestion } from "./ask.js";
+import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
 import { MIC, VoiceInput } from "./voice.js";
 import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, normalizeMode } from "./modes.js";
 
@@ -43,6 +43,7 @@ export class Controller {
     this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
     this.tempText = null;
+    this.micPrefix = "";   // what was typed in the box when the microphone started; spoken words are added after it
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
@@ -168,6 +169,10 @@ export class Controller {
     // A mode change made in another window must not alter this panel's own selection or its pressed button.
     const k = slotKey(this.windowId);
     if (changes[k] && changes[k].newValue) this.onSlot(changes[k].newValue);
+    // Clear history in another window writes the new generation here: this panel's thread and shown summary go too, or
+    // its next question would send them to the companion again.
+    const cg = changes.clearGen && changes.clearGen.newValue;
+    if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) this.clearedElsewhere(cg);
     if (changes.base || changes.token) {
       this.d.storage.get(["base", "token"]).then((st) => {
         this.cfg = { base: st.base, token: st.token };
@@ -198,12 +203,31 @@ export class Controller {
                 tempChars: 0, tempWarn: false, tempNote: "", ...extra });
   }
 
-  // Returns false when the response must be discarded (stale selection or older clear generation).
+  // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
+  // question thread built on it, and drop any job or answer still on its way.
+  clearedElsewhere(cg) {
+    this.clearGen = cg;
+    this.selGen++;
+    this.stopTimer();
+    if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
+    this.resetAsk();
+    this.resetView({ status: "History was cleared in another window.", busy: false });
+  }
+
+  // Returns false when the response must be discarded: a stale selection, or a generation older than one already seen
+  // (the companion was reset: adopt its generation and ask for another press so the panel never waits forever).
+  // A newer generation means another window cleared the history; the question thread belonged to the old one.
   accept(gen, json) {
     if (gen !== this.selGen) return false;
     const cg = json && json.clear_generation;
     if (typeof cg === "number") {
-      if (this.clearGen !== null && cg < this.clearGen) return false;
+      if (this.clearGen !== null && cg < this.clearGen) {
+        this.clearGen = cg;
+        this.stopTimer();
+        this.emit({ error: "The companion was reset. Press the button again.", status: "", busy: false });
+        return false;
+      }
+      if (this.clearGen !== null && cg > this.clearGen) this.resetAsk();
       this.clearGen = cg;
     }
     return true;
@@ -311,6 +335,8 @@ export class Controller {
     if (r.status === 200) {  // the extension must not keep a list of what was looked at either
       const all = await this.d.storage.get(null);
       await this.d.storage.remove(Object.keys(all).filter((k) => k.startsWith("slot:")));
+      // Tell the panels of the other windows: their question threads must go too.
+      if (typeof r.json.clear_generation === "number") await this.d.storage.set({ clearGen: r.json.clear_generation });
       if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     }
     if (r.status === 200) this.resetAsk();  // the Q&A history goes too
@@ -335,17 +361,24 @@ export class Controller {
     this.s.draft = String(text ?? "");
   }
 
+  // Spoken words go after whatever was typed in the box when the microphone started.
+  withPrefix(text) {
+    return [this.micPrefix, text].filter(Boolean).join(" ");
+  }
+
   onMic(m) {
     const live = m.state === MIC.LISTENING || m.state === MIC.STOPPING;
     const patch = { mic: m };
-    if (live && m.text !== this.s.draft) { patch.draft = m.text; patch.draftSeq = this.s.draftSeq + 1; }
+    const shown = this.withPrefix(m.text);
+    if (live && shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }
     this.emit(patch);
   }
 
-  // Recognized text lands in the box; it is sent automatically unless recognition failed part way.
+  // Recognized text lands in the box; it is sent automatically unless recognition failed part way or was held back.
   onVoiceText(text, { send }) {
-    this.emit({ draft: text, draftSeq: this.s.draftSeq + 1 });
-    return send ? this.askQuestion(text) : undefined;
+    const full = this.withPrefix(text);
+    this.emit({ draft: full, draftSeq: this.s.draftSeq + 1 });
+    return send ? this.askQuestion(full) : undefined;
   }
 
   async toggleMic() {
@@ -355,7 +388,13 @@ export class Controller {
       return;
     }
     this.emit({ askError: null });
+    if (this.s.mic.state === MIC.IDLE) this.micPrefix = cleanQuestion(this.s.draft);
     await this.voice.toggle();
+  }
+
+  // The panel was hidden (another side panel took its place): stop listening, keep the words, send nothing.
+  pauseMic() {
+    this.voice.pause();
   }
 
   refreshMic() {
@@ -380,11 +419,20 @@ export class Controller {
     this.restoreDraft(q, msg);
   }
 
-  acceptAsk(gen, json) {
+  // False when the answer must be dropped. A generation that differs from the one this panel knows means the history
+  // was cleared in another window (newer) or the companion was reset (older): the thread and this answer no longer
+  // belong together, so the thread is forgotten and the question goes back in the box to be asked again.
+  acceptAsk(gen, json, q) {
     if (gen !== this.askGen) return false;
     const cg = json && json.clear_generation;
     if (typeof cg === "number") {
-      if (this.clearGen !== null && cg < this.clearGen) return false;
+      if (this.clearGen !== null && cg !== this.clearGen) {
+        const newer = cg > this.clearGen;
+        this.clearGen = cg;
+        this.resetAsk();
+        this.restoreDraft(q, newer ? "History was cleared in another window. Ask again." : "The companion was reset. Ask again.");
+        return false;
+      }
       this.clearGen = cg;
     }
     return true;
@@ -395,13 +443,16 @@ export class Controller {
     const q = cleanQuestion(text === undefined ? this.s.draft : text);
     if (!this.s.configured) { this.emit({ askError: "Set the companion URL and token in the extension options." }); return false; }
     if (!q) { this.emit({ askError: "Type or say a question first." }); return false; }
-    if (q.length > ASK_LIMITS.question) { this.emit({ askError: `That question is too long (over ${ASK_LIMITS.question} characters).` }); return false; }
+    if (charCount(q) > ASK_LIMITS.question) { this.emit({ askError: `That question is too long (over ${ASK_LIMITS.question} characters).` }); return false; }
     if (!this.slot) { this.emit({ askError: "Paste a link or right-click a link first, then ask." }); return false; }
     if (this.s.asking) { this.emit({ askError: "Wait for the current answer first." }); return false; }
     const gen = ++this.askGen;
     this.stopAskTimer();
     const url = this.slot.url;
     const history = capHistory(this.s.thread);
+    // What the person was just shown, so "tell me more about the second one" has something to point at. Temp chat has
+    // no summary of its own, and nothing is sent while a Dip or Dive is still running.
+    const summary = this.s.mode === "temp" ? "" : capSummary(this.s.result);
     this.emit({ asking: { q, label: "Thinking..." }, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
     const mode = this.s.mode;
     if (!String(mode).startsWith("claude")) {
@@ -412,9 +463,9 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, force: false }, 5000);
+        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false }, 5000);
     } catch (e) { this.askFailure(gen, q, e); return false; }
-    if (!this.acceptAsk(gen, r.json)) return false;
+    if (!this.acceptAsk(gen, r.json, q)) return false;
     if (r.status === 401) { this.restoreDraft(q, "The token was rejected. Check the options page."); return false; }
     if (r.status >= 400 || !r.json.job_id) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return false; }
     await this.pollAsk(r.json.job_id, gen, q);
@@ -427,7 +478,7 @@ export class Controller {
     try {
       r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 5000);
     } catch (e) { this.askFailure(gen, q, e); return; }
-    if (!this.acceptAsk(gen, r.json)) return;
+    if (!this.acceptAsk(gen, r.json, q)) return;
     if (r.status === 404) { this.restoreDraft(q, "That answer is gone (history was cleared). Ask again."); return; }
     if (r.status >= 400) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return; }
     const j = r.json;

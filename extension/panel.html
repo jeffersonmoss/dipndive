@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
+  <div id="page">
   <form id="urlform" autocomplete="off">
     <input id="urlinput" type="text" inputmode="url" placeholder="Paste a link" aria-label="Link to summarize" spellcheck="false" autocomplete="off">
     <button id="go" type="submit">Go</button>
@@ -22,25 +23,26 @@
   <div id="warn" class="warn" hidden>This source is very long (over 100,000 characters). ChatGPT may truncate a paste that large.</div>
   <div id="note" class="note" hidden></div>
   <main id="result" aria-live="polite"></main>
-  <section id="ask" aria-label="Ask a question about this source" hidden>
-    <div id="thread" aria-live="polite"></div>
-    <form id="askform" autocomplete="off">
-      <input id="askinput" type="text" placeholder="Ask about this source" aria-label="Your question" spellcheck="true" autocomplete="off" maxlength="2000">
-      <button id="mic" type="button" aria-pressed="false" aria-label="Speak your question" title="Click once to talk, click again to send">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <span id="miclabel">Speak</span>
-      </button>
-      <button id="askgo" type="submit">Ask</button>
-    </form>
-    <div id="micmsg" class="micmsg" role="status" hidden></div>
-    <button id="micsetup" type="button" hidden>Enable microphone</button>
-    <div id="askerror" class="error" role="alert" hidden></div>
-  </section>
+  <div id="thread" aria-live="polite"></div>
   <div id="error" class="error" role="alert" hidden></div>
   <footer>
     <div id="status" class="muted"></div>
     <div class="links"><a id="clear" href="#">Clear history</a> <a id="options" href="#">Options</a></div>
   </footer>
+  </div>
+  <section id="ask" aria-label="Ask a question about this source" hidden>
+    <div id="askerror" class="error" role="alert" hidden></div>
+    <div id="micmsg" class="micmsg" role="status" hidden></div>
+    <button id="micsetup" type="button" hidden>Enable microphone</button>
+    <form id="askform" autocomplete="off">
+      <input id="askinput" type="text" placeholder="Ask a question" aria-label="Your question" spellcheck="true" autocomplete="off" maxlength="2000">
+      <button id="mic" type="button" data-state="idle" title="Click once to talk, click again to send">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span id="miclabel">Speak</span>
+      </button>
+      <button id="askgo" type="submit">Ask</button>
+    </form>
+  </section>
   <script type="module" src="panel.js"></script>
 </body>
 </html>

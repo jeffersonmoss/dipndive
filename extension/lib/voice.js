@@ -3,12 +3,15 @@
 //
 // States: idle -> starting -> listening -> stopping -> idle. Click once to start, click again to stop; the recognized
 // text goes to onFinal(text, {send}) and the controller sends it. Errors become one actionable line (message).
+import { SYSTEM_BLOCK_HELP } from "./micerrors.js";
+
 export const MIC = Object.freeze({ IDLE: "idle", STARTING: "starting", LISTENING: "listening", STOPPING: "stopping" });
 
 export const MIC_MESSAGES = Object.freeze({
   unavailable: "Voice input is not available in this browser. Type your question instead.",
   needPermission: "Microphone is off. Click Enable microphone, allow it in the new tab, then come back here.",
   blocked: "Microphone is blocked for this extension. Click Enable microphone to see how to turn it back on.",
+  systemBlocked: SYSTEM_BLOCK_HELP,
   waiting: "Allow the microphone in the new tab, then come back here.",
   granted: "Microphone is on. Click the mic and talk.",
   nothing: "I did not hear anything. Click the mic and try again.",
@@ -16,6 +19,9 @@ export const MIC_MESSAGES = Object.freeze({
   network: "Speech recognition could not reach Google's speech service. Check the internet connection and try again.",
   language: "English speech recognition is not available in this browser.",
   startFailed: "Could not start listening. Click the mic and try again.",
+  serviceBlocked: "Chrome is not allowing its speech service here (a setting or a work policy may turn it off). Type your question instead.",
+  paused: "Stopped after a long pause. Click Ask to send what was heard, or click the mic to add more.",
+  hidden: "Stopped listening because the panel was hidden. Click Ask to send what was heard, or click the mic to add more.",
 });
 
 export class VoiceInput {
@@ -33,7 +39,11 @@ export class VoiceInput {
     this.sid = 0;            // session token: events from an old recognizer are ignored
     this.rec = null;
     this.timers = {};
-    this.status = null;      // PermissionStatus, watched for changes made in the Enable microphone tab
+    this.status = null;      // PermissionStatus, kept and watched for changes made in the Enable microphone tab
+    this.permAtStart = null; // what the permission said when this recording began
+    this.deliberateAbort = false;
+    this.hold = false;       // deliver the words but do not send them (the panel was hidden, or Chrome ended a long pause)
+    this.heldMessage = "";   // what to say when words were delivered but held back
     if (!this.SR) { this.message = MIC_MESSAGES.unavailable; this.kind = "info"; }
   }
 
@@ -67,12 +77,16 @@ export class VoiceInput {
   async _permission() {
     if (!this.d.permissions) return null;
     try {
-      const st = await this.d.permissions.query({ name: "microphone" });
-      if (this.status !== st) {
-        this.status = st;
-        st.onchange = () => { this.refreshPermission(); };
+      // Chrome hands back a new PermissionStatus object on every query, and each one with a handler stays alive and
+      // is told about every change. So ask once, keep that one (its state follows the permission) and watch only it.
+      if (!this.status) {
+        const st = await this.d.permissions.query({ name: "microphone" });
+        if (!this.status) {
+          this.status = st;
+          st.onchange = () => { this.refreshPermission(); };
+        }
       }
-      return st.state;
+      return this.status.state;
     } catch { return null; }
   }
 
@@ -93,11 +107,14 @@ export class VoiceInput {
 
   async start() {
     const sid = ++this.sid;
+    this.deliberateAbort = false;
+    this.hold = false;
     this._set({ state: MIC.STARTING, text: "", message: "", kind: "", needPermission: false });
     if (!this.SR) { this._set({ state: MIC.IDLE, message: MIC_MESSAGES.unavailable, kind: "info" }); return; }
     // Chrome cannot show a permission prompt inside a side panel, so a missing grant must go through the setup tab.
     const p = await this._permission();
     if (sid !== this.sid) return;
+    this.permAtStart = p;
     if (p === "prompt" || p === "denied") {
       this._set({ state: MIC.IDLE, needPermission: true, kind: "error",
                   message: p === "denied" ? MIC_MESSAGES.blocked : MIC_MESSAGES.needPermission });
@@ -118,7 +135,9 @@ export class VoiceInput {
     rec.onresult = (e) => this._onResult(sid, e);
     rec.onerror = (e) => this._onError(sid, e);
     rec.onend = () => this._finish(sid);
-    this._timer("start", () => { if (sid === this.sid && this.state === MIC.STARTING) this._fail(sid, "start-failed"); }, this.d.startTimeoutMs);
+    // Gave up waiting: abort the recognizer too, or a slow audio device could still start it and Chrome would go on
+    // sending the room's sound to the speech service with nobody listening.
+    this._timer("start", () => { if (sid === this.sid && this.state === MIC.STARTING) { this._abort(); this._fail(sid, "start-failed"); } }, this.d.startTimeoutMs);
     try { rec.start(); } catch { this._fail(sid, "start-failed"); }
   }
 
@@ -150,8 +169,14 @@ export class VoiceInput {
   // One actionable line per failure; any partial text is kept in the box but not sent.
   _fail(sid, code) {
     if (sid !== this.sid) return;
-    const permission = code === "not-allowed" || code === "service-not-allowed";
-    const message = permission ? MIC_MESSAGES.needPermission
+    const denied = code === "not-allowed";
+    // Chrome's own permission was fine when this recording began, so the refusal comes from the computer (macOS or
+    // Windows privacy settings): the Enable microphone tab cannot fix that, so say what can.
+    const system = denied && this.permAtStart === "granted";
+    const permission = denied && !system;
+    const message = system ? MIC_MESSAGES.systemBlocked
+      : permission ? MIC_MESSAGES.needPermission
+      : code === "service-not-allowed" ? MIC_MESSAGES.serviceBlocked
       : code === "no-speech" ? MIC_MESSAGES.nothing
       : code === "audio-capture" ? MIC_MESSAGES.noMic
       : code === "network" ? MIC_MESSAGES.network
@@ -176,7 +201,16 @@ export class VoiceInput {
     this.sid++;   // anything the old recognizer still says is ignored
     this._abort();
     this._detach();
+    this.deliberateAbort = false;  // its events are ignored by the session token now; the next recording starts clean
+    this.hold = false;
     this._set({ state: MIC.IDLE, text: "", message: "", kind: "" });
+  }
+
+  // The panel was hidden while listening (Chrome keeps a hidden side panel alive, and a recording would go on with no
+  // Stop button in sight): stop now, keep the words in the box, send nothing.
+  pause() {
+    if (this.state === MIC.LISTENING) { this.hold = true; this.heldMessage = MIC_MESSAGES.hidden; this.stop(); }
+    else if (this.state === MIC.STARTING) this.cancel();
   }
 
   _abort() {
@@ -190,21 +224,31 @@ export class VoiceInput {
     this.rec = null;
   }
 
-  // Recognizer ended on its own (a pause Chrome gave up on) or after stop(): deliver what was heard.
+  // Recognizer ended: after stop() (deliver and send), or on its own. Chrome ends a session by itself after about 15
+  // seconds of silence, and the person never clicked Stop, so those words are kept in the box and not sent: a long
+  // pause in the middle of a question must not send half of it.
   _finish(sid) {
     if (sid !== this.sid || this.state === MIC.IDLE) return;
-    this._end(sid, this.text ? { message: "", kind: "" } : { message: MIC_MESSAGES.nothing, kind: "error" });
+    if (!this.text) { this._end(sid, { message: MIC_MESSAGES.nothing, kind: "error" }); return; }
+    const byChrome = this.state === MIC.LISTENING && !this.hold;
+    if (byChrome) { this.hold = true; this.heldMessage = MIC_MESSAGES.paused; }
+    this._end(sid, { message: "", kind: "" });
   }
 
   _end(sid, { message, kind, needPermission = false }) {
     if (sid !== this.sid) return;
     const text = this.text.trim();
     const failed = this.err !== null && this.err !== undefined;
+    const hold = this.hold;
+    const heldMessage = this.heldMessage;
     this._detach();
     this.sid++;  // late events from this recognizer are ignored from here on
     this.err = null;
     this.deliberateAbort = false;
-    this._set({ state: MIC.IDLE, text: "", message: text && !failed ? "" : message, kind: text && !failed ? "" : kind, needPermission });
-    if (text) this.d.onFinal(text, { send: !failed });
+    this.hold = false;
+    const quiet = text && !failed && !hold;
+    this._set({ state: MIC.IDLE, text: "", message: quiet ? "" : (text && !failed ? heldMessage : message),
+                kind: quiet ? "" : (text && !failed ? "info" : kind), needPermission });
+    if (text) this.d.onFinal(text, { send: !failed && !hold });
   }
 }

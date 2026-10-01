@@ -102,20 +102,31 @@ test("silence: no text and no error gives one line and nothing is sent", async (
   assert.equal(x.log.finals.length, 0);
 });
 
-test("Chrome ending the session by itself while listening delivers what was heard", async () => {
+test("Chrome ending the session by itself (a long pause) keeps what was heard but does not send half a question", async () => {
   const x = voice();
   await x.v.toggle();
   const rec = x.speech.last;
   rec.fire("audiostart");
   rec.result([R("took a long pause", true)]);
-  rec.fire("end");
-  assert.deepEqual(x.log.finals, [["took a long pause", true]]);
+  rec.fire("end");  // the person never clicked Stop
+  assert.deepEqual(x.log.finals, [["took a long pause", false]]);
   assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.message, MIC_MESSAGES.paused);
+  assert.equal(x.v.kind, "info");
+  assert.match(x.v.message, /Click Ask to send/);
+  // the next recording starts clean
+  await x.v.toggle();
+  assert.equal(x.v.message, "");
+  x.speech.last.fire("audiostart");
+  x.speech.last.result([R("more", true)]);
+  await x.v.toggle();
+  x.speech.last.fire("end");
+  assert.deepEqual(x.log.finals.at(-1), ["more", true], "a recording stopped by a click is sent");
 });
 
 test("errors become one actionable line each; permission errors ask for Enable microphone", async () => {
   const cases = [
-    ["not-allowed", /Enable microphone/, true], ["service-not-allowed", /Enable microphone/, true],
+    ["service-not-allowed", /not allowing its speech service/, false],
     ["no-speech", /did not hear/, false], ["audio-capture", /No microphone/, false],
     ["network", /Google's speech service/, false], ["language-not-supported", /English/, false],
     ["bad-grammar", /\(bad-grammar\)/, false],
@@ -144,6 +155,23 @@ test("an error part way keeps the partial text for the box but does not send it"
   rec.fire("error", { error: "network" });
   assert.deepEqual(x.log.finals, [["half a question", false]]);
   assert.match(x.v.message, /Google's speech service/);
+});
+
+test("not-allowed while Chrome's permission is granted means the computer blocks the microphone: say how to fix that", async () => {
+  const x = voice({ permission: "granted" });
+  await x.v.toggle();
+  x.speech.last.fire("error", { error: "not-allowed" });
+  x.speech.last.fire("end");
+  assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.needPermission, false, "Enable microphone cannot fix an operating-system block");
+  assert.equal(x.v.message, MIC_MESSAGES.systemBlocked);
+  assert.match(x.v.message, /System Settings, Privacy and Security, Microphone/);
+  assert.match(x.v.message, /Windows/);
+  assert.match(x.v.message, /Let desktop apps access your microphone/);
+  // coming back to the panel must not replace it with a cheerful line
+  assert.equal(await x.v.refreshPermission(), "granted");
+  assert.equal(x.v.message, MIC_MESSAGES.systemBlocked);
+  assert.equal(x.v.needPermission, false);
 });
 
 test("permission missing: no recognizer is started, the setup button is offered", async () => {
@@ -231,12 +259,68 @@ test("a click while the permission is still being checked cancels that start", a
   assert.equal(x.v.state, MIC.IDLE);
 });
 
-test("recognizer that never reports audio is given up after the start timeout", async () => {
+test("recognizer that never reports audio is given up after the start timeout, and aborted so it cannot start later", async () => {
   const x = voice();
   await x.v.toggle();
+  const rec = x.speech.last;
   await x.fire(10000);
   assert.equal(x.v.state, MIC.IDLE);
   assert.equal(x.v.message, MIC_MESSAGES.startFailed);
+  assert.ok(rec.calls.includes("abort"), "a slow audio device must not leave Chrome listening with nobody there");
+  rec.fire("audiostart"); rec.result([R("late", true)]); rec.fire("end");
+  assert.equal(x.log.finals.length, 0);
+});
+
+test("cancelling must not make a later Chrome 'aborted' error look deliberate", async () => {
+  const x = voice();
+  await x.v.toggle();
+  await x.v.toggle();  // second click while starting: cancel
+  await x.v.toggle();  // a new recording
+  const rec = x.speech.last;
+  rec.fire("audiostart");
+  rec.result([R("what is the deal with")]);
+  rec.fire("error", { error: "aborted" });  // another page or extension took the recognizer
+  rec.fire("end");
+  assert.deepEqual(x.log.finals, [["what is the deal with", false]], "kept in the box, not sent");
+  assert.match(x.v.message, /stopped \(aborted\)/);
+});
+
+test("the permission is queried once and watched once, however many times it is refreshed", async () => {
+  const x = voice({ permission: "prompt" });
+  for (let i = 0; i < 20; i++) await x.v.refreshPermission();
+  assert.equal(x.permissions.liveHandlers, 1, "Chrome keeps every watched PermissionStatus alive");
+  x.permissions.set("granted");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(x.v.needPermission, false);
+  assert.equal(x.permissions.liveHandlers, 1);
+  x.permissions.set("denied");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(x.v.needPermission, true);
+  assert.equal(x.permissions.liveHandlers, 1);
+});
+
+test("pause (panel hidden) stops listening, keeps the words in the box and sends nothing", async () => {
+  const x = voice();
+  await x.v.toggle();
+  const rec = x.speech.last;
+  rec.fire("audiostart");
+  rec.result([R("half of a question")]);
+  x.v.pause();
+  assert.deepEqual(rec.calls, ["start", "stop"]);
+  rec.finish([R("half of a question", true)]);
+  assert.deepEqual(x.log.finals, [["half of a question", false]]);
+  assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.message, MIC_MESSAGES.hidden);
+  // hidden before audio began: cancelled quietly
+  const y = voice();
+  await y.v.toggle();
+  y.v.pause();
+  assert.equal(y.v.state, MIC.IDLE);
+  assert.equal(y.v.message, "");
+  // idle: nothing happens
+  const z = voice();
+  z.v.pause();
+  assert.equal(z.v.state, MIC.IDLE);
 });
 
 test("start timeout is cancelled once audio starts", async () => {

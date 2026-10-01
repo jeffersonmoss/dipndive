@@ -126,11 +126,11 @@ class Service:
             self._save(j)
 
     # ---------- API ----------
-    def submit(self, url, mode, request_id, force=False, question=None, history=None):
-        """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question and
-        the capped history are part of every key (raises ask.AskError on a bad question or history)."""
+    def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None):
+        """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question, the
+        capped history and the summary shown are part of every key (raises ask.AskError on bad input)."""
         norm = norm_source_id(url)
-        question, history, qkey = ask.prepare(mode, question, history)
+        question, history, summary, qkey = ask.prepare(mode, question, history, summary)
         pre_key = _sha(norm, mode, model_id(mode), PROMPT_VERSION, *([qkey] if qkey else []))
         with self.lock:
             jid = self.by_request.get(request_id)
@@ -149,7 +149,7 @@ class Service:
             if sum(1 for x in self.jobs.values() if x["state"] in ACTIVE) >= QUEUE_CAP:
                 return 429, {"error_code": "queue_full", "error_message": f"more than {QUEUE_CAP} jobs waiting"}
             j = {"job_id": uuid.uuid4().hex, "request_id": request_id, "pre_key": pre_key, "norm_id": norm,
-                 "url": url, "mode": mode, "question": question, "history": history, "qkey": qkey,
+                 "url": url, "mode": mode, "question": question, "history": history, "summary": summary, "qkey": qkey,
                  "state": "queued", "title": None, "result_markdown": None,
                  "error_code": None, "error_message": None, "force": bool(force),
                  "generation": self.generation, "created": time.time(), "updated": time.time()}
@@ -315,7 +315,8 @@ class Service:
                 self._set(j, state="summarizing")
                 with self.model_sem:
                     cached = call_model(prov, level, s["title"], s["url"], s["text"],
-                                        question=j.get("question"), history=j.get("history"))
+                                        question=j.get("question"), history=j.get("history"),
+                                        summary=j.get("summary"))
                 with self.lock:
                     if j["generation"] == self.generation:
                         _atomic_write(rp, {"result": cached, "created": time.time()})

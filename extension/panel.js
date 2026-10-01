@@ -30,6 +30,8 @@ $("urlform").addEventListener("submit", async (e) => {
   if (ok) { urlDirty = false; $("urlinput").blur(); }
 });
 
+let shownResult = null;
+
 function render(s) {
   for (const [id, b] of Object.entries(buttons)) {
     b.setAttribute("aria-pressed", String(id === s.mode));
@@ -47,7 +49,10 @@ function render(s) {
   // The field keeps showing the current URL, unless the user is mid-edit.
   if (!urlDirty && s.source && $("urlinput").value !== s.source.url) $("urlinput").value = s.source.url;
   $("hint").hidden = !!s.source || !!s.error;
-  $("result").innerHTML = s.mode === "temp" ? "" : s.result ? renderMarkdown(s.result) : "";
+  // Re-set only when the text changed: an emit happens on every interim speech result, and rebuilding the summary three
+  // times a second would drop a text selection and make a screen reader re-read it.
+  const shown = s.mode === "temp" ? "" : s.result || "";
+  if (shown !== shownResult) { shownResult = shown; $("result").innerHTML = shown ? renderMarkdown(shown) : ""; }
   $("copy").hidden = !(s.mode === "temp" && s.tempReady);
   $("warn").hidden = !(s.mode === "temp" && s.tempWarn);
   renderAsk(s);
@@ -60,50 +65,67 @@ function render(s) {
 }
 
 // ---------- question box ----------
-const MIC_LABEL = { idle: "Speak", starting: "Starting...", listening: "Stop", stopping: "Sending..." };
+// Short labels so the button keeps its size; the visible text is also its accessible name.
+const MIC_LABEL = { idle: "Speak", starting: "Wait...", listening: "Stop", stopping: "Send..." };
 let shownDraftSeq = -1;
-let shownTurns = -1;
-let shownPending = null;
+let shownTurns = 0;       // answered turns already in the DOM
+let scrolledFor = "";     // what the last scroll was for, so polling does not keep scrolling
+
+const turnNode = (q, html) => {
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  const qe = document.createElement("div");
+  qe.className = "q";
+  qe.textContent = q;                     // the question is plain text, never HTML
+  const ae = document.createElement("div");
+  ae.className = html === null ? "a pending" : "a";
+  if (html !== null) ae.innerHTML = html; // answers go through the safe renderer
+  turn.append(qe, ae);
+  return turn;
+};
+
+// The thread only grows (a turn is added, the pending line changes), so new nodes are appended and the ones already on
+// screen are left alone: answers keep their scroll position and a screen reader does not re-read the conversation.
+function renderThread(s) {
+  const th = $("thread");
+  if (s.thread.length < shownTurns) {  // the thread was reset (another source, Clear history): start again
+    th.replaceChildren();
+    shownTurns = 0;
+  }
+  const pending = th.querySelector(".turn.pending");
+  if (pending) pending.remove();
+  for (; shownTurns < s.thread.length; shownTurns++) th.appendChild(turnNode(s.thread[shownTurns].q, renderMarkdown(s.thread[shownTurns].a)));
+  if (s.asking) {
+    const node = turnNode(s.asking.q, null);
+    node.classList.add("pending");
+    node.querySelector(".a").textContent = s.asking.label;
+    th.appendChild(node);
+  }
+  const key = `${s.thread.length}${s.asking ? "p" : ""}`;
+  const last = th.lastElementChild;
+  if (key !== scrolledFor) {
+    scrolledFor = key;
+    // Show the whole turn if it fits, else its start (read from the top), inside the scrolling area above the controls.
+    if (last) last.scrollIntoView({ block: last.offsetHeight > $("page").clientHeight ? "start" : "nearest" });
+  }
+}
 
 function renderAsk(s) {
   const show = s.configured && !!s.source;
   $("ask").hidden = !show;
   if (!show) return;
-  // The thread is rebuilt only when it changes (turn added, pending label changed), so answers keep their scroll.
-  const pend = s.asking ? `${s.asking.q}\u0000${s.asking.label}` : null;
-  if (s.thread.length !== shownTurns || pend !== shownPending) {
-    shownTurns = s.thread.length; shownPending = pend;
-    const th = $("thread");
-    th.replaceChildren();
-    const add = (q, html, cls) => {
-      const turn = document.createElement("div");
-      turn.className = "turn";
-      const qe = document.createElement("div");
-      qe.className = "q";
-      qe.textContent = q;                     // the question is plain text, never HTML
-      const ae = document.createElement("div");
-      ae.className = `a ${cls}`.trim();
-      if (html === null) ae.textContent = s.asking.label; else ae.innerHTML = html;  // answers go through the safe renderer
-      turn.append(qe, ae);
-      th.appendChild(turn);
-    };
-    for (const t of s.thread) add(t.q, renderMarkdown(t.a), "");
-    if (s.asking) add(s.asking.q, null, "pending");
-    if (th.lastElementChild) th.lastElementChild.scrollIntoView({ block: "nearest" });
-  }
+  renderThread(s);
   const m = s.mic;
   const live = m.state !== MIC.IDLE;
   const mic = $("mic");
   mic.dataset.state = m.state;
-  mic.setAttribute("aria-pressed", String(m.state === MIC.LISTENING || m.state === MIC.STARTING));
   mic.disabled = !m.available || !!s.asking || m.state === MIC.STOPPING;
   $("miclabel").textContent = MIC_LABEL[m.state] || "Speak";
-  mic.setAttribute("aria-label", m.state === MIC.LISTENING ? "Listening. Click to stop and send." : "Speak your question");
   const box = $("askinput");
   if (s.draftSeq !== shownDraftSeq) { shownDraftSeq = s.draftSeq; box.value = s.draft; }
   box.readOnly = live;
   if (live) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
-  box.placeholder = m.state === MIC.LISTENING ? "Listening..." : "Ask about this source";
+  box.placeholder = m.state === MIC.LISTENING ? "Listening..." : "Ask a question";
   $("askgo").disabled = live || !!s.asking;
   const line = m.state === MIC.LISTENING ? "Listening. Click Stop when you are done." : m.message;
   $("micmsg").hidden = !line;
@@ -140,7 +162,10 @@ $("mic").addEventListener("click", () => ctl.toggleMic());
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
 window.addEventListener("focus", () => ctl.refreshMic());
-document.addEventListener("visibilitychange", () => { if (!document.hidden) ctl.refreshMic(); });
+// Chrome keeps a side panel that another panel replaced alive (and recognition with it), with no Stop button in sight:
+// stop listening when the panel is hidden, keeping the words in the box.
+document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.pauseMic(); else ctl.refreshMic(); });
+window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
 $("clear").addEventListener("click", (e) => { e.preventDefault(); ctl.clearHistory(); });
 $("options").addEventListener("click", (e) => {

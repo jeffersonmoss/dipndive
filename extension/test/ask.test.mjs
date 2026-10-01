@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { slotKey } from "../lib/background-core.js";
-import { ASK_LIMITS, askProvider, capHistory, cleanQuestion } from "../lib/ask.js";
+import { ASK_LIMITS, askProvider, capHistory, capSummary, cleanQuestion, normalizeText } from "../lib/ask.js";
 import { MIC } from "../lib/voice.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sourceKey } from "../lib/urls.js";
@@ -26,7 +26,7 @@ test("ask: the question is sent about the current source, an answer lands in the
   assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(await r.c.askQuestion("okay, what is the deal with the chocolate?"), true);
   const [p] = asks(r);
-  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], force: false });
+  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], summary: "Summary for claude-dip", force: false });
   assert.ok(p.body.requestId.startsWith("uuid-"));
   assert.equal(p.auth, "Bearer " + "t".repeat(40));
   assert.equal(r.state.last.asking.q, "okay, what is the deal with the chocolate?");
@@ -181,12 +181,165 @@ test("clear history clears the Q&A thread, the box and any answer on its way", a
   assert.deepEqual(asks(r).at(-1).body.history, []);
 });
 
-test("an old clear generation in an answer is discarded", async () => {
+test("an old clear generation in an answer ends the turn: the panel is not left on Thinking", async () => {
   const r = await ready();
-  r.c.clearGen = 5;
-  await r.c.askQuestion("q"); await r.tick();
-  assert.equal(r.c.clearGen, 5);  // server answers with generation 0: older, discarded
+  r.c.clearGen = 5;  // the companion answers with generation 0: it was reset
+  assert.equal(await r.c.askQuestion("q"), false);
+  const st = r.state.last;
+  assert.equal(st.asking, null, "not stuck waiting");
+  assert.equal(st.draft, "q", "the question is back in the box");
+  assert.match(st.askError, /companion was reset/);
+  assert.deepEqual(st.thread, []);
+  assert.equal(r.c.clearGen, 0, "the companion's generation is adopted, so the next question can work");
+  assert.equal(r.timers.length, 0, "no polling goes on in the background");
+  assert.equal(await r.c.askQuestion(), true, "asking again is allowed");
+  await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+  assert.equal(r.state.last.askError, null);
+});
+
+test("an old generation seen while polling an answer also ends the turn, and the mic is usable again", async () => {
+  const { r, speech } = await micReady();
+  await r.c.askQuestion("slow one");
+  r.c.clearGen = 7;
+  await r.tick();
+  assert.equal(r.state.last.asking, null);
+  assert.equal(r.state.last.draft, "slow one");
+  await r.c.toggleMic();
+  assert.equal(speech.recs.length, 1, "the mic is not blocked by a question that will never be answered");
+});
+
+test("a newer generation in an answer (history cleared in another window) forgets the thread and drops the answer", async () => {
+  const r = await ready();
+  await r.c.askQuestion("before the clear"); await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+  r.server.clearGen = 3;  // someone cleared; this panel was not told by storage
+  assert.equal(await r.c.askQuestion("after the clear"), false);
   assert.deepEqual(r.state.last.thread, []);
+  assert.equal(r.state.last.asking, null);
+  assert.equal(r.state.last.draft, "after the clear");
+  assert.match(r.state.last.askError, /cleared in another window/);
+  assert.equal(r.c.clearGen, 3);
+  assert.equal(await r.c.askQuestion(), true);
+  assert.deepEqual(asks(r).at(-1).body.history, [], "the pre-clear turns are not sent again");
+});
+
+// ---------- two windows ----------
+
+function twoPanels() {
+  const store = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip",
+                  [slotKey(1)]: slot(), [slotKey(2)]: slot({ windowId: 2, requestId: "slot-req-2", url: "https://v.test/other" }) };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  return { A: rig({ shared: store, server, bus }), B: rig({ shared: store, server, bus }), store, server };
+}
+
+test("Clear history in one window clears the question thread and summary in the other window's panel", async () => {
+  const { A, B, store } = twoPanels();
+  await A.c.init(1); await B.c.init(2);
+  await A.tick(); await B.tick();
+  await A.c.askQuestion("my private zebra question"); await A.tick();
+  assert.equal(A.state.last.thread.length, 1);
+  assert.equal(A.state.last.result, "Summary for claude-dip");
+  await B.c.clearHistory();
+  assert.equal(B.state.last.status, "History cleared.");
+  assert.deepEqual(A.state.last.thread, [], "window A forgot the thread when window B cleared");
+  assert.equal(A.state.last.result, null);
+  assert.match(A.state.last.status, /cleared in another window/);
+  assert.equal(A.state.last.busy, false);
+  assert.equal(A.c.clearGen, 1);
+  assert.equal(store.clearGen, 1);
+  assert.ok(!Object.keys(store).some((k) => k.startsWith("slot:")), "no list of what was looked at is kept");
+  // the next question from A carries nothing from before the clear
+  await A.c.askQuestion("and then?");
+  const body = asks(A).at(-1).body;
+  assert.deepEqual(body.history, []);
+  assert.ok(!JSON.stringify(body).includes("zebra"));
+  assert.equal(body.summary, undefined, "the cleared summary is not sent back either");
+  await A.tick();
+  assert.equal(A.state.last.thread.length, 1);
+});
+
+test("the window that cleared is not reset a second time by its own storage write", async () => {
+  const { A, B } = twoPanels();
+  await A.c.init(1); await B.c.init(2);
+  await A.tick(); await B.tick();
+  await A.c.clearHistory();
+  assert.equal(A.state.last.status, "History cleared.");
+  assert.equal(A.c.clearGen, 1);
+  assert.equal(B.state.last.result, null);
+});
+
+test("a Dip in flight in another window when history is cleared is dropped, not shown as a fresh result", async () => {
+  const { A, B } = twoPanels();
+  await A.c.init(1); await B.c.init(2);
+  await B.tick(); await A.tick();
+  await A.c.selectMode("claude-dive");  // submits; polling is queued
+  assert.equal(A.state.last.busy, true);
+  await B.c.clearHistory();
+  assert.equal(A.state.last.busy, false);
+  assert.equal(A.state.last.result, null);
+  await A.tick();  // the poll that was already scheduled does nothing
+  assert.equal(A.state.last.result, null);
+});
+
+// ---------- the summary on screen goes with a question ----------
+
+test("the Dip or Dive text on screen is sent with a question, for follow-ups such as 'the second one'", async () => {
+  const r = await ready();
+  await r.c.askQuestion("tell me more about the second one"); await r.tick();
+  assert.equal(asks(r)[0].body.summary, "Summary for claude-dip");
+  assert.deepEqual(asks(r)[0].body.history, []);
+  // Dive instead
+  const d = rig({ slot: slot(), mode: "claude-dive" });
+  await d.c.init(1); await d.tick();
+  await d.c.askQuestion("and the third?");
+  assert.equal(asks(d)[0].body.summary, "Summary for claude-dive");
+});
+
+test("no summary is sent while a Dip is still running, in Temp chat, or after Clear history", async () => {
+  const running = rig({ slot: slot(), mode: "claude-dip" });
+  await running.c.init(1);  // job not finished
+  await running.c.askQuestion("instead of a summary");
+  assert.equal("summary" in asks(running)[0].body, false);
+  const temp = rig({ slot: slot(), mode: "temp" });
+  await temp.c.init(1); await temp.tick();
+  await temp.c.askQuestion("in temp chat");
+  assert.equal("summary" in asks(temp)[0].body, false);
+  const r = await ready();
+  await r.c.clearHistory();
+  await r.c.askQuestion("after clear");
+  assert.equal("summary" in asks(r)[0].body, false);
+});
+
+test("a long summary is cut like the companion cuts it (shared fixtures)", () => {
+  const fx = JSON.parse(fs.readFileSync(new URL("../../tests/ask_summary_fixtures.json", import.meta.url), "utf8"));
+  assert.ok(fx.length >= 5);
+  for (const c of fx) assert.equal(capSummary(c.summary), c.expected, c.name);
+  assert.equal(capSummary(""), "");
+  assert.equal(capSummary(null), "");
+});
+
+// ---------- characters outside the basic plane ----------
+
+test("cutting a long answer never splits a character into a lone surrogate", () => {
+  const a = "x".repeat(2996) + "\u{1F600}" + "y".repeat(20);  // the emoji would straddle the cut with a UTF-16 slice
+  const [t] = capHistory([{ q: "list everything", a }]);
+  assert.ok(t.a.isWellFormed(), "well-formed text can be encoded as UTF-8");
+  assert.equal(Array.from(t.a).length, 3000);
+  assert.ok(t.a.includes("\u{1F600}"));
+  assert.ok(capSummary("z".repeat(3996) + "\u{1F600}" + "w".repeat(9)).isWellFormed());
+  assert.equal(normalizeText("\u{1D413}\u{1D421}\u{1D41E}"), "The", "the bold letters of many titles are plain letters after NFKC");
+  assert.equal(normalizeText("a \ud83d b"), "a \ufffd b");
+  assert.equal(normalizeText("\ufb01ne\u200b \u034f\ufe0f"), "fine ");
+  // a question of 2000 emoji is 2000 characters, not 4000
+  assert.equal(cleanQuestion("\u{1F600}".repeat(1500)).length, 3000);
+});
+
+test("a question of 1500 emoji is allowed (the limit counts characters the way the companion does)", async () => {
+  const r = await ready();
+  assert.equal(await r.c.askQuestion("\u{1F600}".repeat(1500)), true);
+  assert.equal(await r.c.askQuestion("\u{1F600}".repeat(1)), false);  // one at a time
 });
 
 test("only one question at a time; the second is refused with a message", async () => {
@@ -374,12 +527,89 @@ test("mic: permission missing at start offers Enable microphone; the setup butto
   assert.equal(r.state.last.mic.state, MIC.LISTENING);
 });
 
-test("mic: a not-allowed error from the recognizer itself also offers Enable microphone", async () => {
-  const { r, speech } = await micReady();
+test("mic: a not-allowed error when the browser cannot report the permission offers Enable microphone", async () => {
+  const speech = makeSpeech();
+  const r = rig({ slot: slot(), mode: "claude-dip", speech });  // no permissions API
+  await r.c.init(1); await r.tick();
   await r.c.toggleMic();
   speech.last.fire("error", { error: "not-allowed" });
   assert.equal(r.state.last.mic.needPermission, true);
   assert.match(r.state.last.mic.message, /Enable microphone/);
+});
+
+test("mic: not-allowed with the permission granted says the computer is blocking, and the panel keeps saying it", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("error", { error: "not-allowed" });
+  speech.last.fire("end");
+  assert.equal(r.state.last.mic.needPermission, false);
+  assert.match(r.state.last.mic.message, /Your computer is blocking the microphone/);
+  assert.match(r.state.last.mic.message, /Privacy and Security/);
+  await r.c.refreshMic();  // the panel regained focus
+  assert.match(r.state.last.mic.message, /Your computer is blocking the microphone/);
+});
+
+test("mic: words typed in the box stay, and the spoken words are added after them", async () => {
+  const { r, speech } = await micReady();
+  r.c.typed("what about the chocolate");
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  assert.equal(r.state.last.draft, "what about the chocolate", "starting to listen does not wipe the box");
+  speech.last.result([R("in the second half")]);
+  assert.equal(r.state.last.draft, "what about the chocolate in the second half");
+  await r.c.toggleMic();
+  speech.last.finish([R("in the second half", true)]);
+  await flush();
+  assert.equal(asks(r)[0].body.question, "what about the chocolate in the second half");
+});
+
+test("mic: nothing heard leaves the typed words in the box", async () => {
+  const { r, speech } = await micReady();
+  r.c.typed("what about the chocolate");
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  await r.c.toggleMic();
+  speech.last.finish();
+  await flush();
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.draft, "what about the chocolate");
+  assert.match(r.state.last.mic.message, /did not hear anything/);
+  await r.c.askQuestion();  // and it can still be sent
+  assert.equal(asks(r)[0].body.question, "what about the chocolate");
+});
+
+test("mic: a pause that Chrome ends keeps the words in the box unsent; Ask sends them, the mic adds more", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  speech.last.result([R("so what is the", true)]);
+  speech.last.fire("end");  // Chrome gave up on the silence; nobody clicked Stop
+  await flush();
+  assert.equal(asks(r).length, 0, "half a question is not sent");
+  assert.equal(r.state.last.draft, "so what is the");
+  assert.match(r.state.last.mic.message, /Stopped after a long pause/);
+  await r.c.toggleMic();  // add more
+  speech.last.fire("audiostart");
+  speech.last.result([R("deal with the chocolate")]);
+  assert.equal(r.state.last.draft, "so what is the deal with the chocolate");
+  await r.c.toggleMic();
+  speech.last.finish([R("deal with the chocolate", true)]);
+  await flush();
+  assert.equal(asks(r)[0].body.question, "so what is the deal with the chocolate");
+});
+
+test("mic: the panel being hidden stops the recording and keeps the words unsent", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  speech.last.result([R("I was saying")]);
+  r.c.pauseMic();
+  speech.last.finish([R("I was saying", true)]);
+  await flush();
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.draft, "I was saying");
+  assert.match(r.state.last.mic.message, /panel was hidden/);
 });
 
 test("mic: not offered without a source, and ignored while an answer is being fetched", async () => {
