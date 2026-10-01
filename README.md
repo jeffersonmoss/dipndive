@@ -48,3 +48,12 @@ The module creates `~/Library/Application Support/DipDive/codex-home` and its co
 Test-only hook: `DIPDIVE_TEST_ALLOW_LOOPBACK=1` lets the fetch worker reach 127.0.0.1 (used by tests/test_regressions.py). Never set it in production.
 
 Live article sample (network, no model): `python -m tests.live_articles`.
+
+## Chrome extension (plan 3.1, Stages B to D)
+
+Source in `extension/` (Manifest V3, no build step, no CDN code, no content scripts). Load with `extension/LOAD-UNPACKED.md`.
+
+1. Permissions: `contextMenus`, `sidePanel`, `storage`, `clipboardWrite`; host permission `https://*.ts.net/*` only (narrow it to the exact tailnet host later); `http://127.0.0.1/*` and `localhost` are optional and requested from the options page on save.
+2. Fixed extension ID `eokhjchjblklfkhcklpichdfjmmpcana` via the `key` in `manifest.json` (public key only). The PRIVATE key is `~/Library/Application Support/DipDive/extension-key.pem` (mode 0600, never in git). Keep it: it is needed to pack the extension later with the same ID.
+3. Layout: `background.js` plus `lib/background-core.js` (menu, URL precedence, per-window slots); `panel.html`, `panel.js`, `panel.css`, `lib/controller.js` (submission, polling, selection and clear generations, Temp chat); `lib/markdown.js` (bundled renderer, HTML escaped, images never rendered, http(s) links only); `lib/api.js` (5 s AbortController deadlines); `options.html` and `options.js`.
+4. Tests: `cd extension && node --test test/*.test.mjs` (27 tests: URL precedence, renderer safety, manifest and no-CDN checks, menu and click handler order with a mocked chrome, controller flows with a fake companion). Visual and flow check in a browser: `.venv/bin/python -m tests.dev_harness [port]` starts a real companion with faked model binaries plus a static and proxy server and prints a panel URL (`panel.html?base=...&token=...&url=...&mode=...`); the panel runs outside Chrome through `lib/shim.js`, which is inert inside the real extension. Screenshots: `extension/docs/panel-light.jpg`, `panel-dark.jpg`.

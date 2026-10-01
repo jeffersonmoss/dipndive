@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Dip and Dive</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <a id="title" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
+    <div id="url" class="muted"></div>
+  </header>
+  <div id="buttons" role="group" aria-label="Mode"></div>
+  <button id="copy" type="button" hidden>Copy and open ChatGPT</button>
+  <div id="warn" class="warn" hidden>This source is very long (over 100,000 characters). ChatGPT may truncate a paste that large.</div>
+  <div id="note" class="note" hidden></div>
+  <main id="result" aria-live="polite"></main>
+  <div id="error" class="error" role="alert" hidden></div>
+  <footer>
+    <div id="status" class="muted"></div>
+    <div class="links"><a id="clear" href="#">Clear history</a> <a id="options" href="#">Options</a></div>
+  </footer>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
