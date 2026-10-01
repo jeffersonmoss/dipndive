@@ -58,8 +58,9 @@ test("a refusal or an unreachable companion puts the box back; a gone entry hide
   await done(r);
   r.server.saveStatus = 503;
   assert.equal(await r.c.setSaved(false), false);
-  assert.equal(r.state.last.saved, true, "back to ticked");
-  assert.match(r.state.last.status, /could not be changed/);
+  assert.equal(r.log.fetches.at(-1).path, "/jobs/job1", "a server error is checked with the companion, not guessed");
+  assert.equal(r.state.last.saved, true, "the log still has it, so the box is ticked again");
+  assert.match(r.state.last.status, /was not changed/);
   r.server.saveStatus = 0;
   r.server.fail = new TypeError("Failed to fetch");
   assert.equal(await r.c.setSaved(false), false);
@@ -340,4 +341,62 @@ test("a focus refresh after Clear history on another machine resets the panel an
   assert.equal(r.state.last.result, null);
   assert.equal(r.state.last.saved, null, "no box");
   assert.equal(r.state.last.status, "History was cleared on another machine.");
+});
+
+test("a frozen GET from before a change made in another window cannot undo it (log revisions)", async () => {
+  // third check, finding 11: B's GET answered "true" at revision 0, A removed (revision 1), B followed the broadcast to
+  // false, then the old GET arrived and put B back to true
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot() };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  const A = rig({ shared, server, bus });
+  const B = rig({ shared, server, bus });
+  await A.c.init(1); await A.tick();
+  const jid = A.state.last.jobId;
+  shared[slotKey(2)] = slot({ windowId: 2, requestId: "slot-req-2", consumed: true, jobId: jid, mode: "claude-dip" });
+  await B.c.init(2);
+  server.freeze = (path) => path === `/jobs/${jid}` && !server.frozenOnce && (server.frozenOnce = true);
+  const old = B.c.refreshSaved();                // B's focus GET: "true at revision 0", held back
+  server.freeze = null;
+  await A.c.setSaved(false);                     // revision 1, broadcast
+  await new Promise((res) => setTimeout(res, 0));
+  assert.equal(B.state.last.saved, false);
+  B.holds.shift()();
+  assert.equal(await old, null, "the older answer is dropped");
+  assert.equal(B.state.last.saved, false);
+  assert.equal(server.jobs[jid].saved, false);
+});
+
+test("overlapping GETs: the older answer arriving last is dropped", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  r.server.freeze = (path) => path === "/jobs/job1" && !r.server.f1 && (r.server.f1 = true);
+  const first = r.c.refreshSaved();              // answer made now: true, revision 0
+  r.server.freeze = null;
+  r.server.jobs.job1.saved = false; r.server.rev = 4;  // changed on another machine
+  assert.equal(await r.c.refreshSaved(), false);
+  r.holds.shift()();
+  assert.equal(await first, null);
+  assert.equal(r.state.last.saved, false);
+});
+
+test("a server error after the change was made is reconciled and announced, not reverted", async () => {
+  // third check, finding 12: restore wrote the entry, then answered 503; the panel put the box back to unticked
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot() };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  const A = rig({ shared, server, bus });
+  const B = rig({ shared, server, bus });
+  await A.c.init(1); await A.tick();
+  const jid = A.state.last.jobId;
+  shared[slotKey(2)] = slot({ windowId: 2, requestId: "slot-req-2", consumed: true, jobId: jid, mode: "claude-dip" });
+  await B.c.init(2);
+  await A.c.setSaved(false);
+  await new Promise((res) => setTimeout(res, 0));
+  server.errorAfterSave = 503;
+  assert.equal(await A.c.setSaved(true), true);
+  await new Promise((res) => setTimeout(res, 0));
+  assert.equal(A.log.fetches.at(-1).path, `/jobs/${jid}`, "asked the companion");
+  assert.deepEqual([A.state.last.saved, B.state.last.saved, server.jobs[jid].saved], [true, true, true]);
+  assert.match(A.state.last.status, /Saved to history/);
 });

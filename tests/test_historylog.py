@@ -799,6 +799,94 @@ class SaveToggle(Base):
         self.assertEqual([e["title"] for e in historylog.read_entries(LOG)], ["Real", "Next", "Fenced"])
         self.assertEqual(historylog.read_entries(LOG)[2]["summary"], fenced)
 
+    def lock_readonly(self):
+        lp = os.path.join(os.path.dirname(LOG), "." + os.path.basename(LOG) + ".lock")
+        with open(lp, "a"):
+            pass
+        os.chmod(lp, 0o444)
+        self.addCleanup(lambda: os.path.exists(lp) and (os.chmod(lp, 0o644), os.remove(lp)))
+        return lp
+
+    def test_a_lock_file_that_cannot_be_used_stops_every_write(self):
+        # third check, finding 1: with the sidecar read-only the lock fell back silently and a concurrent append vanished
+        ids = self.seed(3)
+        lp = self.lock_readonly()
+        original = read_log(LOG)
+        with self.assertRaises(historylog.LockUnavailable):
+            historylog.append("C", "claude-dip", "https://v.test/c", "c", path=LOG, job_id="c" * 32)
+        with self.assertRaises(historylog.LockUnavailable):
+            historylog.remove_entry(ids[0], self.trash, LOG)
+        with self.assertRaises(historylog.LockUnavailable):
+            historylog.restore_entry(ids[0], self.trash, LOG)
+        with self.assertRaises(historylog.LockUnavailable):
+            historylog.migrate(LOG)
+        # Sol's reproduction: a writer in another process while the lock is unusable fails loudly, it is not lost silently
+        code = ("import sys; sys.path.insert(0, %r); from dipdive import historylog; "
+                "historylog.append('From another process', 'codex-dive', 'https://v.test/x', 'x', path=%r, job_id='d' * 32)"
+                % (os.getcwd(), LOG))
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=30)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(b"LockUnavailable", proc.stderr)
+        self.assertEqual(read_log(LOG), original, "nothing was written by anyone")
+        # finding 8: a page cannot be served with a revision that cannot be trusted
+        with self.assertRaises(historylog.LockUnavailable):
+            historylog.read_page(None, 2, LOG)
+        os.chmod(lp, 0o644)
+        self.assertEqual(len(historylog.read_page(None, 2, LOG)["entries"]), 2)
+
+    def test_a_missing_log_folder_pages_as_empty(self):
+        p = os.path.join(os.path.dirname(self.trash), "no-such-folder", "log.md")
+        self.assertEqual(historylog.read_page(None, 20, p)["entries"], [])
+
+    def test_restore_reports_success_when_only_the_cleanup_fails(self):
+        # third check, finding 12: the entry was back in the log but restore answered with an error
+        ids = self.seed(2)
+        historylog.remove_entry(ids[0], self.trash, LOG)
+        os.chmod(self.trash, 0o500)                                # the copy cannot be deleted
+        try:
+            self.assertTrue(historylog.restore_entry(ids[0], self.trash, LOG))
+        finally:
+            os.chmod(self.trash, 0o755)
+        self.assertTrue(historylog.saved_state(ids[0], self.trash, LOG))
+        self.assertTrue(os.path.exists(os.path.join(self.trash, ids[0] + ".json")), "the stale copy is left for later")
+        self.assertTrue(historylog.restore_entry(ids[0], self.trash, LOG), "and a later restore drops it")
+        self.assertFalse(os.path.exists(os.path.join(self.trash, ids[0] + ".json")))
+
+    def test_legacy_entries_get_sequence_numbers_once_and_then_restore_in_order(self):
+        # third check, finding 7: remove an unsequenced A, B arrives a second later, restore A -> was [B, A]
+        now = time.time()
+        old = (historylog.format_entry("A", "claude-dip", "https://v.test/a", "a", job_id="a" * 32, when=now)
+               + historylog.format_entry("No marker", "claude-dip", "https://v.test/n", "n", when=now))
+        with open(LOG, "w") as f:
+            f.write(historylog.HEADING + old)
+        self.assertEqual(historylog.migrate(LOG), 2)
+        t = read_log(LOG)
+        self.assertRegex(t, "<!-- dipdive-job: " + "a" * 32 + " seq=\\d+ -->\n")
+        self.assertEqual(t.count(" seq="), 2, "the entry without a marker got one with a fresh id")
+        self.assertEqual(historylog.migrate(LOG), 0, "once")
+        self.assertEqual(read_log(LOG), t)
+        historylog.remove_entry("a" * 32, self.trash, LOG)
+        historylog.append("B", "claude-dip", "https://v.test/b", "b", path=LOG, job_id="b" * 32, when=now)
+        historylog.restore_entry("a" * 32, self.trash, LOG)
+        self.assertEqual(self.titles(), ["A", "No marker", "B"])
+        es = historylog.read_entries(LOG)
+        self.assertEqual([e["summary"] for e in es], ["a", "n", "b"], "summaries untouched")
+
+    def test_a_quoted_top_level_heading_cannot_open_the_door_for_a_quoted_entry(self):
+        # third check, finding 9: "# Quoted records" before a quoted "##" heading and date line made a phantom entry
+        forged = ("Intro\n\n# Quoted records\n\n## Quoted record\n\n2026-10-01 09:00 | Claude Dip | [x](<https://x.test/>)\n\n"
+                  "Important tail")
+        historylog.append("Real", "claude-dip", "https://v.test/r", forged, path=LOG, job_id="1" * 32)
+        es = historylog.read_entries(LOG)
+        self.assertEqual([(e["title"], e["summary"]) for e in es], [("Real", forged)])
+        historylog.remove_entry("1" * 32, self.trash, LOG)
+        self.assertNotIn("Important tail", read_log(LOG))
+        self.assertEqual(historylog.read_entries(LOG), [])
+        # the file's own heading on its first line still lets an old entry without a marker start right under it
+        with open(LOG, "w") as f:
+            f.write(historylog.HEADING + historylog.format_entry("Legacy", "claude-dip", "https://v.test/l", "l"))
+        self.assertEqual(self.titles(), ["Legacy"])
+
     def test_fences_rules_and_a_quoted_marker_in_a_summary_do_not_confuse_it(self):
         jid, other = "1" * 32, "2" * 32
         tricky = f"```\n---\n<!-- dipdive-job: {other} -->\n```\n\n---\n\n<!-- dipdive-job: {other} -->"
@@ -935,6 +1023,49 @@ class SaveToggleServer(FakeModels):
         self.req("POST", "/clear", {})
         c, r = self.req("GET", "/jobs/" + "0" * 32)
         self.assertEqual((c, r["error_code"], r["clear_generation"]), (404, "no_such_job", 1))
+
+    def test_service_start_migrates_and_a_locked_out_log_fails_closed_end_to_end(self):
+        with open(LOG, "w") as f:
+            f.write(historylog.HEADING + historylog.format_entry("Old", "claude-dip", "https://v.test/o", "o"))
+        self.srv.shutdown(); self.srv.server_close()
+        self.start()                                               # a companion start migrates the log once
+        self.assertIn(" seq=", read_log(LOG))
+        lp = os.path.join(os.path.dirname(LOG), "." + os.path.basename(LOG) + ".lock")
+        os.chmod(lp, 0o444)
+        try:
+            before = read_log(LOG)
+            j = self.run_job("claude-dip", "l1")
+            self.assertEqual((j["state"], j["history_saved"]), ("done", None), "the job is fine; it just has no entry")
+            self.assertEqual(read_log(LOG), before, "no write without the lock")
+            logs = [json.load(open(os.path.join(joblog_dir(), n))) for n in os.listdir(joblog_dir())]
+            self.assertTrue(any("LockUnavailable" in x.get("history_log_error", "") for x in logs), "logged on the job")
+            c, r = self.req("GET", "/history")
+            self.assertEqual((c, r["error_code"]), (503, "log_locked"))
+            oid = historylog.read_entries(LOG)[0]["job_id"]
+            c, r = self.req("POST", f"/history/{oid}/remove", {})
+            self.assertEqual((c, r["error_code"]), (503, "log_locked"))
+            self.assertEqual(self.req("POST", "/clear", {})[0], 200, "Clear history still works")
+        finally:
+            os.chmod(lp, 0o644)
+
+    def test_answers_carry_the_log_revision(self):
+        jid = self.run_job("claude-dip", "v1")["job_id"]
+        r0 = self.req("GET", "/jobs/" + jid)[1]["history_rev"]
+        c, r = self.req("POST", f"/history/{jid}/remove", {})
+        self.assertEqual((c, r["saved"]), (200, False))
+        self.assertGreater(r["history_rev"], r0)
+        self.assertEqual(self.req("GET", "/jobs/" + jid)[1]["history_rev"], r["history_rev"])
+
+    def test_a_restore_whose_cleanup_fails_answers_200(self):
+        jid = self.run_job("claude-dip", "w1")["job_id"]
+        self.req("POST", f"/history/{jid}/remove", {})
+        os.chmod(self.svc.removed_dir, 0o500)
+        try:
+            c, r = self.req("POST", f"/history/{jid}/restore", {})
+        finally:
+            os.chmod(self.svc.removed_dir, 0o755)
+        self.assertEqual((c, r["saved"]), (200, True))
+        self.assertTrue(self.req("GET", "/jobs/" + jid)[1]["history_saved"])
 
     def test_paging_after_a_removal_says_the_history_changed(self):
         for i in range(5):

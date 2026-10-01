@@ -80,6 +80,10 @@ class Service:
             pass
         joblog.fence = lambda: self.generation
         self._load_jobs()
+        try:  # once per start: sequence numbers for log entries written before they existed (see historylog.migrate)
+            historylog.migrate()
+        except Exception as e:
+            print(f"dipdive: history log migration skipped: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         self.prune()
         self._health = None
         self._health_at = 0.0
@@ -188,7 +192,16 @@ class Service:
                 "error_message": j["error_message"], "clear_generation": self.generation,
                 # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
                 # the panel), None when it has none (asks, Temp chat, errors, a log failure, an entry deleted by hand)
-                "history_saved": historylog.saved_state(j["log_id"], self.removed_dir) if j.get("log_id") else None}
+                **self._saved_fields(j)}
+
+    def _saved_fields(self, j):
+        """history_saved and history_rev for a job answer. The revision is read before the state, so the state is never
+        older than the revision it is labelled with; a panel applies an answer only when its revision is not older than
+        the newest it has seen."""
+        if not j.get("log_id"):
+            return {"history_saved": None, "history_rev": historylog.revision()}
+        rev = historylog.revision()
+        return {"history_saved": historylog.saved_state(j["log_id"], self.removed_dir), "history_rev": rev}
 
     def get_job(self, jid):
         with self.lock:
@@ -210,7 +223,8 @@ class Service:
     def clear(self):
         # The history log's write lock first (the same order as set_saved), so a remove or restore is never half done
         # around a clear: it finishes before, or it starts after and finds the new generation and no removed store.
-        with historylog.locked(), self.lock, joblog.write_lock:
+        # required=False: Clear never writes the log, so it still works when the log's folder is missing or read-only
+        with historylog.locked(required=False), self.lock, joblog.write_lock:
             self.generation += 1
             _atomic_write(self.state_path, {"clear_generation": self.generation})
             self.jobs.clear(); self.by_request.clear(); self.by_prekey.clear()
@@ -379,7 +393,19 @@ class Service:
         the result; an id with no job record (an older entry) is taken as the entry's own id. Idempotent. A request
         that carries a clear generation older than the current one is refused (409 stale_clear_generation): the summary
         it was made for belongs to history that has been cleared. The whole change runs under the log's write lock, the
-        same lock Clear history takes first. Returns (http_status, body)."""
+        same lock Clear history takes first; when that lock cannot be had, nothing is changed (503 log_locked). The answer
+        carries `history_rev`, the log's revision right after the change, so a panel can tell newer answers from older.
+        Returns (http_status, body)."""
+        with self.lock:  # a summary with no log entry needs no lock to say so
+            j = self.jobs.get(jid)
+            if j is not None and not j.get("log_id"):
+                return 404, {"error_code": "not_logged", "error_message": "this summary has no entry in the history log"}
+        try:
+            return self._set_saved(jid, saved, clear_generation)
+        except historylog.LockUnavailable as e:
+            return 503, {"error_code": "log_locked", "error_message": f"the history log cannot be locked, so it was not changed ({e.strerror or e})"}
+
+    def _set_saved(self, jid, saved, clear_generation):
         with historylog.locked():
             with self.lock:
                 if clear_generation is not None and clear_generation < self.generation:
@@ -399,10 +425,13 @@ class Service:
                              "error_message": "the entry runs into its neighbour (edited by hand?); the log was not changed"}
             except historylog.LogUnreadable as e:
                 return 503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"}
+            except historylog.LockUnavailable:
+                raise
             except OSError as e:
                 return 503, {"error_code": "log_unwritable",
                              "error_message": f"the history log cannot be written ({errno.errorcode.get(e.errno, 'OSError')})"}
-        return 200, {"job_id": jid, "saved": now, "clear_generation": self.generation}
+            rev = historylog.revision()
+        return 200, {"job_id": jid, "saved": now, "clear_generation": self.generation, "history_rev": rev}
 
     # ---------- pruning ----------
     def prune(self):

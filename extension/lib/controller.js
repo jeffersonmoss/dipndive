@@ -45,6 +45,7 @@ export class Controller {
     this.windowId = null;
     this.cfg = null;
     this.selGen = 0;       // bumped on every selection; older responses are discarded
+    this.savedRev = -1;    // newest history-log revision seen for the save box
     this.clearGen = null;  // highest companion clear generation seen
     this.timer = null;
     this.askTimer = null;
@@ -58,7 +59,7 @@ export class Controller {
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
       // history log, null when it has none (no summary, Temp chat, a log failure); savingSaved while a change is on its way
-      saved: null, savingSaved: false, savedUnknown: false,
+      saved: null, savingSaved: false, savedUnknown: false,  // (savedRev, the newest log revision seen, is kept on this)
       // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
@@ -213,6 +214,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.tempText = null;
+    this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
     this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, tempReady: false,
                 tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
@@ -336,6 +338,7 @@ export class Controller {
       if (this.s.mode === "temp") { await this.loadTemp(jobId, gen); return; }
       this.emit({ result: j.result_markdown, status: "Done.", busy: false,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
+      this.noteRev(j.history_rev);
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
     } else {
@@ -407,22 +410,19 @@ export class Controller {
       r = await request(this.d.fetch, this.cfg, "POST", `/history/${encodeURIComponent(jobId)}/${on ? "restore" : "remove"}`, { ...this.genField() }, 10000);
     } catch (e) {
       if (!still()) return false;
-      this.emit({ status: "No answer from the companion, so it is not known yet whether the history log changed. Checking..." });
-      const now = await this.refreshSaved({ force: true });
-      if (still() && typeof now === "boolean") await this.announceSaved(jobId, now);  // the reconciled state, like any change
-      if (still() && now === null) {
-        this.emit({ saved: !!on, savingSaved: false, savedUnknown: true,
-          status: "Cannot reach the companion, so it is not known whether the history log changed. Click the box to try again." });
-      }
-      return now === !!on;
+      return this.reconcileSaved(jobId, on, still, "No answer from the companion");
     }
     if (!still()) return false;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json); return false; }
     if (r.status === 200 && typeof r.json.saved === "boolean") {
+      this.noteRev(r.json.history_rev);
       this.emit({ saved: r.json.saved, savingSaved: false, savedUnknown: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
-      await this.announceSaved(jobId, r.json.saved);
+      await this.announceSaved(jobId, r.json.saved, r.json.history_rev);
       return r.json.saved === !!on;
     }
+    // A server error may come after the change was made (the entry was written, then something else failed): ask the
+    // companion what the log now says, as for a lost answer, and never just put the box back.
+    if (r.status >= 500) return this.reconcileSaved(jobId, on, still, "The companion reported a problem");
     const why = r.status === 401 ? "The token was rejected. Check the options page."
       : r.status === 404 ? "This summary is no longer in the history log."
       : r.status === 409 && r.json.error_code === "entry_ambiguous" ? "This entry was edited by hand in the log, so it was left as it is."
@@ -431,8 +431,31 @@ export class Controller {
     return false;
   }
 
-  async announceSaved(jobId, saved) {
-    try { await this.d.storage.set({ savedChange: { jobId, saved, ts: Date.now() } }); } catch { /* the other panels also ask on focus */ }
+  // After a lost answer or a server error: say the outcome is not known yet, ask the companion, announce what it says
+  // like any change, and mark the box unknown if even that fails.
+  async reconcileSaved(jobId, on, still, why) {
+    this.emit({ status: `${why}, so it is not known yet whether the history log changed. Checking...` });
+    const now = await this.refreshSaved({ force: true });
+    if (still() && typeof now === "boolean") {
+      if (now !== !!on) this.emit({ status: "The history log was not changed." });
+      await this.announceSaved(jobId, now, this.savedRev);
+    }
+    if (still() && now === null) {
+      this.emit({ saved: !!on, savingSaved: false, savedUnknown: true,
+        status: "Cannot reach the companion, so it is not known whether the history log changed. Click the box to try again." });
+    }
+    return now === !!on;
+  }
+
+  // Answers about the box carry the log's revision (history_rev). Only an answer at least as new as the newest one seen
+  // is applied, whatever its route (this panel's change, a GET, a GET prompted by another panel's broadcast), so a slow
+  // older answer can never overwrite a newer state.
+  noteRev(rev) {
+    if (typeof rev === "number" && rev > this.savedRev) this.savedRev = rev;
+  }
+
+  async announceSaved(jobId, saved, rev) {
+    try { await this.d.storage.set({ savedChange: { jobId, saved, rev, ts: Date.now() } }); } catch { /* the other panels also ask on focus */ }
   }
 
   // Ask the companion whether the summary on screen is in the history log (GET /jobs/<id>, field history_saved): after a
@@ -458,6 +481,9 @@ export class Controller {
     }
     if (!force && seq !== (this.savedSeq || 0)) return null;  // a newer local change owns the box
     if (r.status !== 200 || !r.json) return null;
+    const rev = r.json.history_rev;
+    if (typeof rev === "number" && rev < this.savedRev) return null;  // an older answer than one already applied
+    this.noteRev(rev);
     const v = typeof r.json.history_saved === "boolean" ? r.json.history_saved : null;
     const patch = { saved: v, savingSaved: false, savedUnknown: false };
     if (force) patch.status = v === null ? "This summary is no longer in the history log." : v ? "Saved to history." : "Removed from history.";

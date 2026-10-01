@@ -110,11 +110,17 @@ def format_entry(title: str, mode: str, url: str, summary: str, when: float = No
     return f"## {t}\n\n{chline}{stamp} | {label} | [{shown}]({_md_url(url)}){mark}\n\n{_body(summary)}\n\n---\n\n"
 
 
+class LockUnavailable(OSError):
+    """The sidecar lock file cannot be opened or locked: no write to the log may go ahead (it fails closed)."""
+
+
 @contextlib.contextmanager
-def locked(path: str = None):
+def locked(path: str = None, required: bool = True):
     """The log's write lock: the in-process lock, then an advisory flock on the sidecar `.<log name>.lock` next to the
-    log. Re-entrant within a thread. When the sidecar cannot be opened (the folder is missing or read-only) only the
-    in-process lock is held. Yields the sidecar descriptor or None."""
+    log. Re-entrant within a thread. Fails closed: when the sidecar cannot be opened or locked (a read-only file or
+    folder, a missing folder, a filesystem without flock) it raises LockUnavailable, and nothing is written. Only Clear
+    history, which never writes the log, passes required=False and then holds the in-process lock alone. Yields the
+    sidecar descriptor (None only when not required)."""
     p = path or log_path()
     with _thread_lock:
         depth = getattr(_held, "fds", None)
@@ -122,17 +128,20 @@ def locked(path: str = None):
             depth = _held.fds = {}
         key = os.path.abspath(p)
         if key in depth:
+            if depth[key] is None and required:
+                raise LockUnavailable(errno.ENOLCK, "the history log's lock file is not held")
             yield depth[key]
             return
         fd = None
         try:
             fd = os.open(_lock_path(p), os.O_RDWR | os.O_CREAT, 0o644)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            except OSError:
-                pass  # a filesystem without flock: the in-process lock still serializes this companion
-        except OSError:
-            fd = None
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as e:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            if required:
+                raise LockUnavailable(e.errno or errno.ENOLCK, f"cannot lock the history log ({errno.errorcode.get(e.errno, 'OSError')})") from e
         depth[key] = fd
         try:
             yield fd
@@ -307,7 +316,9 @@ def _scan(lines: list) -> list:
             q = i - 1
             while q >= 0 and _blank(bares[q]) and not fenced[q]:
                 q -= 1
-            if q >= 0 and (fenced[q] or not (_SEP.match(bares[q]) or bares[q].startswith("# "))):
+            # only the file's own heading counts, and only on its very first line: a `# ` line quoted inside a summary
+            # must not let a quoted `## ` heading pass for an entry
+            if q >= 0 and (fenced[q] or not (_SEP.match(bares[q]) or (q == 0 and bares[q].startswith("# ")))):
                 continue
         e = _Ent()
         e.start, e.stamp = i, f"{m.group(1)} {m.group(2)}"
@@ -419,11 +430,16 @@ def read_page(before=None, limit: int = PAGE_DEFAULT, path: str = None, rev: int
     carries an older `rev` raises HistoryChanged (the reader starts again from the newest). `next_before` is the cursor
     for the next page, None at the end."""
     p = path or log_path()
-    with locked(p):  # the revision and the entries are read together: no change can fall between them
-        r0 = revision(p)
-        if rev is not None and before is not None and rev != r0:
-            raise HistoryChanged(r0)
-        es = read_entries(p)
+    try:
+        with locked(p):  # the revision and the entries are read together: no change can fall between them
+            r0 = revision(p)
+            if rev is not None and before is not None and rev != r0:
+                raise HistoryChanged(r0)
+            es = read_entries(p)
+    except LockUnavailable:
+        if os.path.lexists(p):
+            raise  # the revision cannot be trusted: an error, never a page with a stale revision
+        r0, es = 0, []  # no log (and perhaps no folder) yet: nothing to page
     total = len(es)
     top = total if before is None else max(0, min(before, total))
     lo = max(0, top - limit)
@@ -510,6 +526,13 @@ def _unlink(path: str):
         pass
 
 
+def _unlink_quiet(path: str):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def _mode(p: str) -> int:
     try:
         return os.stat(p).st_mode & 0o7777
@@ -547,7 +570,7 @@ def remove_entry(job_id: str, trash_dir: str, path: str = None) -> bool:
         try:
             _replace(p, "".join(lines[:e.start] + lines[e.end:]), _mode(p))
         except BaseException:
-            _unlink(tp)  # roll back: the entry is still in the log, so it must not also read as removed
+            _unlink_quiet(tp)  # roll back: the entry is still in the log (and its state is read from the log anyway)
             raise
         _bump_revision(lfd)
     return False
@@ -568,7 +591,7 @@ def restore_entry(job_id: str, trash_dir: str, path: str = None) -> bool:
         lines = _lines(text)
         ents = _scan(lines)
         if any(e.job_id == job_id for e in ents):
-            _unlink(tp)
+            _unlink_quiet(tp)
             return True
         try:
             with open(tp, encoding="utf-8") as f:
@@ -622,5 +645,59 @@ def restore_entry(job_id: str, trash_dir: str, path: str = None) -> bool:
             new = before + entry + after
         _replace(p, new, _mode(p))
         _bump_revision(lfd)
-        _unlink(tp)
+        _unlink_quiet(tp)  # the entry is back; a copy that cannot be deleted now is harmless (the state is read from the log)
     return True
+
+
+# ---------- one-time migration: sequence numbers for entries written before them ----------
+def _stamp_ns(stamp: str) -> int:
+    try:
+        return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M"))) * 1_000_000_000
+    except (ValueError, OverflowError):
+        return 0
+
+
+def migrate(path: str = None) -> int:
+    """Give every entry that has no sequence number one, in file order, so restore can always place entries by it.
+    An entry with no marker at all gets a marker with a fresh id. The numbers keep increasing down the file: each is
+    the entry's date in nanoseconds when that fits between its neighbours, else one more than the entry before it.
+    Runs under the log's write lock; returns how many entries were changed (0: nothing written)."""
+    import uuid
+    p = path or log_path()
+    if not os.path.exists(p):
+        return 0
+    with locked(p) as lfd:
+        text, _ = _read_text(p)
+        lines = _lines(text or "")
+        ents = _scan(lines)
+        if all(e.seq is not None for e in ents):
+            return 0
+        nl = "\r\n" if "\r\n" in (text or "") else "\n"
+        replace, insert, last = {}, {}, 0
+        for x, e in enumerate(ents):
+            if e.seq is not None:
+                last = max(last, e.seq)
+                continue
+            nxt = next((o.seq for o in ents[x + 1:] if o.seq is not None), None)
+            n = max(last + 1, _stamp_ns(e.stamp))
+            if nxt is not None and n >= nxt:
+                n = last + 1
+            last = n
+            if e.job_id:  # an id marker without a number: the same line, now with one
+                old = lines[e.body - 1]
+                end = "\r\n" if old.endswith("\r\n") else ("\n" if old.endswith("\n") else "")
+                replace[e.body - 1] = f"<!-- dipdive-job: {e.job_id} seq={n} -->{end}"
+            else:  # no marker at all: one with a fresh id, right under the date line
+                insert[e.body] = f"<!-- dipdive-job: {uuid.uuid4().hex} seq={n} -->{nl}"
+        final = []
+        for i, ln in enumerate(lines):
+            if i in insert:
+                final.append(insert[i])
+            final.append(replace.get(i, ln))
+        if len(lines) in insert:  # a date line at the very end of the file
+            if final and not final[-1].endswith("\n"):
+                final.append(nl)
+            final.append(insert[len(lines)])
+        _replace(p, "".join(final), _mode(p))
+        _bump_revision(lfd)
+        return len(replace) + len(insert)

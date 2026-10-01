@@ -74,9 +74,11 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         }
         const j = server.jobs[decodeURIComponent(m[1])];
         if (!j || !j.logged) return respond(404, { error_code: j ? "not_logged" : "no_such_entry" });
+        if (j.saved !== (m[2] === "restore")) server.rev = (server.rev || 0) + 1;
         j.saved = m[2] === "restore";
         if (server.loseSaveResponse) { server.loseSaveResponse--; throw new TypeError("Failed to fetch"); }  // done, answer lost
-        return respond(200, { job_id: m[1], saved: j.saved, clear_generation: server.clearGen });
+        if (server.errorAfterSave) { const st = server.errorAfterSave; server.errorAfterSave = 0; return respond(st, { error_code: "log_unwritable" }); }
+        return respond(200, { job_id: m[1], saved: j.saved, clear_generation: server.clearGen, history_rev: server.rev || 0 });
       }
       if ((m = path.match(/^\/jobs\/(.+)$/))) {
         const j = server.jobs[m[1]];
@@ -85,11 +87,16 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         const done = j.polls >= 2;
         return respond(200, { job_id: m[1], state: done ? (j.fail ? "error" : "done") : "summarizing", title: "A Title", url: j.url, mode: j.mode,
           result_markdown: done && !j.fail ? (j.mode.endsWith("-ask") ? `Answer to: ${j.question} [${(j.history || []).length} earlier]` : `Summary for ${j.mode}`) : null, error_code: done && j.fail ? j.fail : null, error_message: null, clear_generation: server.clearGen,
-          history_saved: done && !j.fail && j.logged ? j.saved : null });
+          history_saved: done && !j.fail && j.logged ? j.saved : null, history_rev: server.rev || 0 });
       }
       if ((m = path.match(/^\/source\?job=(.+)$/))) return respond(200, { title: "A Title", url: "https://v.test/x", text: server.sourceText || "source body", clear_generation: server.clearGen });
       return respond(404, {});
     };
+    // freeze: the answer is made now (with the state of this moment) but delivered only when the test releases it
+    if (server.freeze && server.freeze(path, body)) {
+      const res = go();
+      return new Promise((resolve) => holds.push(() => resolve(res)));
+    }
     if (server.hold && server.hold(path, body)) {
       return new Promise((res) => holds.push(() => res(go())));
     }

@@ -172,6 +172,8 @@ def make_handler(svc: Service, token: str):
                                         "error_message": "entries were removed or restored since that page; start again from the newest"})
             except historylog.LogUnreadable as e:
                 return self._send(503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"})
+            except historylog.LockUnavailable:
+                return self._send(503, {"error_code": "log_locked", "error_message": "the history log's lock file cannot be used"})
             self._send(200, page)
 
         def do_POST(self):
