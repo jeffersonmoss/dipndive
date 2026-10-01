@@ -21,6 +21,7 @@ import time
 os.environ["DIPDIVE_TEST_ALLOW_LOOPBACK"] = "1"
 ROOT = tempfile.mkdtemp(prefix="dipdive-harness-")
 os.environ["DIPDIVE_SUPPORT"] = os.path.join(ROOT, "support")
+os.environ["DIPDIVE_LOG_PATH"] = os.path.join(ROOT, "Dip-n-Dive Log.md")  # never the real ~/Public log
 with open(os.path.join(ROOT, "TEMP_README.md"), "w") as f:
     f.write("# Temporary folder\n\nPurpose: extension panel dev harness (fake model binaries, local pages)\n"
             f"Made by: T1 Dip Dive chat on this Mac, {time.strftime('%Y-%m-%d')}\n"

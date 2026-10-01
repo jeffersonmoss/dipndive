@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 
-from . import ask, joblog
+from . import ask, historylog, joblog
 from .acquire import Source, acquire, unwrap, youtube_id
 from .errors import DipDiveError
 from .models import CLAUDE, CLAUDE_MODEL, CODEX, CODEX_HOME, CODEX_MODEL, call_model, ensure_codex_home
@@ -319,6 +319,7 @@ class Service:
                     cached = _read_json(rp)["result"]
                 except (OSError, ValueError, KeyError):
                     pass
+            fresh = cached is None  # only a result made by a model call just now is new; cache hits were logged already
             if cached is None:
                 self._set(j, state="summarizing")
                 with self.model_sem:
@@ -329,6 +330,8 @@ class Service:
                     if j["generation"] == self.generation:
                         _atomic_write(rp, {"result": cached, "created": time.time()})
             self._set(j, state="done", result_markdown=cached)
+            if fresh and j["mode"] in historylog.LOGGED_MODES and j["generation"] == self.generation:
+                self._log_history(j, s["title"], cached)
         except DipDiveError as e:
             msg = e.message
             if e.code in ("auth", "quota", "rate_limited") and j["mode"] != "source":
@@ -338,6 +341,17 @@ class Service:
             import traceback
             joblog.write({"internal_error": traceback.format_exc(), "url": j["url"], "mode": j["mode"]})
             self._set(j, state="error", error_code="internal_error", error_message=f"{type(e).__name__}: {e}")
+
+    def _log_history(self, j, title, summary):
+        """Append the finished summary to the durable history log. Never raises: a log failure goes to the job log."""
+        try:
+            historylog.append(title or "", j["mode"], j["url"], summary)
+        except BaseException as e:
+            try:
+                joblog.write({"history_log_error": f"{type(e).__name__}: {e}", "path": historylog.log_path(),
+                              "url": j["url"], "mode": j["mode"]})
+            except BaseException:
+                pass
 
     # ---------- pruning ----------
     def prune(self):
@@ -407,6 +421,10 @@ class Service:
                 threading.Thread(target=self._refresh_health, daemon=True).start()
 
     def health(self):
+        """The cached health plus the history log's path and writability (checked live, cheap, touches nothing)."""
+        return dict(self._health_cached(), log_path=historylog.log_path(), log_writable=historylog.is_writable())
+
+    def _health_cached(self):
         """Never blocks: cached result, stale-while-revalidate after 60 s, {"state":"starting"} before the first."""
         with self.lock:
             if self._health is None:
