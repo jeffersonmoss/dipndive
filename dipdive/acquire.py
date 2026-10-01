@@ -247,13 +247,19 @@ def _fetch_html(url: str, deadline_s: float = T_ARTICLE):
     return body, meta["url"]
 
 
+# Phrases that appear as paywall or login prompts, not in ordinary prose. Checked in the last 400 characters
+# of the extracted text, or anywhere when the body is short.
 _PAYWALL_PHRASES = re.compile(
-    r"(subscribe (to|now|today)( to)? (continue|read|keep)|to continue reading|continue reading (this|the) "
-    r"(article|story)|(sign|log) ?in to (continue|read|view)|create a free account to|register (for free )?to "
-    r"(continue|read)|already a (subscriber|member)|(for|to) (paid )?(subscribers|members) only|subscribers only|"
-    r"this (article|content|story) is (only )?(available )?for (paid )?(subscribers|members)|unlock this "
-    r"(article|story)|subscribe today|become a (paid )?(member|subscriber) to (read|continue)|"
+    r"(subscribe (to|now to)[^.\n]{0,30}(continue|keep) reading|subscribe to read|subscribers only|"
+    r"(for|to) (paid )?(subscribers|members) only|already a (paid )?(subscriber|member)\b|"
+    r"(sign|log) ?in to (continue reading|read (the|this) (full|rest|whole))|"
+    r"create a free account to (read|continue)|register (for free )?to (continue reading|read)|"
+    r"to continue reading( this (article|story))?,? (please )?(subscribe|sign|log|register)|"
+    r"this (article|story|content) is (only )?(available )?(to|for) (paid )?(subscribers|members)|"
+    r"unlock this (article|story)|become a (paid )?(member|subscriber) to (read|continue)|"
     r"free (articles?|stories) (remaining|left))", re.I)
+SHORT_BODY = 2000
+TAIL = 400
 
 _ARTICLE_TYPES = {"article", "newsarticle", "reportagenewsarticle", "analysisnewsarticle", "opinionnewsarticle",
                   "blogposting", "webpage", "scholarlyarticle", "techarticle", "report", "creativework"}
@@ -293,6 +299,12 @@ def declared_paywalled(html: str) -> bool:
                 g = top.get("@graph")
                 if isinstance(g, list):
                     cands += [x for x in g if isinstance(x, dict)]
+        for o in list(cands):  # the page's own main entity, one level down
+            for k in ("mainEntity", "mainEntityOfPage"):
+                v = o.get(k)
+                for m in (v if isinstance(v, list) else [v]):
+                    if isinstance(m, dict):
+                        cands.append(m)
         for o in cands:
             if _types(o) & _ARTICLE_TYPES and "isAccessibleForFree" in o and _is_false(o["isAccessibleForFree"]):
                 return True
@@ -311,6 +323,23 @@ def declared_paywalled(html: str) -> bool:
     return False
 
 
+def _dom_article_text(html: str) -> str:
+    """Second opinion on extraction: paragraphs (40+ chars) inside the first <article>, <main> or role=main."""
+    from lxml import html as lh
+    try:
+        doc = lh.fromstring(html)
+    except Exception:
+        return ""
+    for xp in ("//article", "//main", '//*[@role="main"]'):
+        els = doc.xpath(xp)
+        if els:
+            ps = [" ".join(p.text_content().split()) for p in els[0].xpath(".//p")]
+            t = "\n".join(p for p in ps if len(p) >= 40)
+            if t:
+                return t
+    return ""
+
+
 def fetch_article(url: str) -> Source:
     import trafilatura
     from trafilatura.utils import decode_file
@@ -321,10 +350,13 @@ def fetch_article(url: str) -> Source:
         html = raw.decode("utf-8", errors="replace")
     if declared_paywalled(html):
         raise DipDiveError("no_article_text", "page declares isAccessibleForFree=false (paywalled)")
-    text = trafilatura.extract(raw, include_comments=False, include_tables=False) or ""
+    text = trafilatura.extract(raw, include_comments=False, include_tables=False, favor_recall=True) or ""
+    dom = _dom_article_text(html)
+    if len(dom) >= MIN_ARTICLE_CHARS and len(dom) > 1.5 * len(text):
+        text = dom  # extractor kept under two thirds of the article's own paragraphs
     if len(text) < MIN_ARTICLE_CHARS:
         raise DipDiveError("no_article_text", f"extracted {len(text)} chars (login, paywall or no article)")
-    if _PAYWALL_PHRASES.search(text[-800:]):
+    if _PAYWALL_PHRASES.search(text if len(text) < SHORT_BODY else text[-TAIL:]):
         raise DipDiveError("no_article_text", "text ends with a paywall or login prompt")
     md = trafilatura.extract_metadata(html)
     title = (md.title if md and md.title else final)

@@ -33,7 +33,15 @@ CODEX_DISABLED_FEATURES = [
     "write_stdin_approval", "workspace_dependencies",
 ]
 # Allowlist of Codex exec item types (plan 3.4.2 backstop). Anything else kills the call.
-CODEX_ALLOWED_ITEMS = {"agent_message", "reasoning"}
+# todo_list (plan tool) and non-fatal error items are harmless. Final list to be confirmed by the
+# post-login injection test (RESULTS: pending).
+CODEX_ALLOWED_ITEMS = {"agent_message", "reasoning", "todo_list", "error"}
+
+# Features that `codex features list` reports as enabled in 0.159.2 whatever we pass (verified 2026-09-30:
+# `--disable`, `-c features.x=false` and `codex features disable x` all leave it true). shell_tool=false is
+# the gate for command execution; whether the model can still run commands through unified_exec is
+# decided by the post-login injection test. Everything else we disable must read false, or we fail closed.
+CODEX_CANNOT_DISABLE = {"unified_exec": "reads true even when disabled; shell_tool=false is the gate (to be proven by injection test)"}
 
 _AUTH = re.compile(r"\b(not logged in|please run /login|invalid (api key|authentication)|unauthorized|401)\b", re.I)
 _QUOTA = re.compile(r"\b(usage limit|quota|limit reached|credit balance)\b", re.I)
@@ -72,6 +80,44 @@ def ensure_codex_home():
                         shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
                 except OSError:
                     pass
+
+
+_features_verified = None
+
+
+def verify_codex_features(force=False):
+    """Fail closed: every feature in CODEX_DISABLED_FEATURES must exist in `codex features list` and read
+    disabled under our exact overrides, except the documented CODEX_CANNOT_DISABLE set. Cached per process."""
+    global _features_verified
+    if _features_verified is not None and not force:
+        return _features_verified
+    ensure_codex_home()
+    args = [CODEX]
+    for c in CODEX_OVERRIDES:
+        args += ["-c", c]
+    for f in CODEX_DISABLED_FEATURES:
+        args += ["--disable", f]
+    args += ["features", "list"]
+    r = run(args, 30, env=dict(os.environ, CODEX_HOME=CODEX_HOME), max_bytes=200_000)
+    if r.rc != 0:
+        raise DipDiveError("codex_isolation_unverified", f"codex features list failed: {r.err_text.strip()[-200:]}")
+    state = {}
+    for line in r.text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1] in ("true", "false"):
+            state[parts[0]] = parts[-1] == "true"
+    problems = []
+    for f in CODEX_DISABLED_FEATURES:
+        if f not in state:
+            problems.append(f"unknown feature name {f}")
+        elif state[f] and f not in CODEX_CANNOT_DISABLE:
+            problems.append(f"{f} still enabled")
+    if state.get("shell_tool", True):
+        problems.append("shell_tool still enabled")
+    if problems:
+        raise DipDiveError("codex_isolation_unverified", "; ".join(problems))
+    _features_verified = True
+    return True
 
 
 def codex_logged_in() -> bool:
@@ -158,6 +204,7 @@ def _codex_event_check(tool_events):
 
 def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None) -> str:
     ensure_codex_home()
+    verify_codex_features()
     env = dict(os.environ, CODEX_HOME=CODEX_HOME)
     tool_events = []
     with tempdir("empty cwd and output file for an isolated codex call") as d:

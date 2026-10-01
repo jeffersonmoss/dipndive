@@ -12,21 +12,25 @@ KEEP_DAYS = 30
 import threading
 
 local = threading.local()   # local.gen: clear generation the current job started under
+write_lock = threading.RLock()
 fence = None                # callable returning the current clear generation (set by the service)
 
 
 def write(data: dict):
     g = getattr(local, "gen", None)
-    if g is not None and fence is not None and fence() != g:
-        return None  # a /clear happened while this job ran: drop the write
-    os.makedirs(LOG_DIR, exist_ok=True)
-    prune()
-    path = os.path.join(LOG_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
-    os.replace(tmp, path)
-    return path
+    with write_lock:  # /clear holds this lock while deleting, so check and write are atomic w.r.t. it
+        if g is not None and fence is not None and fence() != g:
+            return None  # a /clear happened while this job ran: drop the write
+        os.makedirs(LOG_DIR, exist_ok=True)
+        prune()
+        path = os.path.join(LOG_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return path
 
 
 def prune():

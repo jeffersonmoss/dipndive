@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -17,9 +18,11 @@ from .prompts import PROMPT_VERSION
 
 MODES = ("claude-dip", "claude-dive", "codex-dip", "codex-dive", "source")
 ACTIVE = ("queued", "fetching", "summarizing")
+REQUIRED_KEYS = ("job_id", "request_id", "state", "pre_key", "norm_id", "url", "mode", "generation", "updated")
 MAX_FETCH, MAX_MODEL, QUEUE_CAP, WORKERS = 2, 2, 20, 6
 SOURCE_TTL, PRUNE_AFTER = 7 * 86400, 30 * 86400
 SUPPORT = joblog.SUPPORT
+LAUNCHD_LOGS = ("launchd.out.log", "launchd.err.log")
 
 
 def _sha(*parts) -> str:
@@ -48,6 +51,8 @@ def _atomic_write(path: str, obj):
     tmp = f"{path}.{uuid.uuid4().hex[:6]}.tmp"
     with open(tmp, "w") as f:
         json.dump(obj, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
@@ -91,8 +96,9 @@ class Service:
                 j = _read_json(os.path.join(self.jobs_dir, n))
             except (OSError, ValueError):
                 continue
-            if j.get("generation") != self.generation:
-                continue
+            if (not isinstance(j, dict) or j.get("generation") != self.generation
+                    or any(k not in j for k in REQUIRED_KEYS)):
+                continue  # malformed or stale record: skip, never crash-loop the LaunchAgent
             if j["state"] in ACTIVE:
                 j.update(state="error", error_code="interrupted", error_message="companion restarted during the job")
                 self._save(j)
@@ -107,7 +113,11 @@ class Service:
             if j["generation"] != self.generation:
                 return False
             j["updated"] = time.time()
-            _atomic_write(os.path.join(self.jobs_dir, j["job_id"] + ".json"), j)
+            try:
+                _atomic_write(os.path.join(self.jobs_dir, j["job_id"] + ".json"), j)
+            except OSError as e:  # memory stays authoritative; a full disk must not kill workers
+                print(f"dipdive: cannot save job {j['job_id']}: {e}", file=sys.stderr, flush=True)
+                return False
             return True
 
     def _set(self, j, **kw):
@@ -123,11 +133,15 @@ class Service:
         with self.lock:
             jid = self.by_request.get(request_id)
             if jid and jid in self.jobs:
+                old = self.jobs[jid]
+                if old["norm_id"] != norm or old["mode"] != mode:
+                    return 409, {"error_code": "request_id_conflict",
+                                 "error_message": "requestId was already used for a different url or mode"}
                 return 200, {"job_id": jid, "clear_generation": self.generation}
             if not force:
                 jid = self.by_prekey.get(pre_key)
                 j = self.jobs.get(jid) if jid else None
-                if j and j["state"] in ACTIVE + ("done",) and j["generation"] == self.generation:
+                if j and self._reusable(j):
                     self.by_request[request_id] = jid
                     return 200, {"job_id": jid, "clear_generation": self.generation}
             if sum(1 for x in self.jobs.values() if x["state"] in ACTIVE) >= QUEUE_CAP:
@@ -142,6 +156,18 @@ class Service:
             self._save(j)
         self.q.put(j["job_id"])
         return 202, {"job_id": j["job_id"], "clear_generation": self.generation}
+
+    def _reusable(self, j):
+        """Active jobs always; a done job only while its source is still cached and unchanged
+        (plan 3.2.5.1: the source hash is part of the key)."""
+        if j["generation"] != self.generation:
+            return False
+        if j["state"] in ACTIVE:
+            return True
+        if j["state"] != "done":
+            return False
+        src = self._read_source(j["norm_id"])
+        return bool(src and src["hash"] == j.get("source_hash"))
 
     def public(self, j):
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"],
@@ -166,7 +192,7 @@ class Service:
         return 200, {"title": s["title"], "url": s["url"], "text": s["text"], "clear_generation": self.generation}
 
     def clear(self):
-        with self.lock:
+        with self.lock, joblog.write_lock:
             self.generation += 1
             _atomic_write(self.state_path, {"clear_generation": self.generation})
             self.jobs.clear(); self.by_request.clear(); self.by_prekey.clear()
@@ -174,6 +200,11 @@ class Service:
                 shutil.rmtree(d, ignore_errors=True)
             for d in (self.jobs_dir, self.src_dir, self.res_dir):
                 os.makedirs(d, exist_ok=True)
+            for n in LAUNCHD_LOGS:  # launchd appends tracebacks here; clear means clear
+                try:
+                    open(os.path.join(self.dir, n), "w").close()
+                except OSError:
+                    pass
             return {"clear_generation": self.generation}
 
     # ---------- source cache with coalescing ----------
@@ -196,11 +227,12 @@ class Service:
                 s = self._read_source(norm)
                 if s:
                     return s
-            ent = self.inflight.get(norm)
+            ikey = (gen, norm)  # a job created after /clear must not join a pre-clear fetch
+            ent = self.inflight.get(ikey)
             leader = ent is None
             if leader:
                 ent = (threading.Event(), [])
-                self.inflight[norm] = ent
+                self.inflight[ikey] = ent
         if not leader:
             ent[0].wait()
             if isinstance(ent[1][0], Exception):
@@ -210,7 +242,8 @@ class Service:
             with self.fetch_sem:
                 src = acquire(j["url"])
             s = {"norm_id": norm, "source_id": src.source_id, "title": src.title, "url": src.url,
-                 "text": src.text, "meta": src.meta, "fetched": time.time(), "generation": gen}
+                 "text": src.text, "meta": src.meta, "fetched": time.time(), "generation": gen,
+                 "hash": hashlib.sha256(src.text.encode()).hexdigest()}
             with self.lock:
                 if gen == self.generation:
                     _atomic_write(self._src_path(norm), s)
@@ -221,30 +254,51 @@ class Service:
             raise
         finally:
             with self.lock:
-                self.inflight.pop(norm, None)
+                self.inflight.pop(ikey, None)
             ent[0].set()
 
     # ---------- workers ----------
     def _worker(self):
         while True:
             jid = self.q.get()
+            try:
+                with self.lock:
+                    j = self.jobs.get(jid)
+                if j:
+                    self.run_one(j)
+            except BaseException as e:  # a worker must never die: mark the job and keep looping
+                try:
+                    if j:
+                        j.update(state="error", error_code="internal_error", error_message=f"{type(e).__name__}: {e}")
+                        self._save(j)
+                except BaseException:
+                    pass
+                print(f"dipdive: worker survived {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            finally:
+                self.q.task_done()
+
+    def wait_idle(self, timeout=30):
+        """Block until no job is queued or running (used by tests before cleanup)."""
+        end = time.time() + timeout
+        while time.time() < end:
             with self.lock:
-                j = self.jobs.get(jid)
-            if j:
-                self.run_one(j)
+                if not any(v["state"] in ACTIVE for v in self.jobs.values()) and self.q.unfinished_tasks == 0:
+                    return True
+            time.sleep(0.05)
+        return False
 
     def run_one(self, j):
         joblog.local.gen = j["generation"]
         try:
             self._set(j, state="fetching")
             s = self._get_source(j)
-            self._set(j, title=s["title"], source_ready=True)
+            self._set(j, title=s["title"], source_ready=True, source_hash=s["hash"])
             if j["mode"] == "source":
                 self._set(j, state="done")
                 return
             prov, level = j["mode"].split("-")
             fullkey = _sha(j["norm_id"], j["mode"], model_id(j["mode"]), PROMPT_VERSION,
-                           hashlib.sha256(s["text"].encode()).hexdigest())
+                           s["hash"])
             rp = os.path.join(self.res_dir, fullkey + ".json")
             cached = None
             if not j["force"]:
@@ -320,24 +374,36 @@ class Service:
                 "claude_auth_status": cas[:200], "codex_login_status": cxs[:200],
                 "clear_generation": self.generation}
 
-    def health(self):
+    def warm_health(self):
+        """Start the first health computation in the background (called at server start)."""
         with self.lock:
-            fresh = self._health and time.time() - self._health_at < 60
-            if fresh:
-                return self._health
-            if self._health and not self._health_refreshing:
+            if self._health is None and not self._health_refreshing:
                 self._health_refreshing = True
                 threading.Thread(target=self._refresh_health, daemon=True).start()
-            if self._health:
-                return dict(self._health, stale=True)
-        return self._refresh_health()
+
+    def health(self):
+        """Never blocks: cached result, stale-while-revalidate after 60 s, {"state":"starting"} before the first."""
+        with self.lock:
+            if self._health is None:
+                if not self._health_refreshing:
+                    self._health_refreshing = True
+                    threading.Thread(target=self._refresh_health, daemon=True).start()
+                return {"state": "starting"}
+            if time.time() - self._health_at < 60:
+                return self._health
+            if not self._health_refreshing:
+                self._health_refreshing = True
+                threading.Thread(target=self._refresh_health, daemon=True).start()
+            return dict(self._health, stale=True)
 
     def _refresh_health(self):
         try:
-            h = self._compute_health()
+            try:
+                h = self._compute_health()
+            except Exception as e:  # cache the failure for 60 s instead of recomputing on every call
+                h = {"state": "error", "error": f"{type(e).__name__}: {e}"}
             with self.lock:
                 self._health, self._health_at = h, time.time()
-            return h
         finally:
             with self.lock:
                 self._health_refreshing = False

@@ -14,6 +14,9 @@ import urllib.error
 import urllib.request
 
 os.environ["DIPDIVE_TEST_ALLOW_LOOPBACK"] = "1"
+from dipdive.tmp import sweep_stale  # noqa: E402
+
+sweep_stale(600)  # leftovers of crashed earlier runs
 _SUP = tempfile.mkdtemp(prefix="dipdive-test-support-")
 os.environ["DIPDIVE_SUPPORT"] = _SUP
 
@@ -63,6 +66,7 @@ class Base(unittest.TestCase):
         shutil.rmtree(_SUP, ignore_errors=True)
         os.makedirs(_SUP)
         joblog.LOG_DIR = os.path.join(_SUP, "logs")
+        joblog.SUPPORT = _SUP  # modules may be imported together; point at our own dir
         self.token = server.load_token(os.path.join(_SUP, "token"))
         self.start()
 
@@ -73,6 +77,7 @@ class Base(unittest.TestCase):
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
     def tearDown(self):
+        self.svc.wait_idle(40)  # no worker may still be writing temp folders when we clean up
         self.srv.shutdown(); self.srv.server_close()
         models.CLAUDE = self.saved
 
@@ -233,12 +238,196 @@ class Lifecycle(Base):
     def test_health_cached_60s(self):
         calls = []
         self.svc._compute_health = lambda: calls.append(1) or {"ok": True}
+        self.assertEqual(self.req("GET", "/health")[1], {"state": "starting"})
+        time.sleep(0.3)
         for _ in range(3):
             self.assertEqual(self.req("GET", "/health")[0], 200)
         self.assertEqual(len(calls), 1)
         self.svc._health_at -= 61
         self.req("GET", "/health"); time.sleep(0.3)
         self.assertEqual(len(calls), 2)
+
+
+class Round2(Base):
+    def test_token_fail_closed(self):  # finding 1
+        d = tempfile.mkdtemp(prefix="dipdive-test-tok-"); _BINS.append(d)
+        p = os.path.join(d, "token")
+        open(p, "w").close()
+        with self.assertRaises(SystemExit):
+            server.load_token(p)
+        open(p, "w").write("short\n")
+        with self.assertRaises(SystemExit):
+            server.load_token(p)
+        with self.assertRaises(ValueError):
+            server.make_handler(self.svc, "")
+        os.unlink(p)
+        tok = server.load_token(p)
+        self.assertGreaterEqual(len(tok), 32)
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+        self.assertEqual([n for n in os.listdir(d) if n != "token"], [])  # no temp file left behind
+
+    def test_empty_bearer_401(self):  # finding 1
+        c, _ = self.req("GET", "/health", headers={"Authorization": "Bearer "}, auth=False)
+        self.assertEqual(c, 401)
+        c, _ = self.req("GET", "/health", headers={"Authorization": "Bearer"}, auth=False)
+        self.assertEqual(c, 401)
+
+    def test_worker_survives_exceptions(self):  # finding 3 (the 6-failure stall)
+        real = service.Service.run_one
+        n = {"c": 0}
+
+        def boom(self_, j):
+            n["c"] += 1
+            if n["c"] <= 8:
+                raise KeyError("boom")
+            return real(self_, j)
+        service.Service.run_one = boom
+        try:
+            ids = [self.submit("source", f"w{i}", f"/w{i}")[1]["job_id"] for i in range(8)]
+            for i in ids:
+                self.assertEqual(self.wait(i)["state"], "error")
+            c, ok = self.submit("source", "after", "/after")
+            self.assertEqual(self.wait(ok["job_id"])["state"], "done")
+        finally:
+            service.Service.run_one = real
+
+    def test_storage_errors_do_not_kill_workers(self):  # finding 3 (disk full)
+        real = service._atomic_write
+        def full(path, obj):
+            if os.sep + "jobs" + os.sep in path:
+                raise OSError(28, "No space left on device")
+            return real(path, obj)
+        service._atomic_write = full
+        try:
+            for i in range(8):
+                self.submit("source", f"d{i}", f"/d{i}")
+            time.sleep(1.5)
+        finally:
+            service._atomic_write = real
+        c, ok = self.submit("source", "recovered", "/recovered")
+        self.assertEqual(self.wait(ok["job_id"])["state"], "done")
+
+    def test_done_job_not_reused_when_source_expired(self):  # finding 5
+        _, a = self.submit("source", "a1", "/same")
+        self.wait(a["job_id"])
+        p = self.svc._src_path(self.svc.jobs[a["job_id"]]["norm_id"])
+        with open(p) as f:
+            s = json.load(f)
+        s["fetched"] -= 8 * 86400
+        with open(p, "w") as f:
+            json.dump(s, f)
+        _, b = self.submit("source", "a2", "/same")
+        self.assertNotEqual(a["job_id"], b["job_id"])
+        self.wait(b["job_id"])
+        _, c = self.submit("source", "a3", "/same")  # source fresh again: reused
+        self.assertEqual(b["job_id"], c["job_id"])
+
+    def test_done_job_not_reused_when_source_changed(self):  # finding 5
+        _, a = self.submit("source", "c1", "/chg")
+        self.wait(a["job_id"])
+        p = self.svc._src_path(self.svc.jobs[a["job_id"]]["norm_id"])
+        with open(p) as f:
+            s = json.load(f)
+        s["hash"] = "different"
+        with open(p, "w") as f:
+            json.dump(s, f)
+        self.assertNotEqual(self.submit("source", "c2", "/chg")[1]["job_id"], a["job_id"])
+
+    def test_request_id_conflict_409(self):  # finding 11
+        self.submit("source", "dup", "/one")
+        c, r = self.submit("source", "dup", "/two")
+        self.assertEqual((c, r["error_code"]), (409, "request_id_conflict"))
+        c, _ = self.submit("claude-dip", "dup", "/one")
+        self.assertEqual(c, 409)
+
+    def test_body_is_not_parsed_as_next_request(self):  # finding 8
+        import socket
+        inner = f"GET /nosuch HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {self.token}\r\n\r\n"
+        outer = (f"POST /jobs HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer wrong\r\n"
+                 f"Content-Length: {len(inner)}\r\n\r\n{inner}")
+        s = socket.create_connection(("127.0.0.1", self.srv.server_address[1]), timeout=5)
+        s.sendall(outer.encode())
+        data = b""
+        while True:
+            try:
+                chunk = s.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            data += chunk
+        s.close()
+        self.assertEqual(data.count(b"HTTP/1.1 "), 1, data)
+        self.assertIn(b"401", data)
+
+    def test_health_single_flight_and_error_cached(self):  # finding 9
+        calls = []
+
+        def slow():
+            calls.append(1); time.sleep(0.5); raise IndexError("deno printed nothing")
+        self.svc._compute_health = slow
+        res = []
+        ts = [threading.Thread(target=lambda: res.append(self.req("GET", "/health")[1])) for _ in range(8)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(r == {"state": "starting"} for r in res))
+        time.sleep(0.8)
+        self.assertEqual(self.req("GET", "/health")[1]["state"], "error")
+        self.req("GET", "/health")
+        self.assertEqual(len(calls), 1)  # failure cached for 60 s, not recomputed per call
+
+    def test_job_after_clear_does_not_join_old_fetch(self):  # finding 10
+        orig = service.acquire
+        def slow(url):
+            time.sleep(1.5)
+            return orig(url)
+        service.acquire = slow
+        try:
+            _, a = self.submit("source", "x1", "/race")
+            time.sleep(0.5)
+            self.req("POST", "/clear")
+            _, b = self.submit("source", "x2", "/race")
+            self.assertEqual(self.wait(b["job_id"])["state"], "done")
+            self.assertEqual(self.req("GET", "/source?job=" + b["job_id"])[0], 200)
+        finally:
+            service.acquire = orig
+
+    def test_handler_timeout_and_thread_cap(self):  # finding 12
+        import socket
+        H = server.make_handler(self.svc, self.token)
+        self.assertEqual(H.timeout, 15)
+        self.assertEqual(server.BoundedServer.MAX_THREADS, 64)
+        socks = [socket.create_connection(("127.0.0.1", self.srv.server_address[1])) for _ in range(5)]
+        for s_ in socks:
+            s_.sendall(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n")  # half-sent headers
+        self.assertEqual(self.req("GET", "/jobs/" + "0" * 32)[0], 404)  # server still answers others
+        for s_ in socks:
+            s_.close()
+
+    def test_clear_truncates_launchd_logs_and_rotation(self):  # finding 12
+        for n in service.LAUNCHD_LOGS:
+            with open(os.path.join(_SUP, n), "w") as f:
+                f.write("traceback " * 10)
+        self.req("POST", "/clear")
+        for n in service.LAUNCHD_LOGS:
+            self.assertEqual(os.path.getsize(os.path.join(_SUP, n)), 0)
+        big = os.path.join(_SUP, service.LAUNCHD_LOGS[1])
+        with open(big, "w") as f:
+            f.write("x" * 2_000_000)
+        server.rotate_launchd_logs()
+        self.assertFalse(os.path.exists(big))
+        self.assertTrue(os.path.exists(big + ".1"))
+
+    def test_malformed_job_records_do_not_crash_startup(self):  # finding 14
+        d = os.path.join(_SUP, "jobs")
+        with open(os.path.join(d, "bad1.json"), "w") as f:
+            json.dump({"job_id": "x"}, f)
+        with open(os.path.join(d, "bad2.json"), "w") as f:
+            f.write("[1,2")
+        with open(os.path.join(d, "bad3.json"), "w") as f:
+            json.dump([1], f)
+        svc = service.Service(_SUP, start_workers=False)
+        self.assertEqual(len(svc.jobs), 0)
 
 
 def tearDownModule():

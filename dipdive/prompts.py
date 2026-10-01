@@ -1,5 +1,6 @@
 """Versioned prompts (plan section 3.5). The version is part of the cache key."""
 import re
+import unicodedata
 
 PROMPT_VERSION = "p1"
 
@@ -33,14 +34,17 @@ def system_prompt(level: str) -> str:
     return HEADER + "\n\n" + (DIP if level == "dip" else DIVE)
 
 
-_DELIM = re.compile(r"<(\s*/?\s*)source", re.I)
+_ZERO_WIDTH = re.compile("[\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]")
+_DELIM = re.compile(r"(<|&lt;|&#0*60;|&#x0*3c;)(\s*/?\s*)source", re.I)
 
 
 def neutralize(text: str) -> str:
-    """Stop the source from closing or opening the <source> delimiter."""
-    return _DELIM.sub(lambda m: "< " + m.group(1).strip() + " source" if m.group(1).strip() else "< source", text)
+    """Stop the source (or title or URL) from closing or opening the <source> delimiter, including
+    zero-width splits, full-width look-alikes (NFKC) and HTML-entity forms."""
+    text = _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text))
+    return _DELIM.sub(lambda m: "< " + m.group(2).replace(" ", "") + " source" if m.group(2).strip() else "< source", text)
 
 
 def user_message(title: str, url: str, text: str) -> str:
-    text = neutralize(text)
+    title, url, text = neutralize(title), neutralize(url), neutralize(text)
     return f"Title: {title}\nURL: {url}\n\n<source>\n{text}\n</source>\n"

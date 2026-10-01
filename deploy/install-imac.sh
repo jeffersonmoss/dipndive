@@ -11,7 +11,7 @@ DRY=0; PORT=8765
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
-    --port) PORT="$2"; shift ;;
+    --port) [ $# -ge 2 ] || { echo "--port needs a value" >&2; exit 2; }; PORT="$2"; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -35,10 +35,13 @@ else
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 fi
 
-sed -e "s|@LABEL@|$LABEL|g" -e "s|@REPO@|$REPO|g" -e "s|@PATH@|$AGENT_PATH|g" \
-    -e "s|@HOME@|$HOME|g" -e "s|@DENO@|$DENO|g" -e "s|@PORT@|$PORT|g" \
+# Escape sed replacement metacharacters (& | \) and XML ones (& < >) in values taken from paths.
+esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' | sed -e 's/[\\&|]/\\&/g'; }
+sed -e "s|@LABEL@|$(esc "$LABEL")|g" -e "s|@REPO@|$(esc "$REPO")|g" -e "s|@PATH@|$(esc "$AGENT_PATH")|g" \
+    -e "s|@HOME@|$(esc "$HOME")|g" -e "s|@DENO@|$(esc "$DENO")|g" -e "s|@PORT@|$(esc "$PORT")|g" \
     "$REPO/deploy/$LABEL.plist.template" > "$PLIST"
 plutil -lint "$PLIST"
+[ "$DRY" = 1 ] && { echo "--- rendered plist:"; cat "$PLIST"; echo "---"; }
 
 run() { echo "+ $*"; [ "$DRY" = 1 ] || "$@"; }
 
@@ -49,7 +52,17 @@ run launchctl bootstrap "gui/$(id -u)" "$PLIST"
 run launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
 # Tailnet-only HTTPS with a real certificate; persists across reboots. Run once.
-run /usr/local/bin/tailscale serve --bg --https=443 "http://127.0.0.1:$PORT"
+TAILSCALE="$(command -v tailscale || true)"
+[ -n "$TAILSCALE" ] || TAILSCALE=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+[ -x "$TAILSCALE" ] || { echo "tailscale not found; install it, then re-run" >&2; exit 1; }
+run "$TAILSCALE" serve --bg --https=443 "http://127.0.0.1:$PORT"
+
+if [ "$DRY" != 1 ]; then
+  sleep 3
+  CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" || true)"
+  echo "Post-install check: GET /health without a token returned HTTP $CODE (expected 401)."
+  [ "$CODE" = 401 ] || echo "WARNING: the companion is not answering as expected; see $SUPPORT/launchd.err.log" >&2
+fi
 
 cat <<NOTE
 
