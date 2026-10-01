@@ -21,6 +21,9 @@ CASES = [
     ("paywalled article (NYT)", "https://www.nytimes.com/2026/09/30/technology/meta-ai-data-centers-taxes.html", "claude-dip"),
     ("codex isolation of a real source (TED)", yt("iG9CE55wbtY"), "codex-dip"),
     ("Short without captions", "https://www.youtube.com/shorts/MNoEtQXekBM", "claude-dip"),
+    ("codex Dip, German video", yt("FYh4dWI-bqQ"), "codex-dip"),
+    ("codex Dip, blog post", "https://paulgraham.com/ds.html", "codex-dip"),
+    ("codex Dive, over 2 hours", yt("7xTGNNLPyMI"), "codex-dive"),
     ("over 2 hours, source only", yt("7xTGNNLPyMI"), "source"),
 ]
 if __name__ == "__main__":

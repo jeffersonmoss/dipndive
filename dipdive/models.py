@@ -225,6 +225,7 @@ def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None
     if raw_out is not None:
         raw_out.update(rc=r.rc, stdout=r.text, stderr=r.err_text)
     completed, errors = False, []
+    seen = {}
     for line in r.text.splitlines():
         try:
             ev = json.loads(line)
@@ -233,13 +234,15 @@ def call_codex(level: str, title: str, url: str, text: str, raw_out: dict = None
         if not isinstance(ev, dict):
             continue
         t = ev.get("type")
+        key = f"{t}/{(ev.get('item') or {}).get('type')}" if isinstance(ev.get("item"), dict) else str(t)
+        seen[key] = seen.get(key, 0) + 1
         if t == "turn.completed":
             completed = True
         elif t == "turn.failed":
             errors.append(str((ev.get("error") or {}).get("message", "")))
         elif t == "error":
             errors.append(str(ev.get("message", "")))
-    _log("codex", level, r, {"tool_events": tool_events, "errors": errors, "completed": completed})
+    _log("codex", level, r, {"tool_events": tool_events, "errors": errors, "completed": completed, "event_types": seen})
     if tool_events:
         raise DipDiveError("tool_use", f"codex emitted item type {tool_events[0].get('type')}")
     if r.aborted:

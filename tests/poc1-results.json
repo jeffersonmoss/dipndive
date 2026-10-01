@@ -177,9 +177,9 @@
   "url": "https://www.youtube.com/watch?v=iG9CE55wbtY",
   "mode": "codex-dip",
   "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
-  "error_code": "auth",
-  "error_message": "::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n2026-09-30T23:26:30.524219Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses",
-  "text": null,
+  "error_code": null,
+  "error_message": null,
+  "text": "Yes—schools can kill creativity when they prioritize standardized academic subjects, university-style thinking, and avoiding mistakes over the arts, experimentation, movement, and diverse talents. Robinson argues that children are naturally willing to take creative risks, but education often teaches them to fear being wrong and undervalues abilities that do not fit conventional academic measures. His solution is to treat creativity as equally important as literacy and educate the whole person.",
   "meta": {
    "duration": 1203,
    "track": "en",
@@ -188,8 +188,8 @@
    "kind": "youtube",
    "chars": 17574
   },
-  "fetch_s": 5.0,
-  "seconds": 24.0,
+  "fetch_s": 3.8,
+  "seconds": 10.1,
   "n": 11,
   "name": "codex isolation of a real source (TED)"
  },
@@ -205,12 +205,48 @@
   "name": "Short without captions"
  },
  {
+  "url": "https://www.youtube.com/watch?v=FYh4dWI-bqQ",
+  "mode": "codex-dip",
+  "title": "Ist die Zukunft schon Vergangenheit? – Das Zeit-Paradox",
+  "error_code": null,
+  "error_message": null,
+  "text": "No one knows whether the future already exists. Relativity suggests a “block universe” in which past, present, and future are equally real, while quantum uncertainty and the idea of a growing block leave the future open; other theories treat time as local, emergent, or even illusory. The source concludes that the nature of time—and whether free will is real—remains unresolved.",
+  "meta": {
+   "duration": 628,
+   "track": "de",
+   "auto": false,
+   "language": "de",
+   "kind": "youtube",
+   "chars": 9165
+  },
+  "fetch_s": 4.5,
+  "seconds": 16.3,
+  "n": 13,
+  "name": "codex Dip, German video"
+ },
+ {
+  "url": "https://paulgraham.com/ds.html",
+  "mode": "codex-dip",
+  "title": "Do Things that Don't Scale",
+  "error_code": null,
+  "error_message": null,
+  "text": "Startups succeed because founders actively make them succeed, often through labor-intensive work that won’t scale: recruiting users personally, delighting early customers, manually delivering or improving the product, and focusing on a narrow initial market. These efforts generate crucial feedback, establish growth, and can later be automated or expanded. Founders should prioritize steady user growth and exceptional early experiences over hoping for a big launch, major partnership, or spontaneous demand.",
+  "meta": {
+   "kind": "article",
+   "chars": 24995
+  },
+  "fetch_s": 2.6,
+  "seconds": 15.2,
+  "n": 14,
+  "name": "codex Dip, blog post"
+ },
+ {
   "url": "https://www.youtube.com/watch?v=7xTGNNLPyMI",
-  "mode": "source",
+  "mode": "codex-dive",
   "title": "Deep Dive into LLMs like ChatGPT",
   "error_code": null,
   "error_message": null,
-  "text": "[215359 chars] hi everyone so I've wanted to make this video for a while it is a comprehensive but General audience introduction to large language models like Chachi PT and what I'm hoping to achieve in this video is to give you kind of mental models for thinking through what it is that this tool is it is obviousl ... h ask them questions but always check and verify and you will be very successful in your work if you do so uh so I hope this video was useful and interesting to you I hope you had it fun and uh it's already like very long so I apologize for that but I hope it was useful and yeah I will see you later",
+  "text": "LLMs like ChatGPT are best understood as extraordinarily powerful, probabilistic text-completion systems—not conscious researchers or infallible databases. They acquire broad knowledge by predicting internet text, become assistants by imitating human-written conversations, and improve reasoning through trial-and-error training.\n\n- The raw internet is aggressively filtered before training. One example, FineWeb, ends up at about 44 TB and 15 trillion tokens after removing spam, malware, adult content, duplicates, non-target languages, and suspected personal information.\n\n- Text is not processed as letters or words, but as tokens—frequent chunks of text. GPT-4’s tokenizer has about 100,277 possible tokens, so “hello world” may be two tokens while changing capitalization or spacing can produce three or more.\n\n- Pre-training teaches a model to predict the next token. A model such as Llama 3.1’s 405-billion-parameter base model is essentially a lossy compression of internet text: it can generate plausible continuations, but it is not yet an assistant and may respond to “What is 2+2?” by continuing some internet-like passage rather than answering “4.”\n\n- ChatGPT’s apparent personality is largely added after pre-training. Human labelers—and increasingly other LLMs supervised by humans—create conversations showing what helpful, truthful, safe answers look like. Fine-tuning on these examples makes the model statistically imitate an idealized assistant.\n\n- A useful mental model is “simulation of a data labeler.” When asked for the top five Paris landmarks, ChatGPT is not necessarily conducting fresh research and ranking them with independent judgment; it is producing the sort of answer its training process taught it to give.\n\n- Hallucinations follow naturally from this setup. If training examples confidently answer “Who is X?” then an unfamiliar or nonexistent name may still receive a confident biography. Models can sometimes internally register uncertainty but lack enough training examples connecting that uncertainty to the response “I don’t know.”\n\n- Web search and code execution compensate for weaknesses in the model’s internal memory. Knowledge in the parameters is like a vague recollection; information placed into the context window is more like working memory. A calculator or Python interpreter is safer than asking the model to perform complicated arithmetic mentally.\n\n- Models need tokens to “think.” Each generated token gets only a finite amount of computation, so intermediate steps make difficult reasoning easier. In the source’s example, a model reliably solves a larger apple-and-orange problem when it writes out calculations, but fails when forced to give the answer immediately.\n\n- Tokenization explains several bizarre failures. Models do not naturally see individual characters: “ubiquitous” may be represented as only three tokens. That helps explain why they historically struggled to count the Rs in “strawberry,” select every third letter, or count repeated dots—tasks trivial for humans but awkward in token space.\n\n- Supervised fine-tuning is imitation; reinforcement learning can produce new strategies. The model generates many candidate solutions, keeps those that reach a verifiable correct answer, and makes similar sequences more likely. In DeepSeek R1-style training, this led models to spontaneously retry calculations, backtrack, reconsider assumptions, and produce much longer reasoning traces.\n\n- This resembles AlphaGo’s famous “Move 37”: reinforcement learning can discover strategies no human demonstrator supplied. In language models, the long-term possibility is reasoning methods—or even internal representations—that are not simply copied from human examples.\n\n- Reinforcement learning works best where answers are objectively checkable, such as mathematics, code, and games. For jokes, poems, or summaries, systems often train a separate “reward model” to imitate human preferences; optimizing too aggressively can exploit that model and produce nonsense that scores highly.\n\n- The most reliable practical stance is to treat LLMs as tools: excellent for drafts, explanations, brainstorming, coding assistance, and pattern-based work, but prone to unpredictable holes. Verify factual claims, calculations, citations, and anything consequential.",
   "meta": {
    "duration": 12683,
    "track": "en-orig",
@@ -219,9 +255,9 @@
    "kind": "youtube",
    "chars": 215359
   },
-  "fetch_s": 7.9,
-  "seconds": 7.9,
-  "n": 13,
-  "name": "over 2 hours, source only"
+  "fetch_s": 7.4,
+  "seconds": 29.1,
+  "n": 15,
+  "name": "codex Dive, over 2 hours"
  }
 ]
