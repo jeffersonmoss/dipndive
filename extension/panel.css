@@ -19,7 +19,7 @@
   --ask-field: #f1f6f7; --ask-fg: #10222a; --ask-placeholder: #566870; --deep-focus: #7cc4dd; --mic-ledge: #7d949c;
   --go: #10222a; --on-go: #eef5f7; --go-ledge: #04090b; --q-bg: #10222a;
   --claude: #D97757; --claude-edge: #A9502F; --claude-pale: #F6D6C9; --claude-pale-edge: #D9A895; --on-claude: #2a1209;
-  --codex: #2B6CF6; --codex-edge: #1A47B0; --codex-pale: #CFE0FF; --codex-pale-edge: #9DB8F0; --on-codex: #ffffff;
+  --codex: #2259D8; --codex-edge: #173E9C; --codex-pale: #CFE0FF; --codex-pale-edge: #9DB8F0; --on-codex: #ffffff;
   --temp: #fdfefe; --temp-edge: #b3c2c7; --on-temp: #10222a; --on-pale: #2a2724;
   --err-bg: #fbe2dd; --err-fg: #861b11; --warn-bg: #fff1cf; --warn-fg: #634500; --note-bg: rgba(255, 255, 255, .6);
   --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff;
@@ -45,7 +45,7 @@
     --ask-field: #12233a; --ask-fg: #e6eef6; --ask-placeholder: #8197ad; --deep-focus: #8fd0ea; --mic-ledge: #050b14;
     --go: #d6e2ef; --on-go: #0a1220; --go-ledge: #6f86a0; --q-bg: #1d3a5c;
     --claude-edge: #8a3d22; --claude-pale-edge: #b07a64;
-    --codex: #2f6ff7; --codex-edge: #173f99; --codex-pale-edge: #7d9bd6;
+    --codex: #2560E0; --codex-edge: #143585; --codex-pale-edge: #7d9bd6;
     --temp: #dfe6ee; --temp-edge: #8193a8; --on-temp: #0a1220;
     --err-bg: #4a1f1b; --err-fg: #ffb4ab; --warn-bg: #4a3a12; --warn-fg: #ffd98a; --note-bg: rgba(214, 226, 239, .08);
     --rec: #c62a1c; --rec-edge: #7a1209;
@@ -129,7 +129,7 @@ button.mode {
   font-family: var(--display); line-height: 1.1; text-align: center;
   transition: transform .12s cubic-bezier(.2, .8, .3, 1), box-shadow .12s cubic-bezier(.2, .8, .3, 1), filter .12s;
 }
-button.mode span:first-child { font-size: 11px; font-weight: 600; letter-spacing: .01em; opacity: .82; }
+button.mode span:first-child { font-size: 11.5px; font-weight: 600; letter-spacing: .01em; }
 button.mode span:last-child { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 button.claude-dive, button.codex-dive { height: calc(var(--tuck) + var(--wave-h) + 106px); }
 button.claude-dip, button.codex-dip { height: calc(var(--tuck) + var(--wave-h) + 84px); }

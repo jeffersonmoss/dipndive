@@ -186,9 +186,9 @@ class Service:
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"],
                 "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
                 "error_message": j["error_message"], "clear_generation": self.generation,
-                # True or False while this summary has an entry in the history log (False: unticked in the panel); None
-                # when it has none (asks, Temp chat, errors, a log failure, a cached result from before entries had ids)
-                "history_saved": historylog.is_saved(j["log_id"], self.removed_dir) if j.get("log_id") else None}
+                # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
+                # the panel), None when it has none (asks, Temp chat, errors, a log failure, an entry deleted by hand)
+                "history_saved": historylog.saved_state(j["log_id"], self.removed_dir) if j.get("log_id") else None}
 
     def get_job(self, jid):
         with self.lock:
@@ -208,7 +208,9 @@ class Service:
         return 200, {"title": s["title"], "url": s["url"], "text": s["text"], "clear_generation": self.generation}
 
     def clear(self):
-        with self.lock, joblog.write_lock:
+        # The history log's write lock first (the same order as set_saved), so a remove or restore is never half done
+        # around a clear: it finishes before, or it starts after and finds the new generation and no removed store.
+        with historylog.locked(), self.lock, joblog.write_lock:
             self.generation += 1
             _atomic_write(self.state_path, {"clear_generation": self.generation})
             self.jobs.clear(); self.by_request.clear(); self.by_prekey.clear()
@@ -371,25 +373,35 @@ class Service:
                 pass
             return False
 
-    def set_saved(self, jid, saved):
+    def set_saved(self, jid, saved, clear_generation=None):
         """POST /history/<id>/remove or /restore: take a summary's entry out of the history log or put it back.
         `jid` is a job id: the job's own entry, or for a job served from the result cache the entry of the job that made
-        the result; an id with no job record (an older entry) is taken as the entry's own id. Idempotent. Returns
-        (http_status, body)."""
-        with self.lock:
-            j = self.jobs.get(jid)
-            log_id = (j.get("log_id") if j else jid) or None
-        if not log_id:
-            return 404, {"error_code": "not_logged", "error_message": "this summary has no entry in the history log"}
-        try:
-            now = (historylog.restore_entry if saved else historylog.remove_entry)(log_id, self.removed_dir)
-        except historylog.NoSuchEntry:
-            return 404, {"error_code": "no_such_entry", "error_message": "no history log entry has that id"}
-        except historylog.LogUnreadable as e:
-            return 503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"}
-        except OSError as e:
-            return 503, {"error_code": "log_unwritable",
-                         "error_message": f"the history log cannot be written ({errno.errorcode.get(e.errno, 'OSError')})"}
+        the result; an id with no job record (an older entry) is taken as the entry's own id. Idempotent. A request
+        that carries a clear generation older than the current one is refused (409 stale_clear_generation): the summary
+        it was made for belongs to history that has been cleared. The whole change runs under the log's write lock, the
+        same lock Clear history takes first. Returns (http_status, body)."""
+        with historylog.locked():
+            with self.lock:
+                if clear_generation is not None and clear_generation < self.generation:
+                    return 409, {"error_code": "stale_clear_generation",
+                                 "error_message": "history was cleared since this client last synced",
+                                 "clear_generation": self.generation}
+                j = self.jobs.get(jid)
+                log_id = (j.get("log_id") if j else jid) or None
+            if not log_id:
+                return 404, {"error_code": "not_logged", "error_message": "this summary has no entry in the history log"}
+            try:
+                now = (historylog.restore_entry if saved else historylog.remove_entry)(log_id, self.removed_dir)
+            except historylog.NoSuchEntry:
+                return 404, {"error_code": "no_such_entry", "error_message": "no history log entry has that id"}
+            except historylog.AmbiguousEntry:
+                return 409, {"error_code": "entry_ambiguous",
+                             "error_message": "the entry runs into its neighbour (edited by hand?); the log was not changed"}
+            except historylog.LogUnreadable as e:
+                return 503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"}
+            except OSError as e:
+                return 503, {"error_code": "log_unwritable",
+                             "error_message": f"the history log cannot be written ({errno.errorcode.get(e.errno, 'OSError')})"}
         return 200, {"job_id": jid, "saved": now, "clear_generation": self.generation}
 
     # ---------- pruning ----------

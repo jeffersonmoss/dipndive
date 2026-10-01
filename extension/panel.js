@@ -69,11 +69,12 @@ function render(s) {
 // ---------- "Save this Dip to history" ----------
 // Shown only next to a finished Dip or Dive that has an entry in the companion's history log; never in Temp chat.
 function renderSave(s) {
-  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";
+  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";  // also while unknown
   $("saveline").hidden = !show;
   if (!show) return;
   $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
   $("savehist").checked = s.saved;
+  $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
   $("savehist").disabled = !!s.savingSaved;
 }
 
@@ -174,7 +175,7 @@ $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 $("mic").addEventListener("click", () => ctl.toggleMic());
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
-window.addEventListener("focus", () => ctl.refreshMic());
+window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log
 // Chrome keeps a side panel that another panel replaced alive (and recognition with it), with no Stop button in sight:
 // stop listening when the panel is hidden, keeping the words in the box.
 document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.pauseMic(); else ctl.refreshMic(); });
@@ -202,7 +203,8 @@ function renderHistory(h) {
   $("historyempty").hidden = !(h.loaded && h.entries.length === 0);
   $("historyerror").hidden = !h.error;
   $("historyerror").textContent = h.error || "";
-  $("historystatus").textContent = h.loading ? "Loading..." : h.loaded && h.entries.length ? `Showing ${h.entries.length} of ${h.total}` : "";
+  const shown = h.loading ? "Loading..." : h.loaded && h.entries.length ? `Showing ${h.entries.length} of ${h.total}` : "";
+  $("historystatus").textContent = [h.notice, shown].filter(Boolean).join(" ");
   const more = $("historymore");
   more.hidden = !(h.error ? true : h.loaded && h.nextBefore !== null);
   more.disabled = h.loading;

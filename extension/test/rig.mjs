@@ -68,10 +68,14 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
       let m;
       // the "Save this Dip to history" checkbox (dipdive/service.py set_saved): idempotent, per job id
       if (init.method === "POST" && (m = path.match(/^\/history\/([^/]+)\/(remove|restore)$/))) {
-        if (server.saveStatus) return respond(server.saveStatus, { error_code: "log_unwritable" });
+        if (server.saveStatus) return respond(server.saveStatus, { error_code: server.saveError || "log_unwritable" });
+        if (server.staleCheck && typeof body.clearGeneration === "number" && body.clearGeneration < server.clearGen) {
+          return respond(409, { error_code: "stale_clear_generation", clear_generation: server.clearGen });
+        }
         const j = server.jobs[decodeURIComponent(m[1])];
         if (!j || !j.logged) return respond(404, { error_code: j ? "not_logged" : "no_such_entry" });
         j.saved = m[2] === "restore";
+        if (server.loseSaveResponse) { server.loseSaveResponse--; throw new TypeError("Failed to fetch"); }  // done, answer lost
         return respond(200, { job_id: m[1], saved: j.saved, clear_generation: server.clearGen });
       }
       if ((m = path.match(/^\/jobs\/(.+)$/))) {

@@ -44,7 +44,8 @@ const showConfirm = (on) => {
 };
 $("clear").addEventListener("click", () => { clearSay(""); showConfirm(true); });
 $("clearno").addEventListener("click", () => showConfirm(false));
-$("clearconfirm").addEventListener("keydown", (e) => { if (e.key === "Escape") showConfirm(false); });
+// Escape cancels while the question is open, wherever the focus is
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("clearconfirm").hidden && !$("clearyes").disabled) showConfirm(false); });
 $("clearyes").addEventListener("click", async () => {
   $("clearyes").disabled = $("clearno").disabled = true;
   clearSay("Clearing...");
@@ -58,7 +59,6 @@ $("clearyes").addEventListener("click", async () => {
     clearSay(e instanceof ApiError && e.kind === "config" ? "Not cleared: set the companion URL and token first." : "Not cleared: cannot reach the companion. Is the iMac on and connected to Tailscale?", "bad");
   } finally {
     $("clearyes").disabled = $("clearno").disabled = false;
-    $("clearconfirm").hidden = true;
-    $("clear").hidden = false;
+    showConfirm(false);  // closes the question and gives the focus back to Clear history
   }
 });

@@ -63,9 +63,12 @@ test("a refusal or an unreachable companion puts the box back; a gone entry hide
   r.server.saveStatus = 0;
   r.server.fail = new TypeError("Failed to fetch");
   assert.equal(await r.c.setSaved(false), false);
-  assert.equal(r.state.last.saved, true);
-  assert.match(r.state.last.status, /Cannot reach the companion/);
+  assert.equal(r.state.last.savedUnknown, true, "unreachable: the outcome is unknown, not claimed either way");
+  assert.match(r.state.last.status, /not known whether the history log changed/);
+  assert.equal(r.state.last.savingSaved, false, "the box can be clicked again");
   r.server.fail = null;
+  assert.equal(await r.c.setSaved(true), true, "a click retries");
+  assert.equal(r.state.last.savedUnknown, false);
   r.server.saveStatus = 404;
   assert.equal(await r.c.setSaved(false), false);
   assert.equal(r.state.last.saved, null);
@@ -118,7 +121,8 @@ async function optionsPage() {
   const store = { base: "http://c.test", token: "t".repeat(40), "slot:1": { url: "https://v.test/" } };
   const fetches = [];
   const saved = { document: globalThis.document, chrome: globalThis.chrome, fetch: globalThis.fetch };
-  globalThis.document = { getElementById: (id) => el(id) };
+  const doc = { handlers: {}, getElementById: (id) => el(id), addEventListener(t, f) { this.handlers[t] = f; } };
+  globalThis.document = doc;
   globalThis.chrome = { storage: { local: {
     get: async (k) => (k === null ? { ...store } : Object.fromEntries((Array.isArray(k) ? k : [k]).filter((x) => x in store).map((x) => [x, store[x]]))),
     set: async (o) => Object.assign(store, o),
@@ -126,7 +130,7 @@ async function optionsPage() {
   } }, permissions: { request: async () => true } };
   globalThis.fetch = async (url, init) => { fetches.push({ url, method: init.method }); return { status: 200, json: async () => ({ clear_generation: 4 }) }; };
   await import(`../options.js?run=${Math.random()}`);
-  return { els, store, fetches, restore: () => Object.assign(globalThis, saved) };
+  return { els, store, fetches, doc, restore: () => Object.assign(globalThis, saved) };
 }
 
 test("Options page: Clear history asks first; Cancel sends nothing; Yes clears", async () => {
@@ -142,7 +146,7 @@ test("Options page: Clear history asks first; Cancel sends nothing; Yes clears",
     assert.equal(p.els.clear.hidden, false);
     assert.equal(p.fetches.length, 0, "Cancel sends nothing");
     p.els.clear.handlers.click();
-    p.els.clearconfirm.handlers.keydown({ key: "Escape" });
+    p.doc.handlers.keydown({ key: "Escape" });
     assert.equal(p.els.clearconfirm.hidden, true, "Escape cancels too");
     p.els.clear.handlers.click();
     await p.els.clearyes.handlers.click();
@@ -197,5 +201,97 @@ test("night mode is designed: the air, water, line and deep bar all have their o
     const dark = css.slice(css.indexOf("prefers-color-scheme: dark"));
     for (const t of ["--air", "--water-top", "--water-deep", "--surface", "--fg", "--strong"]) assert.match(dark, new RegExp(`${t}: #`), `${f} ${t}`);
     assert.ok(!/--claude-pale:|--codex-pale:|--on-pale:/.test(dark.slice(0, dark.indexOf("* { box-sizing"))), `${f}: the Dip squares stay pale`);
+  }
+});
+
+test("a lost answer after the companion made the change is reconciled from GET /jobs, not reverted", async () => {
+  // review finding: the box went back to ticked and said "not changed" although the entry had been removed
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  r.server.loseSaveResponse = 1;
+  const seen = [];
+  const orig = r.c.d.onState;
+  r.c.d.onState = (st) => { seen.push(st.status); orig(st); };
+  assert.equal(await r.c.setSaved(false), true);
+  assert.ok(seen.some((t) => /not known yet/.test(t)), "says the outcome is unknown while it checks");
+  assert.equal(r.log.fetches.at(-1).path, "/jobs/job1", "asked the companion");
+  assert.equal(r.state.last.saved, false);
+  assert.equal(r.state.last.savedUnknown, false);
+  assert.match(r.state.last.status, /Removed from history/);
+});
+
+test("other open panels follow a change: a storage broadcast, and a refresh on focus", async () => {
+  // review finding: B stayed ticked after A removed the entry, and B's next click removed it again
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot() };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  const A = rig({ shared, server, bus });
+  const B = rig({ shared, server, bus });
+  await A.c.init(1); await A.tick();
+  // window 2 shows the same job (the companion deduplicates the same link and mode onto one job)
+  shared[slotKey(2)] = slot({ windowId: 2, requestId: "slot-req-2", consumed: true, jobId: A.state.last.jobId, mode: "claude-dip" });
+  await B.c.init(2);
+  assert.equal(A.state.last.jobId, B.state.last.jobId, "both show the same summary");
+  assert.equal(B.state.last.saved, true);
+  await A.c.setSaved(false);
+  await new Promise((res) => setTimeout(res, 0));
+  assert.equal(B.state.last.saved, false, "B heard the broadcast and asked again");
+  assert.equal(await B.c.setSaved(true), true, "B's click restores, it does not remove again");
+  assert.equal(server.jobs[A.state.last.jobId].saved, true);
+  server.jobs[A.state.last.jobId].saved = false;   // changed elsewhere with no broadcast (another machine)
+  assert.equal(await A.c.refreshSaved(), false, "on focus the panel asks again");
+  assert.equal(A.state.last.saved, false);
+});
+
+test("a save change after Clear history on another machine is refused as stale and the panel resets", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  r.server.staleCheck = true;
+  r.server.clearGen = 3;
+  assert.equal(await r.c.setSaved(false), false);
+  assert.equal(saves(r).at(-1).body.clearGeneration, 0, "the request carried the generation the panel knew");
+  assert.equal(r.server.jobs.job1.saved, true, "nothing changed");
+  assert.equal(r.state.last.result, null);
+  assert.equal(r.state.last.error, "History was cleared on another machine.");
+  assert.equal(r.c.clearGen, 3);
+});
+
+test("contrast: every mode button's labels reach 4.5:1 in both themes, at full opacity", () => {
+  // review finding: Codex Dive's white label on the blue was 4.43:1, and the small top line was dimmed to .82
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  const lum = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const root = css.slice(css.indexOf(":root {"), css.indexOf("@media (prefers-color-scheme: dark)"));
+  const dark = css.slice(css.indexOf("@media (prefers-color-scheme: dark)"), css.indexOf("* { box-sizing"));
+  const tok = (block, name) => { const m = block.match(new RegExp(`--${name}: (#[0-9a-fA-F]{6})`)); return m && m[1]; };
+  const pairs = [["claude", "on-claude"], ["claude-pale", "on-pale"], ["temp", "on-temp"], ["codex-pale", "on-pale"], ["codex", "on-codex"]];
+  for (const [theme, block] of [["light", root], ["dark", dark]]) {
+    for (const [bg, fg] of pairs) {
+      const b = tok(block, bg) || tok(root, bg), f = tok(block, fg) || tok(root, fg);
+      assert.ok(contrast(b, f) >= 4.5, `${theme} ${bg}/${fg}: ${contrast(b, f).toFixed(2)}`);
+    }
+  }
+  assert.ok(!/button\.mode span:first-child \{[^}]*opacity/.test(css), "the small label is not dimmed");
+});
+
+test("Options page: focus returns to Clear history after the confirmation, and Escape works anywhere while it is open", async () => {
+  const p = await optionsPage();
+  try {
+    p.els.clear.handlers.click();
+    assert.equal(p.els.clearno.focused, 1, "Cancel has the focus while the question is open");
+    p.doc.handlers.keydown({ key: "Escape" });
+    assert.equal(p.els.clearconfirm.hidden, true, "Escape on the page closes it");
+    const before = p.els.clear.focused;
+    p.els.clear.handlers.click();
+    await p.els.clearyes.handlers.click();
+    assert.equal(p.els.clear.hidden, false);
+    assert.ok(p.els.clear.focused > before, "focus is back on Clear history");
+    p.doc.handlers.keydown({ key: "Escape" });  // closed: nothing happens
+    assert.equal(p.els.clearconfirm.hidden, true);
+  } finally {
+    p.restore();
   }
 });

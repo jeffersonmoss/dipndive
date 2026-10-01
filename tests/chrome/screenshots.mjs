@@ -14,6 +14,7 @@ import { REPO, panelUrl, sleep, startHarness, stopHarness, until } from "./harne
 const port = Number(process.argv[2] || 8931);
 const out = path.resolve(process.argv[3] || path.join(REPO, "extension/docs"));
 const SIZE = { width: 360, height: 820 };
+fs.mkdirSync(out, { recursive: true });
 const SAY = "Okay so how did the microbes get";
 const TITLE = "Could life have started inside an asteroid crater?";
 

@@ -58,7 +58,7 @@ export class Controller {
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
       // history log, null when it has none (no summary, Temp chat, a log failure); savingSaved while a change is on its way
-      saved: null, savingSaved: false,
+      saved: null, savingSaved: false, savedUnknown: false,
       // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
@@ -184,6 +184,9 @@ export class Controller {
     // its next question would send them to the companion again.
     const cg = changes.clearGen && changes.clearGen.newValue;
     if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) this.clearedElsewhere(cg);
+    // A save box was changed in some window (maybe for this very entry, or one this summary shares through the result
+    // cache): ask the companion again rather than trust what this panel showed.
+    if (changes.savedChange && changes.savedChange.newValue && typeof this.s.saved === "boolean") this.refreshSaved();
     if (changes.base || changes.token) {
       this.d.storage.get(["base", "token"]).then((st) => {
         this.cfg = { base: st.base, token: st.token };
@@ -211,7 +214,7 @@ export class Controller {
     this.stopTimer();
     this.tempText = null;
     this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, tempReady: false,
-                tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, ...extra });
+                tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
   // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
@@ -386,31 +389,69 @@ export class Controller {
   }
 
   // The "Save this Dip to history" checkbox. Unticked: the companion takes this summary's entry out of the history log
-  // (POST /history/<job>/remove); ticked again: it puts it back where it was (/restore). Both are idempotent. The box
-  // follows the click at once and goes back if the companion refuses or cannot be reached. Returns true when it stuck.
+  // (POST /history/<job>/remove); ticked again: it puts it back where it was (/restore). Both are idempotent and carry
+  // the clear generation this panel knows. The box follows the click at once and goes back if the companion refuses.
+  // When the answer is lost (the companion may have made the change), the panel does not guess: it asks the companion
+  // for the job (GET /jobs/<id>, which carries history_saved) and says the outcome is unknown until it hears.
+  // Every change is announced to the other windows' panels (storage key savedChange), which then ask again too.
+  // Returns true when the box ended up as clicked.
   async setSaved(on) {
     const jobId = this.s.jobId;
     if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
     const gen = this.selGen, was = this.s.saved;
-    this.emit({ saved: !!on, savingSaved: true });
+    this.emit({ saved: !!on, savingSaved: true, savedUnknown: false });
     const still = () => gen === this.selGen && this.s.jobId === jobId;
     let r;
     try {
-      r = await request(this.d.fetch, this.cfg, "POST", `/history/${encodeURIComponent(jobId)}/${on ? "restore" : "remove"}`, {}, 10000);
+      r = await request(this.d.fetch, this.cfg, "POST", `/history/${encodeURIComponent(jobId)}/${on ? "restore" : "remove"}`, { ...this.genField() }, 10000);
     } catch (e) {
-      if (still()) this.emit({ saved: was, savingSaved: false, status: "Cannot reach the companion, so the history log was not changed." });
-      return false;
+      if (!still()) return false;
+      this.emit({ status: "No answer from the companion, so it is not known yet whether the history log changed. Checking..." });
+      const now = await this.refreshSaved({ force: true });
+      if (still() && now === null) {
+        this.emit({ saved: !!on, savingSaved: false, savedUnknown: true,
+          status: "Cannot reach the companion, so it is not known whether the history log changed. Click the box to try again." });
+      }
+      return now === !!on;
     }
     if (!still()) return false;
+    if (isStaleRefusal(r)) { await this.staleRefused(r.json); return false; }
     if (r.status === 200 && typeof r.json.saved === "boolean") {
-      this.emit({ saved: r.json.saved, savingSaved: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
+      this.emit({ saved: r.json.saved, savingSaved: false, savedUnknown: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
+      await this.announceSaved(jobId, r.json.saved);
       return r.json.saved === !!on;
     }
     const why = r.status === 401 ? "The token was rejected. Check the options page."
       : r.status === 404 ? "This summary is no longer in the history log."
+      : r.status === 409 && r.json.error_code === "entry_ambiguous" ? "This entry was edited by hand in the log, so it was left as it is."
       : "The history log could not be changed on the iMac.";
-    this.emit({ saved: r.status === 404 ? null : was, savingSaved: false, status: why });
+    this.emit({ saved: r.status === 404 ? null : was, savingSaved: false, savedUnknown: false, status: why });
     return false;
+  }
+
+  async announceSaved(jobId, saved) {
+    try { await this.d.storage.set({ savedChange: { jobId, saved, ts: Date.now() } }); } catch { /* the other panels also ask on focus */ }
+  }
+
+  // Ask the companion whether the summary on screen is in the history log (GET /jobs/<id>, field history_saved): after a
+  // lost answer, when the panel gets the focus, and when another window changed a box. Returns true, false, or null
+  // when it could not find out (the box is then left as it is). `force` also runs while a change is marked in flight.
+  async refreshSaved({ force = false } = {}) {
+    const jobId = this.s.jobId;
+    if (!jobId || this.s.mode === "temp" || !this.s.result) return null;
+    if (this.s.savingSaved && !force) return null;
+    const gen = this.selGen;
+    let r;
+    try {
+      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 5000);
+    } catch { return null; }
+    if (gen !== this.selGen || this.s.jobId !== jobId) return null;
+    if (r.status !== 200 || !r.json) return null;
+    const v = typeof r.json.history_saved === "boolean" ? r.json.history_saved : null;
+    const patch = { saved: v, savingSaved: false, savedUnknown: false };
+    if (force) patch.status = v === null ? "This summary is no longer in the history log." : v ? "Saved to history." : "Removed from history.";
+    this.emit(patch);
+    return v;
   }
 
   // ---------- question box ----------

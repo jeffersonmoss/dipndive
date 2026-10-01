@@ -35,7 +35,10 @@ try {
     const lefts = await q(`[...document.querySelectorAll("#buttons button")].map((b) => Math.round(b.getBoundingClientRect().left))`);
     check("left edges increase in that order (it is also the visual order)", lefts.every((x, i) => i === 0 || x > lefts[i - 1]), lefts);
     const sizes = await q(`[...document.querySelectorAll("#buttons button")].map((b) => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })`);
-    check("the five squares are square and 56 px or larger", sizes.every(([w, h]) => Math.abs(w - h) <= 2 && w >= 56), sizes);
+    // Waterline: the buttons are columns hanging to their depth (Dive deepest, Temp chat shallowest), at least 56 px wide
+    const depth = sizes.map(([, h]) => h);
+    check("the five columns are 56 px or wider and hang to their depth (Dive > Dip > Temp chat)", sizes.every(([w, h]) => w >= 56 && h >= 56) &&
+      depth[0] === depth[4] && depth[1] === depth[3] && depth[0] > depth[1] && depth[1] > depth[2], sizes);
     const labels = await q(`[...document.querySelectorAll("#buttons button")].map((b) => b.title)`);
     check("titles read Claude Dive, Claude Dip, Temp chat, Codex Dip, Codex Dive", JSON.stringify(labels) === JSON.stringify(["Claude Dive", "Claude Dip", "Temp chat", "Codex Dip", "Codex Dive"]), labels);
     await q(`document.getElementById("go").focus()`);
