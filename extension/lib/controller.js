@@ -101,7 +101,7 @@ export class Controller {
   // New or changed slot. An unconsumed slot is submitted; a consumed one is resumed after a panel reopen.
   async onSlot(slot) {
     if (!slot || !slot.url) {
-      this.emit({ status: "Right-click a link or page and choose Dip and Dive." });
+      this.emit({ status: "Right-click a link or page and choose Dip'n'Dive." });
       return;
     }
     const isNew = !this.slot || this.slot.requestId !== slot.requestId;

@@ -25,12 +25,12 @@ test("menu is created once in onInstalled with the current mode label; startup a
   await m.L.installed[0]();
   const creates = m.calls.filter((c) => c[0] === "create");
   assert.equal(creates.length, 1);
-  assert.deepEqual(creates[0][1], { id: MENU_ID, title: "Dip and Dive: Claude Dive", contexts: ["link", "video", "page"] });
+  assert.deepEqual(creates[0][1], { id: MENU_ID, title: "Dip'n'Dive: Claude Dive", contexts: ["link", "video", "page"] });
   m.L.startup[0]();
   m.L.changed[0]({ mode: { newValue: "temp" } }, "local");
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(m.calls.filter((c) => c[0] === "create").length, 1);
-  assert.ok(m.calls.some((c) => c[0] === "update" && c[2].title === "Dip and Dive: Claude Dive"));
+  assert.ok(m.calls.some((c) => c[0] === "update" && c[2].title === "Dip'n'Dive: Claude Dive"));
   m.L.changed[0]({ other: {} }, "local");
   m.L.changed[0]({ mode: {} }, "sync"); // other areas ignored
 });
@@ -39,7 +39,7 @@ test("initial default label is Codex Dip", async () => {
   const m = mockChrome();
   registerBackground(m.chrome);
   await m.L.installed[0]();
-  assert.equal(m.calls.find((c) => c[0] === "create")[1].title, "Dip and Dive: Codex Dip");
+  assert.equal(m.calls.find((c) => c[0] === "create")[1].title, "Dip'n'Dive: Codex Dip");
 });
 
 test("click: sidePanel.open is the first call, synchronous, then a per-window slot with a requestId", () => {

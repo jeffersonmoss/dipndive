@@ -19,7 +19,7 @@ export function modeLabel(id) {
 
 // The word "and", not "&": a single "&" becomes a keyboard-mnemonic marker in Windows menus.
 export function menuLabel(id) {
-  return `Dip and Dive: ${modeLabel(id)}`;
+  return `Dip'n'Dive: ${modeLabel(id)}`;
 }
 
 // What the companion's POST /jobs expects.
