@@ -1,6 +1,7 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
 import { pruneSlots, slotKey } from "./background-core.js";
+import { normalizeTyped } from "./urls.js";
 import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
@@ -101,7 +102,7 @@ export class Controller {
   // New or changed slot. An unconsumed slot is submitted; a consumed one is resumed after a panel reopen.
   async onSlot(slot) {
     if (!slot || !slot.url) {
-      this.emit({ status: "Right-click a link or page and choose Dip'n'Dive." });
+      this.emit({ status: "Paste a link above and press Go, or right-click a link or page." });
       return;
     }
     const isNew = !this.slot || this.slot.requestId !== slot.requestId;
@@ -123,6 +124,20 @@ export class Controller {
     }
     this.emit({ mode });
     await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true });
+  }
+
+  // The URL field: same path as a right-click. A fresh slot (new requestId) is written to this window's key and
+  // submitted by onSlot with this panel's own selected mode.
+  async submitTyped(text) {
+    if (!this.s.configured) { this.emit({ error: "Set the companion URL and token in the extension options." }); return false; }
+    const url = normalizeTyped(text);
+    if (!url) { this.emit({ error: "That does not look like a web link. Paste an http or https address." }); return false; }
+    this.emit({ error: null });
+    const slot = { url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false, pendingMode: this.s.mode };
+    await this.d.storage.set({ [slotKey(this.windowId)]: slot });
+    await pruneSlots(this.d.storage);
+    await this.onSlot(slot);
+    return true;
   }
 
   onStorageChange(changes, area) {

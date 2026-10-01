@@ -85,3 +85,10 @@ test("slots are capped at the newest 20 after a click", async () => {
   assert.equal(keys.length, 20);
   assert.ok(keys.includes("slot:7") && !keys.includes("slot:100"));
 });
+
+test("toolbar click opens the panel even when it was never used (behavior is set at registration, no slot needed)", () => {
+  const m = mockChrome();
+  registerBackground(m.chrome);
+  assert.deepEqual(m.calls[0], ["behavior", { openPanelOnActionClick: true }]);
+  assert.equal(Object.keys(m.store).filter((k) => k.startsWith("slot:")).length, 0);
+});

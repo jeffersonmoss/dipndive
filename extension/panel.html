@@ -8,9 +8,13 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
+  <form id="urlform" autocomplete="off">
+    <input id="urlinput" type="text" inputmode="url" placeholder="Paste a link" aria-label="Link to summarize" spellcheck="false" autocomplete="off">
+    <button id="go" type="submit">Go</button>
+  </form>
+  <div id="hint" class="muted" hidden>Paste a link above (Cmd+V or Ctrl+V) and press Go, or right-click any link or page.</div>
   <header>
     <a id="title" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
-    <div id="url" class="muted"></div>
   </header>
   <div id="buttons" role="group" aria-label="Mode"></div>
   <div id="codexnote" class="reason" hidden></div>

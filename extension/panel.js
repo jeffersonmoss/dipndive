@@ -21,6 +21,14 @@ for (const m of MODES) {
   buttons[m.id] = b;
 }
 
+let urlDirty = false;
+$("urlinput").addEventListener("input", () => { urlDirty = true; });
+$("urlform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const ok = await ctl.submitTyped($("urlinput").value);
+  if (ok) { urlDirty = false; $("urlinput").blur(); }
+});
+
 function render(s) {
   for (const [id, b] of Object.entries(buttons)) {
     b.setAttribute("aria-pressed", String(id === s.mode));
@@ -35,7 +43,9 @@ function render(s) {
   t.textContent = s.title || (s.source ? s.source.url : "");
   t.hidden = !(s.title || s.source);
   if (href) t.href = href; else t.removeAttribute("href");
-  $("url").textContent = s.source ? s.source.url : "";
+  // The field keeps showing the current URL, unless the user is mid-edit.
+  if (!urlDirty && s.source && $("urlinput").value !== s.source.url) $("urlinput").value = s.source.url;
+  $("hint").hidden = !!s.source || !!s.error;
   $("result").innerHTML = s.mode === "temp" ? "" : s.result ? renderMarkdown(s.result) : "";
   $("copy").hidden = !(s.mode === "temp" && s.tempReady);
   $("warn").hidden = !(s.mode === "temp" && s.tempWarn);
@@ -70,3 +80,4 @@ chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));
 
 const win = await chrome.windows.getCurrent();
 await ctl.init(win.id);
+if (!ctl.s.source) $("urlinput").focus(); // nothing pending: empty field, focused, with the hint showing

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { pickUrl, knownVideo } from "../lib/urls.js";
+import { pickUrl, knownVideo, normalizeTyped } from "../lib/urls.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { MODES, DEFAULT_MODE, menuLabel, apiMode } from "../lib/modes.js";
 
@@ -97,4 +97,22 @@ test("dark mode keeps the Dip squares pale", () => {
   const dark = css.slice(css.indexOf("prefers-color-scheme: dark"), css.indexOf("* { box-sizing"));
   assert.ok(!/--claude-pale:/.test(dark) && !/--codex-pale:/.test(dark), "pale tints are not overridden in dark mode");
   assert.ok(!/--on-pale:/.test(dark), "text on pale stays dark");
+});
+
+test("typed links: trimmed, bare hosts get https, junk and non-http refused", () => {
+  assert.equal(normalizeTyped("  https://youtu.be/dQw4w9WgXcQ?t=5  "), "https://youtu.be/dQw4w9WgXcQ?t=5");
+  assert.equal(normalizeTyped("example.com/post?a=1"), "https://example.com/post?a=1");
+  assert.equal(normalizeTyped("<https://example.com/x>"), "https://example.com/x");
+  assert.equal(normalizeTyped("http://127.0.0.1:8080/x"), "http://127.0.0.1:8080/x");
+  for (const bad of ["", "   ", "hello world", "javascript:alert(1)", "file:///etc/passwd", "ftp://x.test/a", "chrome://extensions", "justoneword"]) assert.equal(normalizeTyped(bad), null, bad);
+});
+
+test("panel has the URL field (placeholder, Go button, form submit) and the manifest adds no clipboardRead", () => {
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  assert.match(h, /<form id="urlform"/);
+  assert.match(h, /id="urlinput"[^>]*placeholder="Paste a link"/);
+  assert.match(h, /<button id="go" type="submit">Go<\/button>/);
+  assert.ok(h.indexOf('id="urlform"') < h.indexOf('id="buttons"'), "field is above the five buttons");
+  const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
+  assert.ok(!m.permissions.includes("clipboardRead"));
 });

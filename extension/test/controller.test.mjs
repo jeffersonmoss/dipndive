@@ -310,3 +310,65 @@ test("health unknown (starting or unreachable) leaves Codex enabled", async () =
   assert.equal(r.state.last.codexOk, null);
   assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "codex-dip");
 });
+
+test("typed link: same path as a right-click (slot, requestId, own mode, ack in slot), bare host normalized", async () => {
+  const r = rig({ mode: "claude-dive" });
+  await r.c.init(1);
+  assert.match(r.state.last.status, /Paste a link above/);
+  assert.equal(r.state.last.source, null);
+  assert.equal(await r.c.submitTyped("  example.com/post  "), true);
+  const post = r.log.fetches.find((f) => f.method === "POST" && f.path === "/jobs");
+  assert.equal(post.body.url, "https://example.com/post");
+  assert.equal(post.body.mode, "claude-dive");
+  assert.equal(post.body.force, false);
+  assert.ok(post.body.requestId.startsWith("uuid-"));
+  const slot = r.store[slotKey(1)];
+  assert.equal(slot.url, "https://example.com/post");
+  assert.equal(slot.consumed, true);
+  assert.equal(slot.jobId, "job1");
+  assert.equal(slot.requestId, post.body.requestId);
+  await r.tick();
+  assert.equal(r.state.last.result, "Summary for claude-dive");
+  assert.equal(r.state.last.title, "A Title");
+  assert.equal(r.state.last.source.url, "https://example.com/post");
+});
+
+test("typed link: resumes after a panel reopen like any other slot", async () => {
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip" };
+  const a = rig({ shared });
+  await a.c.init(1);
+  await a.c.submitTyped("https://example.com/a");
+  const b = rig({ shared, jobs: a.server.jobs });
+  await b.c.init(1);
+  assert.equal(b.log.fetches.filter((f) => f.method === "POST").length, 0, "no resubmit");
+  assert.equal(b.state.last.source.url, "https://example.com/a");
+  assert.equal(b.state.last.result, "Summary for claude-dip");
+});
+
+test("typed link: junk is refused with a message and nothing is sent", async () => {
+  const r = rig({ mode: "claude-dip" });
+  await r.c.init(1);
+  assert.equal(await r.c.submitTyped("not a link at all"), false);
+  assert.match(r.state.last.error, /does not look like a web link/);
+  assert.equal(r.log.fetches.filter((f) => f.method === "POST").length, 0);
+  assert.equal(await r.c.submitTyped("javascript:alert(1)"), false);
+});
+
+test("typed link uses this panel's own selected mode, and a second link starts a fresh job", async () => {
+  const r = rig({ slot: slot(), mode: "codex-dip" });
+  await r.c.init(1); await r.tick();
+  await r.c.selectMode("claude-dive"); await r.tick();
+  await r.c.submitTyped("https://example.com/second");
+  const posts = r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
+  assert.equal(posts.at(-1).body.mode, "claude-dive");
+  assert.equal(posts.at(-1).body.url, "https://example.com/second");
+  assert.notEqual(posts.at(-1).body.requestId, posts[0].body.requestId);
+});
+
+test("typed link while unconfigured points to the options page", async () => {
+  const r = rig({ cfg: {} });
+  await r.c.init(1);
+  assert.equal(await r.c.submitTyped("https://example.com/"), false);
+  assert.match(r.state.last.error, /options/);
+  assert.equal(r.log.fetches.length, 0);
+});

@@ -37,3 +37,12 @@ export function pickUrl(info) {
   if (info.pageUrl && isHttp(info.pageUrl)) return info.pageUrl;
   return null;
 }
+
+// A link typed or pasted into the panel's field. Bare hosts get https://; anything that is not an http(s) link is
+// refused (null). The companion does the real normalization (redirect unwrapping, video ids) for every source.
+export function normalizeTyped(text) {
+  let t = String(text ?? "").trim().replace(/^[<"'(]+|[>"')]+$/g, "").trim();
+  if (!t || /\s/.test(t)) return null;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(t) && /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]|$)/.test(t)) t = "https://" + t;
+  return isHttp(t) ? t : null;
+}
