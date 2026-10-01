@@ -1,6 +1,5 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
-import { clearCompanion } from "./clear.js";
 import { pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
@@ -45,7 +44,6 @@ export class Controller {
     this.windowId = null;
     this.cfg = null;
     this.selGen = 0;       // bumped on every selection; older responses are discarded
-    this.savedRev = -1;    // newest history-log revision seen for the save box
     this.clearGen = null;  // highest companion clear generation seen
     this.timer = null;
     this.askTimer = null;
@@ -57,9 +55,6 @@ export class Controller {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
       codexOk: null, codexReason: "",
-      // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
-      // history log, null when it has none (no summary, Temp chat, a log failure); savingSaved while a change is on its way
-      saved: null, savingSaved: false, savedUnknown: false,  // (savedRev, the newest log revision seen, is kept on this)
       // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
@@ -185,9 +180,6 @@ export class Controller {
     // its next question would send them to the companion again.
     const cg = changes.clearGen && changes.clearGen.newValue;
     if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) this.clearedElsewhere(cg);
-    // A save box was changed in some window (maybe for this very entry, or one this summary shares through the result
-    // cache): ask the companion again rather than trust what this panel showed.
-    if (changes.savedChange && changes.savedChange.newValue && typeof this.s.saved === "boolean") this.refreshSaved();
     if (changes.base || changes.token) {
       this.d.storage.get(["base", "token"]).then((st) => {
         this.cfg = { base: st.base, token: st.token };
@@ -214,20 +206,19 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.tempText = null;
-    this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
     this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, tempReady: false,
-                tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, savedUnknown: false, ...extra });
+                tempChars: 0, tempWarn: false, tempNote: "", ...extra });
   }
 
   // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
   // question thread built on it, and drop any job or answer still on its way.
-  clearedElsewhere(cg, status = "History was cleared in another window or on the Options page.") {
+  clearedElsewhere(cg) {
     this.clearGen = cg;
     this.selGen++;
     this.stopTimer();
     if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     this.resetAsk();
-    this.resetView({ status, busy: false });
+    this.resetView({ status: "History was cleared in another window.", busy: false });
   }
 
   // Every POST /jobs (summaries, Temp chat and questions) carries the clear generation this panel knows, so the companion
@@ -336,9 +327,7 @@ export class Controller {
     this.emit({ title: j.title || this.s.title, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
       if (this.s.mode === "temp") { await this.loadTemp(jobId, gen); return; }
-      this.emit({ result: j.result_markdown, status: "Done.", busy: false,
-                  saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
-      this.noteRev(j.history_rev);
+      this.emit({ result: j.result_markdown, status: "Done.", busy: false });
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
     } else {
@@ -377,118 +366,22 @@ export class Controller {
     return true;
   }
 
-  // Clear history from this panel. The panel itself no longer shows the control (it lives on the Options page, behind a
-  // confirmation, through the same clearCompanion), but the flow is kept whole for the tests and the dev harness.
   async clearHistory() {
     const gen = ++this.selGen;
-    let res;
+    let r;
     try {
-      // the extension must not keep a list of what was looked at either; the other windows' panels hear clearGen
-      res = await clearCompanion({ fetch: this.d.fetch, cfg: this.cfg, storage: this.d.storage, onGeneration: (cg) => { this.clearGen = cg; } });
+      r = await request(this.d.fetch, this.cfg, "POST", "/clear", {}, 5000);
     } catch (e) { this.failure(gen, e); return; }
-    if (res.ok && this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
-    if (res.ok) this.resetAsk();  // the Q&A history goes too
-    this.resetView({ status: res.ok ? "History cleared." : "Could not clear history.", busy: false });
-  }
-
-  // The "Save this Dip to history" checkbox. Unticked: the companion takes this summary's entry out of the history log
-  // (POST /history/<job>/remove); ticked again: it puts it back where it was (/restore). Both are idempotent and carry
-  // the clear generation this panel knows. The box follows the click at once and goes back if the companion refuses.
-  // When the answer is lost (the companion may have made the change), the panel does not guess: it asks the companion
-  // for the job (GET /jobs/<id>, which carries history_saved) and says the outcome is unknown until it hears.
-  // Every change is announced to the other windows' panels (storage key savedChange), which then ask again too.
-  // Returns true when the box ended up as clicked.
-  async setSaved(on) {
-    const jobId = this.s.jobId;
-    if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
-    const gen = this.selGen, was = this.s.saved;
-    this.savedSeq = (this.savedSeq || 0) + 1;  // a refresh that started before this change must not overwrite its result
-    this.emit({ saved: !!on, savingSaved: true, savedUnknown: false });
-    const still = () => gen === this.selGen && this.s.jobId === jobId;
-    let r;
-    try {
-      r = await request(this.d.fetch, this.cfg, "POST", `/history/${encodeURIComponent(jobId)}/${on ? "restore" : "remove"}`, { ...this.genField() }, 10000);
-    } catch (e) {
-      if (!still()) return false;
-      return this.reconcileSaved(jobId, on, still, "No answer from the companion");
+    if (typeof r.json.clear_generation === "number") this.clearGen = r.json.clear_generation;
+    if (r.status === 200) {  // the extension must not keep a list of what was looked at either
+      const all = await this.d.storage.get(null);
+      await this.d.storage.remove(Object.keys(all).filter((k) => k.startsWith("slot:")));
+      // Tell the panels of the other windows: their question threads must go too.
+      if (typeof r.json.clear_generation === "number") await this.d.storage.set({ clearGen: r.json.clear_generation });
+      if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     }
-    if (!still()) return false;
-    if (isStaleRefusal(r)) { await this.staleRefused(r.json); return false; }
-    if (r.status === 200 && typeof r.json.saved === "boolean") {
-      this.noteRev(r.json.history_rev);
-      this.emit({ saved: r.json.saved, savingSaved: false, savedUnknown: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
-      await this.announceSaved(jobId, r.json.saved, r.json.history_rev);
-      return r.json.saved === !!on;
-    }
-    // A server error may come after the change was made (the entry was written, then something else failed): ask the
-    // companion what the log now says, as for a lost answer, and never just put the box back.
-    if (r.status >= 500) return this.reconcileSaved(jobId, on, still, "The companion reported a problem");
-    const why = r.status === 401 ? "The token was rejected. Check the options page."
-      : r.status === 404 ? "This summary is no longer in the history log."
-      : r.status === 409 && r.json.error_code === "entry_ambiguous" ? "This entry was edited by hand in the log, so it was left as it is."
-      : "The history log could not be changed on the iMac.";
-    this.emit({ saved: r.status === 404 ? null : was, savingSaved: false, savedUnknown: false, status: why });
-    return false;
-  }
-
-  // After a lost answer or a server error: say the outcome is not known yet, ask the companion, announce what it says
-  // like any change, and mark the box unknown if even that fails.
-  async reconcileSaved(jobId, on, still, why) {
-    this.emit({ status: `${why}, so it is not known yet whether the history log changed. Checking...` });
-    const now = await this.refreshSaved({ force: true });
-    if (still() && typeof now === "boolean") {
-      if (now !== !!on) this.emit({ status: "The history log was not changed." });
-      await this.announceSaved(jobId, now, this.savedRev);
-    }
-    if (still() && now === null) {
-      this.emit({ saved: !!on, savingSaved: false, savedUnknown: true,
-        status: "Cannot reach the companion, so it is not known whether the history log changed. Click the box to try again." });
-    }
-    return now === !!on;
-  }
-
-  // Answers about the box carry the log's revision (history_rev). Only an answer at least as new as the newest one seen
-  // is applied, whatever its route (this panel's change, a GET, a GET prompted by another panel's broadcast), so a slow
-  // older answer can never overwrite a newer state.
-  noteRev(rev) {
-    if (typeof rev === "number" && rev > this.savedRev) this.savedRev = rev;
-  }
-
-  async announceSaved(jobId, saved, rev) {
-    try { await this.d.storage.set({ savedChange: { jobId, saved, rev, ts: Date.now() } }); } catch { /* the other panels also ask on focus */ }
-  }
-
-  // Ask the companion whether the summary on screen is in the history log (GET /jobs/<id>, field history_saved): after a
-  // lost answer, when the panel gets the focus, and when another window changed a box. Returns true, false, or null
-  // when it could not find out (the box is then left as it is). `force` also runs while a change is marked in flight.
-  // An answer is dropped when a local change started after this request did (savedSeq), or the summary changed. When
-  // the companion's clear generation has moved on (another machine pressed Clear history), the panel resets as a cleared
-  // panel does: the old summary, its box and its thread go.
-  async refreshSaved({ force = false } = {}) {
-    const jobId = this.s.jobId;
-    if (!jobId || this.s.mode === "temp" || !this.s.result) return null;
-    if (this.s.savingSaved && !force) return null;
-    const gen = this.selGen, seq = this.savedSeq || 0;
-    let r;
-    try {
-      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 5000);
-    } catch { return null; }
-    if (gen !== this.selGen || this.s.jobId !== jobId) return null;
-    const cg = r.json && r.json.clear_generation;
-    if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) {
-      this.clearedElsewhere(cg, STALE_MESSAGE);
-      return null;
-    }
-    if (!force && seq !== (this.savedSeq || 0)) return null;  // a newer local change owns the box
-    if (r.status !== 200 || !r.json) return null;
-    const rev = r.json.history_rev;
-    if (typeof rev === "number" && rev < this.savedRev) return null;  // an older answer than one already applied
-    this.noteRev(rev);
-    const v = typeof r.json.history_saved === "boolean" ? r.json.history_saved : null;
-    const patch = { saved: v, savingSaved: false, savedUnknown: false };
-    if (force) patch.status = v === null ? "This summary is no longer in the history log." : v ? "Saved to history." : "Removed from history.";
-    this.emit(patch);
-    return v;
+    if (r.status === 200) this.resetAsk();  // the Q&A history goes too
+    this.resetView({ status: r.status === 200 ? "History cleared." : "Could not clear history.", busy: false });
   }
 
   // ---------- question box ----------

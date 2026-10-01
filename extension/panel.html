@@ -9,22 +9,15 @@
 </head>
 <body>
   <div id="page">
-  <div class="air">
-    <div class="brand">
-      <img class="brand-mark" src="icons/48.png" alt="" width="30" height="30">
-      <span class="brand-name">Dip'n'Dive</span>
-    </div>
   <form id="urlform" autocomplete="off">
     <input id="urlinput" type="text" inputmode="url" placeholder="Paste a link" aria-label="Link to summarize" spellcheck="false" autocomplete="off">
     <button id="go" type="submit">Go</button>
   </form>
+  <div id="hint" class="muted" hidden>Paste a link above (Cmd+V or Ctrl+V) and press Go, or right-click any link or page.</div>
   <header>
     <a id="title" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
   </header>
-  </div>
-  <div class="water">
   <div id="buttons" role="group" aria-label="Mode"></div>
-  <div id="hint" class="hint" hidden><img src="icons/128.png" alt="" width="64" height="64"><span>Right-click any link and pick Dip'n'Dive, or paste a link above and press Go.</span></div>
   <div id="codexnote" class="reason" hidden></div>
   <button id="copy" type="button" hidden>Copy and open ChatGPT</button>
   <div id="warn" class="warn" hidden>This source is very long (over 100,000 characters). ChatGPT may truncate a paste that large.</div>
@@ -34,15 +27,8 @@
   <div id="error" class="error" role="alert" hidden></div>
   <footer>
     <div id="status" class="muted"></div>
-    <div class="links">
-      <label id="saveline" class="savebox" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Save this Dip to history</span></label>
-      <button id="historylink" class="textbtn" type="button">History</button>
-      <button id="options" class="iconbtn" type="button" aria-label="Settings" title="Settings">
-        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="evenodd" d="M10.16 4.32L10.45 1.72L13.55 1.72L13.84 4.32L16.13 5.26L18.18 3.63L20.37 5.82L18.74 7.87L19.68 10.16L22.28 10.45L22.28 13.55L19.68 13.84L18.74 16.13L20.37 18.18L18.18 20.37L16.13 18.74L13.84 19.68L13.55 22.28L10.45 22.28L10.16 19.68L7.87 18.74L5.82 20.37L3.63 18.18L5.26 16.13L4.32 13.84L1.72 13.55L1.72 10.45L4.32 10.16L5.26 7.87L3.63 5.82L5.82 3.63L7.87 5.26ZM15.4 12A3.4 3.4 0 1 0 8.6 12A3.4 3.4 0 1 0 15.4 12Z"/></svg>
-      </button>
-    </div>
+    <div class="links"><a id="clear" href="#">Clear history</a> <a id="options" href="#">Options</a></div>
   </footer>
-  </div>
   </div>
   <section id="ask" aria-label="Ask a question about this source" hidden>
     <div id="askerror" class="error" role="alert" hidden></div>
@@ -51,24 +37,11 @@
     <form id="askform" autocomplete="off">
       <input id="askinput" type="text" placeholder="Ask a question" aria-label="Your question" spellcheck="true" autocomplete="off" maxlength="2000">
       <button id="mic" type="button" data-state="idle" title="Click once to talk, click again to send">
-        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span id="miclabel">Speak</span>
       </button>
       <button id="askgo" type="submit">Ask</button>
     </form>
-  </section>
-  <section id="historyview" aria-label="History" hidden>
-    <div id="historybar">
-      <button id="historyback" type="button">&larr; Back</button>
-      <h1 id="historyheading">History</h1>
-    </div>
-    <div id="historylist" role="list"></div>
-    <div id="historyempty" class="muted" hidden>Nothing has been logged yet. A Dip or Dive summary is added here every time one finishes.</div>
-    <div id="historyerror" class="error" role="alert" hidden></div>
-    <div id="historyfoot">
-      <div id="historystatus" class="muted" role="status"></div>
-      <button id="historymore" type="button" hidden>Show older</button>
-    </div>
   </section>
   <script type="module" src="panel.js"></script>
 </body>

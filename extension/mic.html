@@ -5,24 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Enable microphone - Dip'n'Dive</title>
-  <link rel="stylesheet" href="pages.css">
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 20px; }
+    h1 { font-size: 22px; margin: 0 0 12px; }
+    #msg { padding: 14px 16px; border-radius: 10px; border: 1px solid #8884; background: #8881; margin: 16px 0; }
+    #msg.ok { border-color: #2a8a3e; background: #2a8a3e22; }
+    #msg.bad { border-color: #c0392b; background: #c0392b22; }
+    button { font: inherit; font-weight: 600; padding: 12px 20px; border-radius: 10px; border: 2px solid #8888; cursor: pointer; margin: 0 8px 8px 0; background: Canvas; color: CanvasText; }
+    small { color: GrayText; display: block; margin-top: 16px; }
+  </style>
 </head>
 <body>
-  <div class="air"><div class="air-in">
-    <div class="brand">
-      <img src="icons/48.png" alt="" width="40" height="40">
-      <div><div class="brand-name">Dip'n'Dive</div><h1>Enable the microphone</h1></div>
-    </div>
-  </div></div>
-  <main class="water"><div class="water-in">
-    <div id="msg" role="status">Chrome should now ask to use your microphone. Click <b>Allow while visiting the site</b> (not "Allow this time").</div>
-    <div class="row">
-      <button id="retry" class="primary" type="button" hidden>Try again</button>
-      <button id="settings" class="primary" type="button" hidden>Open Chrome's microphone setting for Dip'n'Dive</button>
-      <button id="close" class="quiet" type="button" hidden>Close this tab</button>
-    </div>
-    <small>This is a one-time step. The side panel cannot show Chrome's permission prompt, so it is done here. Nothing is recorded: the microphone is switched on for a moment and straight off again.</small>
-  </div></main>
+  <h1>Enable the microphone for Dip'n'Dive</h1>
+  <div id="msg" role="status">Chrome should now ask to use your microphone. Click <b>Allow while visiting the site</b> (not "Allow this time").</div>
+  <div>
+    <button id="retry" type="button" hidden>Try again</button>
+    <button id="settings" type="button" hidden>Open Chrome's microphone setting for Dip'n'Dive</button>
+    <button id="close" type="button" hidden>Close this tab</button>
+  </div>
+  <small>This is a one-time step. The side panel cannot show Chrome's permission prompt, so it is done here. Nothing is recorded: the microphone is switched on for a moment and straight off again.</small>
   <script type="module" src="mic.js"></script>
 </body>
 </html>
