@@ -178,7 +178,8 @@ test("mic button accessibility: its name is its visible label, no changing aria-
   };
   const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
   const light = css.match(/--rec: (#[0-9a-f]{6});/)[1];
-  const dark = css.match(/--rec: (#[0-9a-f]{6}); --rec-edge: #8f150c; --q-bg: #34322e/)[1];
+  const darkBlock = css.slice(css.indexOf("prefers-color-scheme: dark"), css.indexOf("* { box-sizing"));
+  const dark = darkBlock.match(/--rec: (#[0-9a-f]{6});/)[1];
   assert.ok(contrast("#ffffff", light) >= 4.5, `light ${contrast("#ffffff", light)}`);
   assert.ok(contrast("#ffffff", dark) >= 4.5, `dark ${contrast("#ffffff", dark)}`);
 });

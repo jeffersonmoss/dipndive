@@ -1,5 +1,6 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
+import { clearCompanion } from "./clear.js";
 import { pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
@@ -55,6 +56,9 @@ export class Controller {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
       codexOk: null, codexReason: "",
+      // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
+      // history log, null when it has none (no summary, Temp chat, a log failure); savingSaved while a change is on its way
+      saved: null, savingSaved: false,
       // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
@@ -207,7 +211,7 @@ export class Controller {
     this.stopTimer();
     this.tempText = null;
     this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, tempReady: false,
-                tempChars: 0, tempWarn: false, tempNote: "", ...extra });
+                tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, ...extra });
   }
 
   // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
@@ -218,7 +222,7 @@ export class Controller {
     this.stopTimer();
     if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     this.resetAsk();
-    this.resetView({ status: "History was cleared in another window.", busy: false });
+    this.resetView({ status: "History was cleared in another window or on the Options page.", busy: false });
   }
 
   // Every POST /jobs (summaries, Temp chat and questions) carries the clear generation this panel knows, so the companion
@@ -327,7 +331,8 @@ export class Controller {
     this.emit({ title: j.title || this.s.title, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
       if (this.s.mode === "temp") { await this.loadTemp(jobId, gen); return; }
-      this.emit({ result: j.result_markdown, status: "Done.", busy: false });
+      this.emit({ result: j.result_markdown, status: "Done.", busy: false,
+                  saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
     } else {
@@ -366,22 +371,46 @@ export class Controller {
     return true;
   }
 
+  // Clear history from this panel. The panel itself no longer shows the control (it lives on the Options page, behind a
+  // confirmation, through the same clearCompanion), but the flow is kept whole for the tests and the dev harness.
   async clearHistory() {
     const gen = ++this.selGen;
+    let res;
+    try {
+      // the extension must not keep a list of what was looked at either; the other windows' panels hear clearGen
+      res = await clearCompanion({ fetch: this.d.fetch, cfg: this.cfg, storage: this.d.storage, onGeneration: (cg) => { this.clearGen = cg; } });
+    } catch (e) { this.failure(gen, e); return; }
+    if (res.ok && this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
+    if (res.ok) this.resetAsk();  // the Q&A history goes too
+    this.resetView({ status: res.ok ? "History cleared." : "Could not clear history.", busy: false });
+  }
+
+  // The "Save this Dip to history" checkbox. Unticked: the companion takes this summary's entry out of the history log
+  // (POST /history/<job>/remove); ticked again: it puts it back where it was (/restore). Both are idempotent. The box
+  // follows the click at once and goes back if the companion refuses or cannot be reached. Returns true when it stuck.
+  async setSaved(on) {
+    const jobId = this.s.jobId;
+    if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
+    const gen = this.selGen, was = this.s.saved;
+    this.emit({ saved: !!on, savingSaved: true });
+    const still = () => gen === this.selGen && this.s.jobId === jobId;
     let r;
     try {
-      r = await request(this.d.fetch, this.cfg, "POST", "/clear", {}, 5000);
-    } catch (e) { this.failure(gen, e); return; }
-    if (typeof r.json.clear_generation === "number") this.clearGen = r.json.clear_generation;
-    if (r.status === 200) {  // the extension must not keep a list of what was looked at either
-      const all = await this.d.storage.get(null);
-      await this.d.storage.remove(Object.keys(all).filter((k) => k.startsWith("slot:")));
-      // Tell the panels of the other windows: their question threads must go too.
-      if (typeof r.json.clear_generation === "number") await this.d.storage.set({ clearGen: r.json.clear_generation });
-      if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
+      r = await request(this.d.fetch, this.cfg, "POST", `/history/${encodeURIComponent(jobId)}/${on ? "restore" : "remove"}`, {}, 10000);
+    } catch (e) {
+      if (still()) this.emit({ saved: was, savingSaved: false, status: "Cannot reach the companion, so the history log was not changed." });
+      return false;
     }
-    if (r.status === 200) this.resetAsk();  // the Q&A history goes too
-    this.resetView({ status: r.status === 200 ? "History cleared." : "Could not clear history.", busy: false });
+    if (!still()) return false;
+    if (r.status === 200 && typeof r.json.saved === "boolean") {
+      this.emit({ saved: r.json.saved, savingSaved: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
+      return r.json.saved === !!on;
+    }
+    const why = r.status === 401 ? "The token was rejected. Check the options page."
+      : r.status === 404 ? "This summary is no longer in the history log."
+      : "The history log could not be changed on the iMac.";
+    this.emit({ saved: r.status === 404 ? null : was, savingSaved: false, status: why });
+    return false;
   }
 
   // ---------- question box ----------

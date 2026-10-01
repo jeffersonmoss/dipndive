@@ -1,5 +1,8 @@
-import { request } from "./lib/api.js";
+import { ApiError, request } from "./lib/api.js";
+import { clearCompanion } from "./lib/clear.js";
+import { installShim } from "./lib/shim.js";
 
+installShim();  // inert inside the extension; lets the page run as a plain page against the dev harness
 const $ = (id) => document.getElementById(id);
 const say = (t) => { $("msg").textContent = t; };
 
@@ -28,5 +31,34 @@ $("save").addEventListener("click", async () => {
     else say(`Saved, but the companion returned HTTP ${r.status}.`);
   } catch (e) {
     say(`Saved, but: ${e.message}`);
+  }
+});
+
+// ---------- Clear history, with a confirmation step ----------
+const storage = { get: (k) => chrome.storage.local.get(k), set: (o) => chrome.storage.local.set(o), remove: (k) => chrome.storage.local.remove(k) };
+const clearSay = (t, cls = "") => { $("clearmsg").textContent = t; $("clearmsg").className = `msg ${cls}`.trim(); };
+const showConfirm = (on) => {
+  $("clearconfirm").hidden = !on;
+  $("clear").hidden = on;
+  if (on) $("clearno").focus(); else $("clear").focus();
+};
+$("clear").addEventListener("click", () => { clearSay(""); showConfirm(true); });
+$("clearno").addEventListener("click", () => showConfirm(false));
+$("clearconfirm").addEventListener("keydown", (e) => { if (e.key === "Escape") showConfirm(false); });
+$("clearyes").addEventListener("click", async () => {
+  $("clearyes").disabled = $("clearno").disabled = true;
+  clearSay("Clearing...");
+  try {
+    const st = await chrome.storage.local.get(["base", "token"]);
+    const res = await clearCompanion({ fetch: (...a) => fetch(...a), cfg: { base: st.base, token: st.token }, storage });
+    if (res.ok) clearSay("History cleared. Open side panels have started fresh; the history log file is kept.", "ok");
+    else if (res.status === 401) clearSay("Not cleared: the companion did not accept the token.", "bad");
+    else clearSay(`Not cleared: the companion returned HTTP ${res.status}.`, "bad");
+  } catch (e) {
+    clearSay(e instanceof ApiError && e.kind === "config" ? "Not cleared: set the companion URL and token first." : "Not cleared: cannot reach the companion. Is the iMac on and connected to Tailscale?", "bad");
+  } finally {
+    $("clearyes").disabled = $("clearno").disabled = false;
+    $("clearconfirm").hidden = true;
+    $("clear").hidden = false;
   }
 });

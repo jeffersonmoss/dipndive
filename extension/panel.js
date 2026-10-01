@@ -62,7 +62,19 @@ function render(s) {
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
+  renderSave(s);
   document.body.classList.toggle("busy", !!s.busy);
+}
+
+// ---------- "Save this Dip to history" ----------
+// Shown only next to a finished Dip or Dive that has an entry in the companion's history log; never in Temp chat.
+function renderSave(s) {
+  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";
+  $("saveline").hidden = !show;
+  if (!show) return;
+  $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
+  $("savehist").checked = s.saved;
+  $("savehist").disabled = !!s.savingSaved;
 }
 
 // ---------- question box ----------
@@ -168,7 +180,7 @@ window.addEventListener("focus", () => ctl.refreshMic());
 document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.pauseMic(); else ctl.refreshMic(); });
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
-$("clear").addEventListener("click", (e) => { e.preventDefault(); ctl.clearHistory(); });
+$("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checked));
 
 // ---------- history view ----------
 // Entries already in the DOM stay (Show older only appends), so the list keeps its scroll position while a page loads.
@@ -202,8 +214,7 @@ const historyView = new HistoryBrowser({
   getCfg: () => ctl.cfg,
   onState: renderHistory,
 });
-$("historylink").addEventListener("click", (e) => {
-  e.preventDefault();
+$("historylink").addEventListener("click", () => {
   ctl.pauseMic();  // the microphone controls are hidden while History is open: do not leave a recording running behind them
   pageScroll = $("page").scrollTop;
   historyView.open();
@@ -215,8 +226,8 @@ $("historyback").addEventListener("click", () => {
   $("page").scrollTop = pageScroll;
 });
 $("historymore").addEventListener("click", () => historyView.more());
-$("options").addEventListener("click", (e) => {
-  e.preventDefault();
+// the gear: Settings (the Options page, where Clear history also lives)
+$("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
 });
 chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));

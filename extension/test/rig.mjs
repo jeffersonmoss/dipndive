@@ -60,18 +60,28 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         }
         const id = `job${++server.seq}`;
         if (server.postStatus) return respond(server.postStatus, { error_code: server.postError || "bad_request", error_message: null });
-        server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history };
+        server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history,
+          logged: !server.noLog && /-(dip|dive)$/.test(body.mode), saved: true };
         return respond(202, { job_id: id, clear_generation: server.clearGen });
       }
       if (init.method === "POST" && path === "/clear") { server.clearGen++; return respond(200, { clear_generation: server.clearGen }); }
       let m;
+      // the "Save this Dip to history" checkbox (dipdive/service.py set_saved): idempotent, per job id
+      if (init.method === "POST" && (m = path.match(/^\/history\/([^/]+)\/(remove|restore)$/))) {
+        if (server.saveStatus) return respond(server.saveStatus, { error_code: "log_unwritable" });
+        const j = server.jobs[decodeURIComponent(m[1])];
+        if (!j || !j.logged) return respond(404, { error_code: j ? "not_logged" : "no_such_entry" });
+        j.saved = m[2] === "restore";
+        return respond(200, { job_id: m[1], saved: j.saved, clear_generation: server.clearGen });
+      }
       if ((m = path.match(/^\/jobs\/(.+)$/))) {
         const j = server.jobs[m[1]];
         if (!j) return respond(404, { error_code: "no_such_job" });
         j.polls++;
         const done = j.polls >= 2;
         return respond(200, { job_id: m[1], state: done ? (j.fail ? "error" : "done") : "summarizing", title: "A Title", url: j.url, mode: j.mode,
-          result_markdown: done && !j.fail ? (j.mode.endsWith("-ask") ? `Answer to: ${j.question} [${(j.history || []).length} earlier]` : `Summary for ${j.mode}`) : null, error_code: done && j.fail ? j.fail : null, error_message: null, clear_generation: server.clearGen });
+          result_markdown: done && !j.fail ? (j.mode.endsWith("-ask") ? `Answer to: ${j.question} [${(j.history || []).length} earlier]` : `Summary for ${j.mode}`) : null, error_code: done && j.fail ? j.fail : null, error_message: null, clear_generation: server.clearGen,
+          history_saved: done && !j.fail && j.logged ? j.saved : null });
       }
       if ((m = path.match(/^\/source\?job=(.+)$/))) return respond(200, { title: "A Title", url: "https://v.test/x", text: server.sourceText || "source body", clear_generation: server.clearGen });
       return respond(404, {});

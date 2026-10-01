@@ -220,12 +220,15 @@ test("entry text is inert: HTML is escaped, non-http links are never links, imag
   assert.ok(odd.includes("https://v.test/z"), odd);
 });
 
-test("panel.html: a History link between Clear history and Options, a view with a Back button, and panel.js wires them", () => {
+test("panel.html: the footer has the save box, History and the Settings gear (no Clear history), a view with a Back button, and panel.js wires them", () => {
   const html = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  const links = [...html.match(/<div class="links">([\s\S]*?)<\/div>/)[1].matchAll(/<a id="(\w+)"[^>]*>([^<]*)<\/a>/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(links, [["clear", "Clear history"], ["historylink", "History"], ["options", "Options"]]);
+  const foot = html.match(/<footer>([\s\S]*?)<\/footer>/)[1];
+  const order = [...foot.matchAll(/\bid="(saveline|historylink|options)"/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["saveline", "historylink", "options"], "the save box, then History next to the gear");
+  assert.match(foot, /<button id="historylink" class="textbtn" type="button">History<\/button>/);
+  assert.ok(!/id="clear"|Clear history/.test(html), "Clear history lives on the Options page only");
   assert.match(html, /<button id="historyback" type="button">[^<]*Back<\/button>/);
   assert.match(html, /<button id="historymore" type="button" hidden>/);
   const ids = [...html.matchAll(/\bid="(\w+)"/g)].map((m) => m[1]);

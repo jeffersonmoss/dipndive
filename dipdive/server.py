@@ -18,6 +18,7 @@ TOKEN_PATH = os.path.join(joblog.SUPPORT, "token")
 MAX_BODY = 64 * 1024
 HOST_OK = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\]|[a-z0-9.-]+\.ts\.net)(:\d+)?$", re.I)
 JOB_PATH = re.compile(r"^/jobs/([0-9a-f]{32})$")
+SAVE_PATH = re.compile(r"^/history/([0-9a-f]{32})/(remove|restore)$")
 
 
 MIN_TOKEN = 32
@@ -193,6 +194,9 @@ def make_handler(svc: Service, token: str):
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
+                m = SAVE_PATH.match(u.path)
+                if m:
+                    return self._send(*svc.set_saved(m.group(1), m.group(2) == "restore"))
             except UnicodeError:  # text that cannot be encoded (a lone surrogate in url or requestId): the client's mistake
                 return self._send(400, {"error_code": "bad_request", "error_message": "text is not valid unicode"})
             except Exception as e:

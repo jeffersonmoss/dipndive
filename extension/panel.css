@@ -1,43 +1,61 @@
 /* Waterline: the panel is the icon's cross-section. Air on top (link field and the title that raised the question),
-   a wavy waterline, then the water, where the five mode columns hang down to their depth (shallow in the center,
+   the icon's waterline, then the water, where the five mode columns hang down to their depth (shallow in the center,
    deep at both edges) and the answer is read. The question bar at the bottom is the icon's black deep water.
    Shape rule: everything that hangs from the waterline is square on top and rounded 14px at the bottom; every other
-   control is rounded 14px all round; message bubbles are 16px. */
+   control is rounded 14px all round; message bubbles are 16px.
+   Day is the icon itself (white air, pale water, an ink line). Night is night water: an ink-blue sky, deep navy water
+   under a moonlit surface line, and the deepest water nearly black. The mode buttons keep their orange and blue
+   families in both; the Dip squares stay pale. */
 :root {
   color-scheme: light dark;
-  --bg: #fafcfc; --fg: #12191d; --muted: #4f5e65; --card: #ffffff; --line: #c5d3d8;
-  --air: #fafcfc; --water-top: #e4eef1; --water-deep: #d3e1e6; --wave-edge: #a9bec5;
-  --ink: #10222a; --ink-2: #1b333d; --on-ink: #eef5f7; --ink-muted: #b8cbd1; --field: #f1f6f7;
+  --fg: #12191d; --muted: #4f5e65; --strong: #10222a; --card: #ffffff; --line: #c5d3d8; --field: #f1f6f7; --placeholder: #5b6b72;
+  --air: #fafcfc; --water-glint: #e4eef1; --water-top: #e4eef1; --water-deep: #d3e1e6;
+  /* the surface line: thin and dark like the icon's ink line */
+  --surface: #4d6873; --surface-w: 1.5px;
+  --film: 196, 220, 228; --bubble: #4f7b8a; --hover: rgba(16, 34, 42, .06); --code: rgba(16, 34, 42, .08); --shade: rgba(16, 34, 42, .14);
+  --press-tint: #0e3a4a; --link: #0b5a78; --select: #bfe0ea; --on-select: #10222a;
+  /* the deep water: the docked question bar */
+  --deep: #10222a; --deep-2: #1b333d; --deep-edge: #5d7a85; --deep-line: transparent; --on-deep: #eef5f7; --deep-muted: #b8cbd1;
+  --ask-field: #f1f6f7; --ask-fg: #10222a; --ask-placeholder: #566870; --deep-focus: #7cc4dd; --mic-ledge: #7d949c;
+  --go: #10222a; --on-go: #eef5f7; --go-ledge: #04090b; --q-bg: #10222a;
   --claude: #D97757; --claude-edge: #A9502F; --claude-pale: #F6D6C9; --claude-pale-edge: #D9A895; --on-claude: #2a1209;
   --codex: #2B6CF6; --codex-edge: #1A47B0; --codex-pale: #CFE0FF; --codex-pale-edge: #9DB8F0; --on-codex: #ffffff;
-  --temp: #fdfefe; --temp-edge: #b3c2c7; --on-pale: #2a2724;
-  --err-bg: #fbe2dd; --err-fg: #861b11; --warn-bg: #fff1cf; --warn-fg: #634500; --link: #0b5a78;
-  --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff; --q-bg: #10222a;
-  /* the water surface: one irregular wave profile (crests of different heights at uneven spacing), 360 by 28 units,
-     stretched to whatever size it is drawn at */
-  --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 28' preserveAspectRatio='none'%3E%3Cpath d='M0 11.9C1.5 12.3 6 14 9 14.3C12 14.6 15 13.8 18 13.7C21 13.6 24 13.8 27 13.8C30 13.8 33 13.7 36 13.5C39 13.4 42 12.5 45 13C48 13.5 51 15.1 54 16.5C57 17.9 60 20.2 63 21.3C66 22.4 69 23.2 72 23.1C75 23 78 21.5 81 20.7C84 19.9 87 18.8 90 18.2C93 17.5 96 17.3 99 16.7C102 16.2 105 15.3 108 14.9C111 14.5 114 14.2 117 14.5C120 14.8 123 16.3 126 16.6C129 16.9 132 17.4 135 16.4C138 15.3 141 12.5 144 10.3C147 8.1 150 3.9 153 3C156 2.2 159 3.9 162 5.1C165 6.3 168 8.7 171 10.3C174 11.8 177 13.1 180 14.4C183 15.7 186 17.1 189 18C192 18.9 195 19.8 198 19.8C201 19.9 204 18.7 207 18.1C210 17.5 213 16.2 216 16.1C219 16.1 222 17 225 17.7C228 18.5 231 20 234 20.5C237 21 240 21 243 20.9C246 20.8 249 20.4 252 19.9C255 19.5 258 19.2 261 18.2C264 17.1 267 15.7 270 13.6C273 11.6 276 7 279 5.9C282 4.7 285 5.7 288 6.9C291 8.1 294 11.8 297 13.1C300 14.3 303 14.5 306 14.3C309 14.2 312 12.8 315 12.4C318 11.9 321 11.8 324 11.6C327 11.5 330 11.5 333 11.6C336 11.6 339 11.1 342 11.9C345 12.7 348 14.8 351 16.3C354 17.9 358.5 20.4 360 21.2 V28 H0 Z'/%3E%3C/svg%3E");
-  --wave-h: 28px;
+  --temp: #fdfefe; --temp-edge: #b3c2c7; --on-temp: #10222a; --on-pale: #2a2724;
+  --err-bg: #fbe2dd; --err-fg: #861b11; --warn-bg: #fff1cf; --warn-fg: #634500; --note-bg: rgba(255, 255, 255, .6);
+  --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff;
+  /* the waterline, traced from icons/source-1024-inverted.png: the line's centre sampled across the icon, the duck's
+     body bridged by interpolation, smoothed, and scaled to 360 units wide with the icon's own proportions, so it is
+     about 5 units from crest to trough. It is drawn stretched to the panel width at --wave-h tall, so the undulation
+     stays this gentle at any width. Filled below the line. */
+  --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 9' preserveAspectRatio='none'%3E%3Cpath d='M0 4.43C2.5 4.31 10.01 3.95 15.02 3.71C20.02 3.48 25.03 2.9 30.03 3.01C35.04 3.12 40.04 3.98 45.05 4.39C50.05 4.79 55.06 5.42 60.06 5.45C65.07 5.47 70.07 5.06 75.08 4.53C80.08 4 85.09 2.74 90.09 2.26C95.1 1.77 100.1 1.48 105.11 1.63C110.11 1.78 115.12 2.65 120.12 3.18C125.13 3.72 130.13 4.38 135.14 4.86C140.14 5.34 145.15 5.78 150.15 6.04C155.16 6.31 160.16 6.47 165.17 6.46C170.17 6.46 175.24 6.32 180.18 6.02C185.13 5.72 189.89 5.18 194.83 4.68C199.78 4.18 204.84 3.18 209.85 3.02C214.85 2.87 219.86 3.27 224.86 3.76C229.87 4.24 234.87 5.59 239.88 5.94C244.88 6.29 249.89 6.16 254.89 5.85C259.9 5.53 264.9 4.71 269.91 4.06C274.91 3.41 279.92 2.32 284.92 1.95C289.93 1.58 294.93 1.53 299.94 1.85C304.94 2.18 309.95 3.38 314.95 3.88C319.96 4.39 324.96 4.89 329.97 4.88C334.97 4.87 339.98 3.91 344.98 3.82C349.99 3.73 357.5 4.24 360 4.32 V9 H0 Z'/%3E%3C/svg%3E");
+  --wave-h: 9px;
+  --tuck: 8px; /* the mode columns start this far above the surface, out of sight, so a pressed one still meets it */
   --display: "Avenir Next", "Avenir", "Segoe UI", system-ui, sans-serif;
   --text: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
-/* Night mode is not designed yet in this pass: these keep it legible only. */
+/* Night water. The Dip squares keep their pale fill (pale orange, pale blue, dark text); only edges and shadows change. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #12191d; --fg: #e6eef0; --muted: #9fb1b7; --card: #1b2429; --line: #34454c;
-    --air: #182126; --water-top: #13252d; --water-deep: #0d1b21; --wave-edge: #2c4651;
-    --ink: #05090b; --ink-2: #13232a; --field: #e6eef0;
-    /* Dip squares stay pale (pale orange, pale blue, dark text) in dark mode too; only the edges deepen */
-    --claude-pale-edge: #9a6a58; --codex-pale-edge: #6e8ac0;
-    --temp: #e9eef0; --temp-edge: #7d8e94;
-    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --warn-bg: #4a3a12; --warn-fg: #ffd98a; --link: #8fd0ea;
-    --rec: #c62a1c; --rec-edge: #8f150c; --q-bg: #34322e;
+    --fg: #dce6f0; --muted: #93a7ba; --strong: #f1f5fa; --card: #12233a; --line: #243a54; --field: #0f1e33; --placeholder: #7f94a9;
+    --air: #0a1220; --water-glint: #17304a; --water-top: #10253a; --water-deep: #091727;
+    --surface: #d6e2ef; --surface-w: 1.5px;
+    --film: 16, 37, 58; --bubble: #8fb6d4; --hover: rgba(214, 226, 239, .07); --code: rgba(214, 226, 239, .1); --shade: rgba(0, 0, 0, .45);
+    --press-tint: #00060f; --link: #8fd0ea; --select: #2c5a80; --on-select: #ffffff;
+    --deep: #040a14; --deep-2: #0e1c30; --deep-edge: #3a5674; --deep-line: rgba(214, 226, 239, .38); --on-deep: #e6eef6; --deep-muted: #9fb3c8;
+    --ask-field: #12233a; --ask-fg: #e6eef6; --ask-placeholder: #8197ad; --deep-focus: #8fd0ea; --mic-ledge: #050b14;
+    --go: #d6e2ef; --on-go: #0a1220; --go-ledge: #6f86a0; --q-bg: #1d3a5c;
+    --claude-edge: #8a3d22; --claude-pale-edge: #b07a64;
+    --codex: #2f6ff7; --codex-edge: #173f99; --codex-pale-edge: #7d9bd6;
+    --temp: #dfe6ee; --temp-edge: #8193a8; --on-temp: #0a1220;
+    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --warn-bg: #4a3a12; --warn-fg: #ffd98a; --note-bg: rgba(214, 226, 239, .08);
+    --rec: #c62a1c; --rec-edge: #7a1209;
   }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-::selection { background: #bfe0ea; color: var(--ink); }
+::selection { background: var(--select); color: var(--on-select); }
 input { caret-color: var(--link); }
-#page, #historyview { scrollbar-width: thin; scrollbar-color: var(--wave-edge) transparent; }
+#page, #historyview { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 body {
   background: var(--water-deep); color: var(--fg); font: 15px/1.55 var(--text);
   height: 100vh; overflow: hidden; display: flex; flex-direction: column;
@@ -49,33 +67,26 @@ body {
 .muted { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 
 /* ---------- air ---------- */
-.air { flex: none; padding: 12px 16px calc(var(--wave-h) + 8px); display: flex; flex-direction: column; gap: 12px; background: var(--air); }
+.air { flex: none; padding: 12px 16px calc(var(--wave-h) + 12px); display: flex; flex-direction: column; gap: 12px; background: var(--air); }
 .brand { display: flex; align-items: center; gap: 9px; min-height: 40px; }
 .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
-.brand-name { font: 700 17px/1 var(--display); letter-spacing: -0.01em; color: var(--ink); flex: 1; }
-.textbtn {
-  display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border-radius: 14px;
-  font: 600 14px/1 var(--display); color: var(--ink); text-decoration: none; border: 1.5px solid var(--line); background: transparent;
-}
-.textbtn:hover { background: rgba(16, 34, 42, .06); }
-.textbtn:active { transform: translateY(1px); }
-.textbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.brand-name { font: 700 17px/1 var(--display); letter-spacing: -0.01em; color: var(--strong); flex: 1; }
 #urlform { display: flex; gap: 8px; }
 #urlinput {
   flex: 1; min-width: 0; height: 50px; padding: 0 14px; font: 15px var(--text); border-radius: 14px;
   border: 1.5px solid var(--line); background: var(--field); color: var(--fg);
 }
-#urlinput::placeholder { color: #5b6b72; }
+#urlinput::placeholder { color: var(--placeholder); }
 #urlinput:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
 #go {
   flex: none; width: 68px; height: 50px; font: 700 16px/1 var(--display); border-radius: 14px; border: 0;
-  background: var(--ink); color: var(--on-ink); cursor: pointer; box-shadow: 0 4px 0 #04090b;
+  background: var(--go); color: var(--on-go); cursor: pointer; box-shadow: 0 4px 0 var(--go-ledge);
 }
-#go:active { transform: translateY(3px); box-shadow: 0 1px 0 #04090b; }
+#go:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--go-ledge); }
 #go:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 header #title {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
-  font: 600 19px/1.28 var(--display); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; overflow-wrap: anywhere;
+  font: 600 19px/1.28 var(--display); letter-spacing: -0.01em; color: var(--strong); text-decoration: none; overflow-wrap: anywhere;
 }
 header #title[href]:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
 header #title:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
@@ -83,33 +94,34 @@ header #title:focus-visible { outline: 3px solid var(--link); outline-offset: 2p
 /* ---------- the waterline and the water ---------- */
 .water {
   position: relative; flex: 1 0 auto; display: flex; flex-direction: column; gap: 14px; padding: 0 16px 14px;
-  background: linear-gradient(180deg, var(--water-top) 0, var(--water-deep) 100%);
+  background: linear-gradient(180deg, var(--water-glint) 0, var(--water-top) 44px, var(--water-deep) 100%);
 }
-/* The water surface. --wave is drawn stretched to the panel width and --wave-h tall. The same shape is used three
-   times, always at the same size and origin, so the surface, its crest line and the tops of the mode buttons match exactly at any width:
-   the water fill below the curve (::after), a darker copy 2px higher that shows as the crest line (::before),
-   and the mask that cuts the mode buttons off at the surface (#buttons). */
+/* The surface. --wave is drawn stretched to the panel width and --wave-h tall. The same shape is used for every
+   waterline, always at the same size and origin, so the surface, its line and the tops of the mode buttons match
+   exactly at any width: the water fill below the line (::after), a copy --surface-w higher in the line colour that
+   shows as the thin line itself (::before), and the mask that cuts the mode buttons off at the surface (#buttons). */
 .water::before, .water::after {
   content: ""; position: absolute; left: 0; right: 0; height: var(--wave-h); pointer-events: none; z-index: 0;
   -webkit-mask: var(--wave) 0 0 / 100% 100% no-repeat;
   mask: var(--wave) 0 0 / 100% 100% no-repeat;
 }
-.water::before { top: calc(-2px - var(--wave-h)); background: var(--wave-edge); }
-.water::after { top: calc(0px - var(--wave-h)); background: var(--water-top); }
+.water::before { top: calc(0px - var(--surface-w) - var(--wave-h)); background: var(--surface); }
+.water::after { top: calc(0px - var(--wave-h)); background: var(--water-glint); }
 
 /* five columns tucked under the surface, each as deep as its mode: Dive deepest at both edges, Temp chat shallowest.
-   The row spans the full panel width (the water's 16px gutters move inside it) so its mask lines up with the
-   surface above; everything above the curve is cut away, including a pressed column that has sunk 5px. */
+   The row spans the full panel width (the water's 16px gutters move inside it) so its mask lines up with the surface
+   above. The columns start --tuck above the surface box and everything above the line is cut away, so each column's
+   top follows the line, also when a pressed one has sunk 6px. */
 #buttons {
   position: relative; z-index: 1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; align-items: start;
-  margin: calc(0px - var(--wave-h)) -16px 0; padding: 0 16px 18px;
-  -webkit-mask: var(--wave) 0 0 / 100% var(--wave-h) no-repeat, linear-gradient(#000 0 0) 0 calc(var(--wave-h) - 1px) / 100% calc(100% - var(--wave-h) + 1px) no-repeat;
-  mask: var(--wave) 0 0 / 100% var(--wave-h) no-repeat, linear-gradient(#000 0 0) 0 calc(var(--wave-h) - 1px) / 100% calc(100% - var(--wave-h) + 1px) no-repeat;
+  margin: calc(0px - var(--wave-h) - var(--tuck)) -16px 0; padding: 0 16px 18px;
+  -webkit-mask: var(--wave) 0 var(--tuck) / 100% var(--wave-h) no-repeat, linear-gradient(#000 0 0) 0 calc(var(--tuck) + var(--wave-h) - 1px) / 100% calc(100% - var(--tuck) - var(--wave-h) + 1px) no-repeat;
+  mask: var(--wave) 0 var(--tuck) / 100% var(--wave-h) no-repeat, linear-gradient(#000 0 0) 0 calc(var(--tuck) + var(--wave-h) - 1px) / 100% calc(100% - var(--tuck) - var(--wave-h) + 1px) no-repeat;
 }
-/* a film of water over the column tops: thickest right under the tall crests, where the most water sits above */
+/* a thin film of water over the column tops, fading with depth */
 #buttons::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 0; height: calc(var(--wave-h) + 16px); pointer-events: none;
-  background: linear-gradient(180deg, rgba(196, 220, 228, .62) 0, rgba(196, 220, 228, .28) calc(var(--wave-h) - 6px), rgba(196, 220, 228, 0) 100%);
+  content: ""; position: absolute; left: 0; right: 0; top: var(--tuck); height: calc(var(--wave-h) + 18px); pointer-events: none;
+  background: linear-gradient(180deg, rgba(var(--film), .6) 0, rgba(var(--film), .26) var(--wave-h), rgba(var(--film), 0) 100%);
 }
 button.mode {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
@@ -119,20 +131,20 @@ button.mode {
 }
 button.mode span:first-child { font-size: 11px; font-weight: 600; letter-spacing: .01em; opacity: .82; }
 button.mode span:last-child { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
-button.claude-dive, button.codex-dive { height: calc(var(--wave-h) + 98px); }
-button.claude-dip, button.codex-dip { height: calc(var(--wave-h) + 76px); }
-button.temp { height: calc(var(--wave-h) + 54px); }
-button.claude-dive { --edge: var(--claude-edge); background: var(--claude); color: var(--on-claude); box-shadow: 0 5px 0 var(--claude-edge), 0 9px 14px rgba(16, 34, 42, .14); }
-button.claude-dip  { --edge: var(--claude-pale-edge); background: var(--claude-pale); color: var(--on-pale); box-shadow: 0 5px 0 var(--claude-pale-edge), 0 9px 14px rgba(16, 34, 42, .12); }
-button.temp        { --edge: var(--temp-edge); background: var(--temp); color: var(--ink); box-shadow: 0 5px 0 var(--temp-edge), 0 9px 14px rgba(16, 34, 42, .12); }
-button.codex-dip   { --edge: var(--codex-pale-edge); background: var(--codex-pale); color: var(--on-pale); box-shadow: 0 5px 0 var(--codex-pale-edge), 0 9px 14px rgba(16, 34, 42, .12); }
-button.codex-dive  { --edge: var(--codex-edge); background: var(--codex); color: var(--on-codex); box-shadow: 0 5px 0 var(--codex-edge), 0 9px 14px rgba(16, 34, 42, .14); }
+button.claude-dive, button.codex-dive { height: calc(var(--tuck) + var(--wave-h) + 106px); }
+button.claude-dip, button.codex-dip { height: calc(var(--tuck) + var(--wave-h) + 84px); }
+button.temp { height: calc(var(--tuck) + var(--wave-h) + 62px); }
+button.claude-dive { --edge: var(--claude-edge); background: var(--claude); color: var(--on-claude); box-shadow: 0 5px 0 var(--claude-edge), 0 9px 14px var(--shade); }
+button.claude-dip  { --edge: var(--claude-pale-edge); background: var(--claude-pale); color: var(--on-pale); box-shadow: 0 5px 0 var(--claude-pale-edge), 0 9px 14px var(--shade); }
+button.temp        { --edge: var(--temp-edge); background: var(--temp); color: var(--on-temp); box-shadow: 0 5px 0 var(--temp-edge), 0 9px 14px var(--shade); }
+button.codex-dip   { --edge: var(--codex-pale-edge); background: var(--codex-pale); color: var(--on-pale); box-shadow: 0 5px 0 var(--codex-pale-edge), 0 9px 14px var(--shade); }
+button.codex-dive  { --edge: var(--codex-edge); background: var(--codex); color: var(--on-codex); box-shadow: 0 5px 0 var(--codex-edge), 0 9px 14px var(--shade); }
 button.mode:hover:not(:disabled):not([aria-pressed="true"]) { filter: brightness(1.04); }
 /* pressed in: the column sinks under the surface by the height of its ledge, the ledge and the drop shadow vanish,
    a darker rim closes round it and the water above it turns deep, as if the key were pushed into the water */
 button.mode[aria-pressed="true"] {
   transform: translateY(6px);
-  background-image: linear-gradient(180deg, color-mix(in srgb, var(--edge) 92%, #0e3a4a) 0, color-mix(in srgb, var(--edge) 45%, transparent) calc(var(--wave-h) + 6px), transparent calc(var(--wave-h) + 40px));
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--edge) 92%, var(--press-tint)) 0, color-mix(in srgb, var(--edge) 45%, transparent) calc(var(--tuck) + var(--wave-h) + 12px), transparent calc(var(--tuck) + var(--wave-h) + 46px));
   box-shadow: inset 0 0 0 4px var(--edge), inset 0 -7px 0 var(--edge), inset 9px 0 12px -6px color-mix(in srgb, var(--edge) 90%, transparent), inset -9px 0 12px -6px color-mix(in srgb, var(--edge) 90%, transparent);
 }
 button.mode:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; transform: none; filter: grayscale(.7); }
@@ -142,12 +154,12 @@ button.mode:focus-visible { outline: 3px solid var(--link); outline-offset: -6px
 
 /* empty state: the hint carries the instructions, so the matching status line under it is not repeated */
 #hint:not([hidden]) ~ footer #status { visibility: hidden; }
-.hint { display: flex; align-items: center; gap: 14px; padding: 8px 2px; font: 500 15.5px/1.45 var(--display); color: var(--ink); }
+.hint { display: flex; align-items: center; gap: 14px; padding: 8px 2px; font: 500 15.5px/1.45 var(--display); color: var(--strong); }
 .hint img { flex: none; width: 64px; height: 64px; border-radius: 16px; mix-blend-mode: multiply; }
 .reason { font-size: 13px; color: var(--muted); }
 #copy {
   width: 100%; min-height: 56px; padding: 0 16px; font: 700 16px/1.2 var(--display); border-radius: 14px; cursor: pointer;
-  background: var(--temp); color: var(--ink); border: 0; box-shadow: 0 5px 0 var(--temp-edge);
+  background: var(--temp); color: var(--on-temp); border: 0; box-shadow: 0 5px 0 var(--temp-edge);
 }
 #copy:active { transform: translateY(4px); box-shadow: inset 0 4px 9px rgba(8, 18, 22, .3); }
 
@@ -155,33 +167,33 @@ button.mode:focus-visible { outline: 3px solid var(--link); outline-offset: -6px
 #result { padding: 4px 2px 0; overflow-wrap: anywhere; font: 400 15.5px/1.6 var(--display); color: var(--fg); }
 #result:empty { display: none; }
 #result > :first-child { margin-top: 0; }
-#result > p:first-child { font: 500 17px/1.5 var(--display); color: var(--ink); margin-bottom: 14px; }
+#result > p:first-child { font: 500 17px/1.5 var(--display); color: var(--strong); margin-bottom: 14px; }
 #result p { margin: 0 0 12px; }
 #result h1, #result h2, #result h3, .turn .a h1, .turn .a h2, .turn .a h3 {
-  font: 700 16px/1.3 var(--display); color: var(--ink); margin: 22px 0 8px;
+  font: 700 16px/1.3 var(--display); color: var(--strong); margin: 22px 0 8px;
 }
 #result ul, .turn .a ul, .hentry .hsummary ul { list-style: none; margin: 0 0 14px; padding-left: 22px; }
 #result ul > li, .turn .a ul > li, .hentry .hsummary ul > li { position: relative; }
 /* bullets are small rising bubbles */
 #result ul > li::before, .turn .a ul > li::before, .hentry .hsummary ul > li::before {
   content: ""; position: absolute; left: -17px; top: .52em; width: 8px; height: 8px; border-radius: 50%;
-  border: 2px solid #4f7b8a; box-sizing: border-box;
+  border: 2px solid var(--bubble); box-sizing: border-box;
 }
 #result ol, .turn .a ol { margin: 0 0 14px; padding-left: 24px; }
 #result ol > li::marker { color: var(--muted); font-weight: 600; }
 #result li + li, .turn .a li + li { margin-top: 7px; }
-#result strong { color: var(--ink); }
+#result strong { color: var(--strong); }
 #result a, .turn .a a { color: var(--link); text-decoration-thickness: 1.5px; text-underline-offset: 2px; }
 #result hr { border: 0; height: 1px; background: var(--line); margin: 18px 0; }
-#result code, .turn .a code { background: rgba(16, 34, 42, .08); padding: 1px 5px; border-radius: 5px; font-size: .92em; }
-#result pre, .turn .a pre { background: rgba(16, 34, 42, .07); padding: 10px; border-radius: 10px; overflow-x: auto; }
+#result code, .turn .a code { background: var(--code); padding: 1px 5px; border-radius: 5px; font-size: .92em; }
+#result pre, .turn .a pre { background: var(--code); padding: 10px; border-radius: 10px; overflow-x: auto; }
 
 /* ---------- the conversation ---------- */
 #thread:empty { display: none; }
 #thread { display: flex; flex-direction: column; gap: 14px; padding-top: 4px; }
 .turn { display: flex; flex-direction: column; gap: 8px; }
 .turn .q {
-  align-self: flex-end; max-width: 88%; background: var(--q-bg); color: var(--on-ink);
+  align-self: flex-end; max-width: 88%; background: var(--q-bg); color: var(--on-deep);
   border-radius: 16px 16px 4px 16px; padding: 9px 14px; overflow-wrap: anywhere; font-size: 14px; line-height: 1.4;
 }
 .turn .a { font-family: var(--display); padding: 0 2px; overflow-wrap: anywhere; line-height: 1.55; }
@@ -194,69 +206,94 @@ button.mode:focus-visible { outline: 3px solid var(--link); outline-offset: -6px
 .error, .warn, .note { padding: 11px 14px; border-radius: 14px; font-size: 14px; line-height: 1.4; }
 .error { background: var(--err-bg); color: var(--err-fg); }
 .warn { background: var(--warn-bg); color: var(--warn-fg); }
-.note { background: rgba(255, 255, 255, .6); color: var(--ink); }
+.note { background: var(--note-bg); color: var(--strong); }
 footer { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 6px; }
 footer #status:empty { display: none; }
-footer .links { display: flex; flex-wrap: wrap; gap: 8px; white-space: nowrap; }
-footer .textbtn { border-color: var(--wave-edge); }
+/* the footer row: the save checkbox (when a summary is shown), then History and the gear, kept together on the right */
+footer .links { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.textbtn {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 14px; cursor: pointer;
+  font: 600 15px/1 var(--display); color: var(--strong); border: 1.5px solid var(--line); background: transparent;
+}
+.iconbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border-radius: 14px; cursor: pointer;
+  color: var(--strong); border: 1.5px solid var(--line); background: transparent;
+}
+.iconbtn svg { width: 22px; height: 22px; }
+.textbtn:hover, .iconbtn:hover { background: var(--hover); }
+.textbtn:active, .iconbtn:active { transform: translateY(1px); }
+.textbtn:focus-visible, .iconbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.savebox {
+  flex: 1 1 auto; display: inline-flex; align-items: center; gap: 9px; min-height: 44px; margin-right: auto; cursor: pointer;
+  font: 600 14px/1.25 var(--display); color: var(--strong);
+}
+.savebox input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--strong); cursor: pointer; }
+.savebox input:disabled { cursor: progress; }
+.savebox input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 /* working: a ripple spreading on the surface */
 body.busy #status::after {
   content: ""; display: inline-block; vertical-align: -2px; width: 12px; height: 12px; margin-left: 8px;
-  border: 2px solid #4f7b8a; border-radius: 50%; animation: ripple 1.1s ease-out infinite;
+  border: 2px solid var(--bubble); border-radius: 50%; animation: ripple 1.1s ease-out infinite;
 }
 @keyframes ripple { from { transform: scale(.35); opacity: 1; } to { transform: scale(1.25); opacity: 0; } }
 
 /* ---------- the deep water: question bar ---------- */
 #ask { flex: none; position: relative;
   display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 14px;
-  background: var(--ink); color: var(--on-ink);
+  background: var(--deep); color: var(--on-deep);
 }
-/* the deep water's own surface: the same wave profile, mirrored and flattened, so the two lines never rhyme */
-#ask::before {
-  content: ""; position: absolute; left: 0; right: 0; top: -13px; height: 14px; pointer-events: none; background: var(--ink);
-  transform: scaleX(-1);
+/* the deep water's own surface: the same waterline (::before fill, ::after its faint line, seen at night) */
+#ask::before, #ask::after {
+  content: ""; position: absolute; left: 0; right: 0; height: var(--wave-h); pointer-events: none;
   -webkit-mask: var(--wave) 0 0 / 100% 100% no-repeat;
   mask: var(--wave) 0 0 / 100% 100% no-repeat;
 }
+#ask::before { top: calc(1px - var(--wave-h)); background: var(--deep); z-index: 1; }
+#ask::after { top: calc(1px - var(--surface-w) - var(--wave-h)); background: var(--deep-line); z-index: 0; }
 #askform { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 10px; }
 #askinput {
   grid-column: 1 / -1; min-width: 0; height: 50px; padding: 0 14px; font: 15px var(--text); border-radius: 14px;
-  border: 0; background: var(--field); color: var(--ink);
+  border: 0; background: var(--ask-field); color: var(--ask-fg);
 }
-#askinput::placeholder { color: #566870; }
-#askinput:focus-visible { outline: 3px solid #7cc4dd; outline-offset: 2px; }
+#askinput::placeholder { color: var(--ask-placeholder); }
+#askinput:focus-visible { outline: 3px solid var(--deep-focus); outline-offset: 2px; }
 #askinput:read-only { box-shadow: inset 0 0 0 2px var(--rec); }
 #mic {
   /* fixed width and no transform in any state: the label changes (Speak, Wait..., Stop, Send...) and the button
      must not move or resize between the click that starts a recording and the click that stops it */
   display: flex; align-items: center; justify-content: center; gap: 8px; width: 172px; height: 56px; padding: 0 10px;
-  border-radius: 14px; border: 0; background: var(--field); color: var(--ink); cursor: pointer;
-  font: 700 17px/1 var(--display); box-shadow: 0 4px 0 #7d949c;
+  border-radius: 14px; border: 0; background: var(--ask-field); color: var(--ask-fg); cursor: pointer;
+  font: 700 17px/1 var(--display); box-shadow: 0 4px 0 var(--mic-ledge);
 }
 #mic[data-state="listening"], #mic[data-state="starting"] {
   background: var(--rec); color: var(--on-rec); box-shadow: 0 4px 0 var(--rec-edge); animation: rec 1.3s ease-in-out infinite;
 }
 #mic[data-state="stopping"] { background: var(--rec); color: var(--on-rec); box-shadow: 0 4px 0 var(--rec-edge); opacity: .8; animation: none; }
 #mic:disabled { opacity: .4; cursor: not-allowed; }
-#mic:focus-visible, #askgo:focus-visible, #micsetup:focus-visible { outline: 3px solid #7cc4dd; outline-offset: 3px; }
+#mic:focus-visible, #askgo:focus-visible, #micsetup:focus-visible { outline: 3px solid var(--deep-focus); outline-offset: 3px; }
 @keyframes rec { 0%, 100% { box-shadow: 0 4px 0 var(--rec-edge), 0 0 0 0 rgba(255, 110, 96, .6); } 50% { box-shadow: 0 4px 0 var(--rec-edge), 0 0 0 7px rgba(255, 110, 96, 0); } }
 #askgo {
-  height: 56px; font: 700 17px/1 var(--display); border-radius: 14px; border: 2px solid #5d7a85;
-  background: var(--ink-2); color: var(--on-ink); cursor: pointer;
+  height: 56px; font: 700 17px/1 var(--display); border-radius: 14px; border: 2px solid var(--deep-edge);
+  background: var(--deep-2); color: var(--on-deep); cursor: pointer;
 }
 #askgo:disabled { opacity: .45; cursor: not-allowed; }
 #askgo:active:not(:disabled) { transform: translateY(2px); }
-.micmsg { font-size: 13px; line-height: 1.4; color: var(--ink-muted); overflow-wrap: anywhere; }
+.micmsg { font-size: 13px; line-height: 1.4; color: var(--deep-muted); overflow-wrap: anywhere; }
 .micmsg.err { color: var(--err-fg); background: var(--err-bg); padding: 9px 12px; border-radius: 14px; font-size: 14px; }
 #ask .error { padding: 9px 12px; }
 #micsetup {
   align-self: flex-start; min-height: 44px; padding: 0 16px; font: 700 15px/1 var(--display); border-radius: 14px; cursor: pointer;
-  background: var(--field); color: var(--ink); border: 0; box-shadow: 0 4px 0 #7d949c;
+  background: var(--ask-field); color: var(--ask-fg); border: 0; box-shadow: 0 4px 0 var(--mic-ledge);
 }
 @media (prefers-reduced-motion: reduce) {
   button.mode { transition: none; }
   body.busy #status::after { animation: none; }
   #mic[data-state="listening"], #mic[data-state="starting"] { animation: none; }
+}
+/* at night the duck in the empty state is shown as the app tile it is, like the brand mark (multiplying it onto night
+   water would sink its black water and white duck into one dark block) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .hint img { mix-blend-mode: normal; }
 }
 /* ---------- history view: replaces the summary and the question bar until Back; #page keeps its scroll position (panel.js) ---------- */
 body.history-open #page, body.history-open #ask { display: none; }
@@ -265,10 +302,10 @@ body.history-open #page, body.history-open #ask { display: none; }
   position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 12px 0 12px;
   background: var(--air); border-bottom: 1.5px solid var(--line);
 }
-#historyheading { margin: 0; font: 700 19px/1.2 var(--display); letter-spacing: -0.01em; color: var(--ink); }
+#historyheading { margin: 0; font: 700 19px/1.2 var(--display); letter-spacing: -0.01em; color: var(--strong); }
 #historyback, #historymore {
   display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 14px; cursor: pointer;
-  font: 600 15px/1 var(--display); color: var(--ink); border: 1.5px solid var(--line); background: var(--card);
+  font: 600 15px/1 var(--display); color: var(--strong); border: 1.5px solid var(--line); background: var(--card);
 }
 #historyback:hover, #historymore:hover:not(:disabled) { background: var(--field); }
 #historymore { align-self: center; }
@@ -278,7 +315,7 @@ body.history-open #page, body.history-open #ask { display: none; }
 #historylist { display: flex; flex-direction: column; }
 /* entries are read like the answer: straight on the page, divided by a hairline, no cards */
 .hentry { padding: 16px 2px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; font: 400 15px/1.55 var(--display); }
-.hentry .htitle { display: block; font: 600 16.5px/1.3 var(--display); letter-spacing: -0.01em; color: var(--ink); }
+.hentry .htitle { display: block; font: 600 16.5px/1.3 var(--display); letter-spacing: -0.01em; color: var(--strong); }
 .hentry a.htitle { text-decoration: none; }
 .hentry a.htitle:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
 .hentry .hchannel { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
@@ -290,8 +327,8 @@ body.history-open #page, body.history-open #ask { display: none; }
 .hentry .hsummary ul { margin: 0 0 8px; padding-left: 22px; }
 .hentry .hsummary li + li { margin-top: 4px; }
 .hentry .hsummary a { color: var(--link); }
-.hentry .hsummary code { background: rgba(16, 34, 42, .08); padding: 1px 5px; border-radius: 5px; }
-.hentry .hsummary pre { background: rgba(16, 34, 42, .07); padding: 10px; border-radius: 10px; overflow-x: auto; }
+.hentry .hsummary code { background: var(--code); padding: 1px 5px; border-radius: 5px; }
+.hentry .hsummary pre { background: var(--code); padding: 10px; border-radius: 10px; overflow-x: auto; }
 #historyempty { padding: 18px 2px; font-size: 15px; }
 #historyfoot { display: flex; flex-direction: column; gap: 8px; align-items: center; padding-top: 12px; }
 [hidden] { display: none !important; }

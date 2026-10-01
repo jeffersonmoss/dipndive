@@ -204,7 +204,9 @@ class Channel(unittest.TestCase):
 ARTICLE_PAGE = "<html><head><title>T</title>%s</head><body><article>%s</article></body></html>"
 
 
-class Server(Base):
+class FakeModels(Base):
+    """Recording fake Claude and Codex binaries for the server tests below (no tests of its own)."""
+
     def setUp(self):
         super().setUp()
         self.saved_codex, self.saved_verified = models.CODEX, models._features_verified
@@ -226,18 +228,23 @@ class Server(Base):
         self.assertTrue(self.svc.wait_idle(30))
         return j
 
+
+class Server(FakeModels):
     def test_each_summary_mode_writes_one_entry(self):
+        ids = []
         for i, (mode, label, result) in enumerate([("claude-dip", "Claude Dip", "answer 1"), ("claude-dive", "Claude Dive", "answer 2"),
                                                    ("codex-dip", "Codex Dip", "codex answer 1"), ("codex-dive", "Codex Dive", "codex answer 2")]):
             j = self.run_job(mode, f"r{i}", path=f"/p{i}")
-            self.assertEqual((j["state"], j["result_markdown"]), ("done", result))
+            self.assertEqual((j["state"], j["result_markdown"], j["history_saved"]), ("done", result, True))
+            ids.append(j["job_id"])
         t = read_log(LOG)
         es = entries(t)
         self.assertEqual(len(es), 4)
         for e, (label, result, i) in zip(es, [("Claude Dip", "answer 1", 0), ("Claude Dive", "answer 2", 1),
                                               ("Codex Dip", "codex answer 1", 2), ("Codex Dive", "codex answer 2", 3)]):
-            self.assertRegex(e, r"^## Art\n\n\d{4}-\d\d-\d\d \d\d:\d\d \| %s \| \[%s/p%d\]\(<%s/p%d>\)\n\n%s$"
-                             % (label, re.escape(self.base), i, re.escape(self.base), i, re.escape(result)))
+            # the job id rides in an HTML comment right under the date line
+            self.assertRegex(e, r"^## Art\n\n\d{4}-\d\d-\d\d \d\d:\d\d \| %s \| \[%s/p%d\]\(<%s/p%d>\)\n<!-- dipdive-job: %s -->\n\n%s$"
+                             % (label, re.escape(self.base), i, re.escape(self.base), i, ids[i], re.escape(result)))
 
     def test_ask_source_and_error_jobs_write_nothing(self):
         self.run_job("source", "s1")
@@ -462,6 +469,187 @@ class HistoryRead(Base):
         self.assertEqual(j["entries"][0]["title"], "Title 29")
         self.assertTrue(0 < len(j["entries"]) < 30)
         self.assertEqual([e["title"] for e in j["entries"]], [f"Title {i}" for i in range(29, 29 - len(j["entries"]), -1)])
+
+
+class SaveToggle(Base):
+    """The panel's "Save this Dip to history" checkbox: POST /history/<job id>/remove and /restore."""
+
+    def setUp(self):
+        super().setUp()
+        self.trash = os.path.join(rec_dir(), "removed")
+
+    def seed(self, n, path=LOG):
+        ids = [f"{i:032x}" for i in range(1, n + 1)]
+        for i, jid in enumerate(ids):
+            historylog.append(f"Title {i}", "claude-dip", f"https://v.test/{i}", f"Summary {i}\n\n- point {i}", path=path, job_id=jid)
+        return ids
+
+    def test_the_id_is_an_invisible_comment_and_reads_back_with_the_entry(self):
+        jid = "ab" * 16
+        e = historylog.format_entry("T", "claude-dive", "https://v.test/x", "body", job_id=jid)
+        self.assertIn(f") \n".strip() + f"\n<!-- dipdive-job: {jid} -->\n\nbody\n\n---\n\n", e)
+        self.assertNotIn("dipdive-job", historylog.format_entry("T", "claude-dive", "https://v.test/x", "body", job_id="not-hex"))
+        historylog.append("Old", "claude-dip", "https://v.test/o", "old entry without an id", path=LOG)
+        historylog.append("New", "claude-dive", "https://v.test/n", "new", path=LOG, job_id=jid)
+        es = self.req("GET", "/history")[1]["entries"]
+        self.assertEqual([(x["title"], x["job_id"], x["summary"]) for x in es], [("New", jid, "new"), ("Old", "", "old entry without an id")])
+
+    def test_remove_then_restore_gives_back_the_exact_file_wherever_the_entry_was(self):
+        ids = self.seed(4)
+        original = read_log(LOG)
+        for jid in (ids[0], ids[2], ids[3]):                          # first (under the file heading), middle, last
+            self.assertFalse(historylog.remove_entry(jid, self.trash, LOG))
+            t = read_log(LOG)
+            self.assertNotIn(jid, t)
+            self.assertTrue(t.startswith("# Dip'n'Dive Log\n\n## "))
+            self.assertEqual(len(entries(t)), 3)
+            self.assertFalse(historylog.is_saved(jid, self.trash))
+            self.assertTrue(historylog.restore_entry(jid, self.trash, LOG))
+            self.assertEqual(read_log(LOG), original)
+            self.assertTrue(historylog.is_saved(jid, self.trash))
+
+    def test_restore_keeps_order_when_neighbours_move_and_new_entries_arrive(self):
+        ids = self.seed(3)
+        historylog.remove_entry(ids[1], self.trash, LOG)
+        historylog.remove_entry(ids[2], self.trash, LOG)              # the entry that followed it goes too
+        historylog.append("Later", "codex-dip", "https://v.test/l", "later", path=LOG, job_id="f" * 32)
+        historylog.restore_entry(ids[1], self.trash, LOG)             # its successor is gone: it goes back at the bottom
+        historylog.restore_entry(ids[2], self.trash, LOG)             # its successor was the end of the log: the bottom too
+        titles = [e["title"] for e in historylog.read_entries(LOG)]
+        self.assertEqual(titles, ["Title 0", "Later", "Title 1", "Title 2"])
+        ids2 = self.seed(2, path=os.path.join(os.path.dirname(self.trash), "b.md"))
+        p2 = os.path.join(os.path.dirname(self.trash), "b.md")
+        historylog.remove_entry(ids2[0], self.trash, p2)
+        historylog.append("Arrived", "codex-dip", "https://v.test/a", "x", path=p2, job_id="e" * 32)
+        historylog.restore_entry(ids2[0], self.trash, p2)            # its successor is still there: back in its place
+        self.assertEqual([e["title"] for e in historylog.read_entries(p2)], ["Title 0", "Title 1", "Arrived"])
+
+    def test_idempotent_and_unknown_ids(self):
+        ids = self.seed(2)
+        self.assertFalse(historylog.remove_entry(ids[0], self.trash, LOG))
+        self.assertFalse(historylog.remove_entry(ids[0], self.trash, LOG))
+        self.assertEqual(len(entries(read_log(LOG))), 1)
+        self.assertTrue(historylog.restore_entry(ids[0], self.trash, LOG))
+        self.assertTrue(historylog.restore_entry(ids[0], self.trash, LOG))
+        self.assertTrue(historylog.restore_entry(ids[1], self.trash, LOG))  # never removed: already saved
+        self.assertEqual(len(entries(read_log(LOG))), 2)
+        for bad in ("9" * 32, "../../etc/passwd", "", "A" * 32):
+            with self.assertRaises(historylog.NoSuchEntry):
+                historylog.remove_entry(bad, self.trash, LOG)
+            with self.assertRaises(historylog.NoSuchEntry):
+                historylog.restore_entry(bad, self.trash, LOG)
+        os.remove(LOG)
+        with self.assertRaises(historylog.NoSuchEntry):
+            historylog.remove_entry(ids[0], self.trash, LOG)
+
+    def test_fences_rules_and_a_quoted_marker_in_a_summary_do_not_confuse_it(self):
+        jid, other = "1" * 32, "2" * 32
+        tricky = f"```\n---\n<!-- dipdive-job: {other} -->\n```\n\n---\n\n<!-- dipdive-job: {other} -->"
+        historylog.append("Tricky", "claude-dip", "https://v.test/t", tricky, path=LOG, job_id=jid)
+        historylog.append("Other", "claude-dip", "https://v.test/o", "plain", path=LOG, job_id=other)
+        original = read_log(LOG)
+        historylog.remove_entry(other, self.trash, LOG)
+        self.assertEqual([e["title"] for e in historylog.read_entries(LOG)], ["Tricky"])
+        self.assertIn(tricky.replace("\n---\n\n<!--", "\n\\---\n\n<!--"), read_log(LOG))
+        historylog.restore_entry(other, self.trash, LOG)
+        historylog.remove_entry(jid, self.trash, LOG)
+        self.assertEqual([e["title"] for e in historylog.read_entries(LOG)], ["Other"])
+        historylog.restore_entry(jid, self.trash, LOG)
+        self.assertEqual(read_log(LOG), original)
+
+    def test_toggling_while_jobs_append_from_threads_loses_nothing(self):
+        ids = self.seed(3)
+        errors = []
+
+        def appender(k):
+            try:
+                for n in range(8):
+                    historylog.append(f"T{k}-{n}", "codex-dive", f"https://v.test/{k}/{n}", "s", path=LOG, job_id=f"{k + 0xa0:02x}{n:030x}")
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+        ts = [threading.Thread(target=appender, args=(k,)) for k in range(4)]
+        for t in ts:
+            t.start()
+        for _ in range(10):
+            historylog.remove_entry(ids[1], self.trash, LOG)
+            historylog.restore_entry(ids[1], self.trash, LOG)
+        for t in ts:
+            t.join()
+        self.assertEqual(errors, [])
+        es = historylog.read_entries(LOG)
+        self.assertEqual(len(es), 3 + 32)
+        self.assertEqual([e["title"] for e in es[:2]], ["Title 0", "Title 1"])
+        self.assertEqual(len({e["job_id"] for e in es}), 35)
+        self.assertEqual([n for n in os.listdir(os.path.dirname(LOG)) if n.endswith(".tmp")], [], "no temp file left behind")
+
+
+class SaveToggleServer(FakeModels):
+    def test_uncheck_and_check_through_the_companion(self):
+        j = self.run_job("claude-dip", "s1")
+        jid = j["job_id"]
+        self.assertTrue(j["history_saved"])
+        original = read_log(LOG)
+        self.assertIn(f"<!-- dipdive-job: {jid} -->", original)
+        for _ in range(2):  # idempotent
+            c, r = self.req("POST", f"/history/{jid}/remove", {})
+            self.assertEqual((c, r["saved"], r["job_id"]), (200, False, jid))
+        self.assertFalse(os.path.exists(LOG) and jid in read_log(LOG))
+        self.assertEqual(self.req("GET", "/history")[1]["total"], 0)
+        self.assertFalse(self.req("GET", "/jobs/" + jid)[1]["history_saved"])
+        for _ in range(2):
+            c, r = self.req("POST", f"/history/{jid}/restore", {})
+            self.assertEqual((c, r["saved"]), (200, True))
+        self.assertEqual(read_log(LOG), original)
+        self.assertTrue(self.req("GET", "/jobs/" + jid)[1]["history_saved"])
+
+    def test_auth_origin_and_bad_ids(self):
+        jid = self.run_job("claude-dip", "s2")["job_id"]
+        self.assertEqual(self.req("POST", f"/history/{jid}/remove", {}, auth=False)[0], 401)
+        self.assertEqual(self.req("POST", f"/history/{jid}/remove", {}, headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.req("POST", f"/history/{jid}/remove", {}, headers={"Host": "evil.example"})[0], 403)
+        self.assertIn(jid, read_log(LOG), "nothing was removed by a refused request")
+        self.assertEqual(self.req("POST", f"/history/{'9' * 32}/remove", {})[1]["error_code"], "no_such_entry")
+        for bad in (f"/history/{jid}/delete", f"/history/{jid.upper()}/remove", "/history/abc/remove", f"/history/{jid}/remove/x"):
+            self.assertEqual(self.req("POST", bad, {})[0], 404, bad)
+        self.assertEqual(self.req("GET", f"/history/{jid}/remove")[0], 404, "only POST changes the log")
+        a = self.run_job("claude-ask", "s3", question="why?")
+        self.assertIsNone(a["history_saved"])
+        c, r = self.req("POST", f"/history/{a['job_id']}/remove", {})
+        self.assertEqual((c, r["error_code"]), (404, "not_logged"))
+
+    def test_a_cache_hit_controls_the_entry_of_the_job_that_made_the_result(self):
+        j1 = self.run_job("claude-dip", "c1")
+        self.svc.by_prekey.clear()
+        j2 = self.run_job("claude-dip", "c2")
+        self.assertNotEqual(j1["job_id"], j2["job_id"])
+        self.assertTrue(j2["history_saved"])
+        self.assertEqual(self.req("POST", f"/history/{j2['job_id']}/remove", {})[0], 200)
+        self.assertFalse(self.req("GET", "/jobs/" + j1["job_id"])[1]["history_saved"])
+        self.assertEqual(len(historylog.read_entries(LOG)), 0)
+        self.assertEqual(self.req("POST", f"/history/{j1['job_id']}/restore", {})[0], 200)
+        self.assertTrue(self.req("GET", "/jobs/" + j2["job_id"])[1]["history_saved"])
+
+    def test_a_job_whose_log_write_failed_has_no_checkbox_state(self):
+        os.environ["DIPDIVE_LOG_PATH"] = os.path.join(os.path.dirname(LOG), "missing-dir-blocker")
+        with open(os.environ["DIPDIVE_LOG_PATH"], "w") as f:
+            f.write("x")
+        os.environ["DIPDIVE_LOG_PATH"] = os.path.join(os.environ["DIPDIVE_LOG_PATH"], "log.md")
+        j = self.run_job("claude-dip", "f1")
+        self.assertEqual((j["state"], j["history_saved"]), ("done", None))
+        self.assertEqual(self.req("POST", f"/history/{j['job_id']}/remove", {})[1]["error_code"], "not_logged")
+
+    def test_unreadable_log_is_503_and_clear_forgets_removed_entries_but_not_the_log(self):
+        jid = self.run_job("claude-dip", "u1")["job_id"]
+        self.assertEqual(self.req("POST", f"/history/{jid}/remove", {})[0], 200)
+        self.assertTrue(os.listdir(self.svc.removed_dir))
+        self.run_job("claude-dive", "u2", path="/b")
+        before = read_log(LOG)
+        self.assertEqual(self.req("POST", "/clear", {})[0], 200)
+        self.assertFalse(os.path.exists(self.svc.removed_dir))
+        self.assertEqual(read_log(LOG), before)
+        os.environ["DIPDIVE_LOG_PATH"] = os.path.dirname(LOG)
+        c, r = self.req("POST", f"/history/{'1' * 32}/remove", {})
+        self.assertEqual((c, r["error_code"]), (503, "log_unreadable"))
 
 
 def joblog_dir():
