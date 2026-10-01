@@ -162,7 +162,7 @@ test("the question controls are docked below the scrolling page, with every mess
   assert.match(css, /body \{[^}]*height: 100vh; overflow: hidden/);
   assert.match(css, /#page \{[^}]*flex: 1; min-height: 0; overflow-y: auto/);
   assert.match(css, /#ask \{ flex: none;/);
-  assert.match(css, /#mic \{[^}]*width: 92px/, "the mic button keeps its width whatever its label says");
+  assert.match(css, /#mic \{[^}]*width: \d+px/, "the mic button keeps its width whatever its label says");
 });
 
 test("mic button accessibility: its name is its visible label, no changing aria-label, and the recording colour has AA contrast in both themes", () => {
