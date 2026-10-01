@@ -9,7 +9,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import joblog
+from . import historylog, joblog
 from .ask import AskError
 from .service import LAUNCHD_LOGS, MODES, Service
 from .tmp import sweep_stale
@@ -138,9 +138,35 @@ def make_handler(svc: Service, token: str):
                     return self._send(*svc.get_source_for_job(jid))
                 if u.path == "/health":
                     return self._send(200, svc.health())
+                if u.path == "/history":
+                    return self._history(u.query)
             except Exception as e:
                 return self._send(500, {"error_code": "internal_error", "error_message": type(e).__name__})
             self._send(404, {"error_code": "not_found"})
+
+        def _history(self, query):
+            """GET /history?limit=20&before=<position>: log entries newest first (see historylog.read_page)."""
+            q = urllib.parse.parse_qs(query, keep_blank_values=True)
+
+            def num(name, default, lo, hi):
+                v = (q.get(name) or [None])[0]
+                if v is None:
+                    return default
+                if not re.fullmatch(r"[0-9]{1,9}", v) or not lo <= int(v) <= hi:
+                    raise ValueError(name)
+                return int(v)
+            try:
+                limit = num("limit", historylog.PAGE_DEFAULT, 1, historylog.PAGE_MAX)
+                before = num("before", None, 0, 10**9)
+            except ValueError as e:
+                return self._send(400, {"error_code": "bad_request",
+                                        "error_message": f"{e.args[0]} must be a whole number"
+                                                         f"{' from 1 to %d' % historylog.PAGE_MAX if e.args[0] == 'limit' else ''}"})
+            try:
+                page = historylog.read_page(before, limit)
+            except historylog.LogUnreadable as e:
+                return self._send(503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"})
+            self._send(200, page)
 
         def do_POST(self):
             if not self._gate():

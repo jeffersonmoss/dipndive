@@ -27,7 +27,7 @@
   <div id="error" class="error" role="alert" hidden></div>
   <footer>
     <div id="status" class="muted"></div>
-    <div class="links"><a id="clear" href="#">Clear history</a> <a id="options" href="#">Options</a></div>
+    <div class="links"><a id="clear" href="#">Clear history</a> <a id="historylink" href="#">History</a> <a id="options" href="#">Options</a></div>
   </footer>
   </div>
   <section id="ask" aria-label="Ask a question about this source" hidden>
@@ -42,6 +42,19 @@
       </button>
       <button id="askgo" type="submit">Ask</button>
     </form>
+  </section>
+  <section id="historyview" aria-label="History" hidden>
+    <div id="historybar">
+      <button id="historyback" type="button">&larr; Back</button>
+      <h1 id="historyheading">History</h1>
+    </div>
+    <div id="historylist" role="list"></div>
+    <div id="historyempty" class="muted" hidden>Nothing has been logged yet. A Dip or Dive summary is added here every time one finishes.</div>
+    <div id="historyerror" class="error" role="alert" hidden></div>
+    <div id="historyfoot">
+      <div id="historystatus" class="muted" role="status"></div>
+      <button id="historymore" type="button" hidden>Show older</button>
+    </div>
   </section>
   <script type="module" src="panel.js"></script>
 </body>

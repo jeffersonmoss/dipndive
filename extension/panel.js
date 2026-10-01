@@ -4,6 +4,7 @@ import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
+import { HistoryBrowser, entryHtml } from "./lib/history.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
@@ -168,6 +169,52 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.p
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
 $("clear").addEventListener("click", (e) => { e.preventDefault(); ctl.clearHistory(); });
+
+// ---------- history view ----------
+// Entries already in the DOM stay (Show older only appends), so the list keeps its scroll position while a page loads.
+let shownEntries = 0;
+let pageScroll = 0;
+function renderHistory(h) {
+  document.body.classList.toggle("history-open", h.open);
+  $("historyview").hidden = !h.open;
+  if (!h.open) { shownEntries = 0; $("historylist").replaceChildren(); return; }
+  const list = $("historylist");
+  if (h.entries.length < shownEntries) { list.replaceChildren(); shownEntries = 0; }
+  for (; shownEntries < h.entries.length; shownEntries++) {
+    const el = document.createElement("article");
+    el.className = "hentry";
+    el.setAttribute("role", "listitem");
+    el.innerHTML = entryHtml(h.entries[shownEntries]);
+    list.appendChild(el);
+  }
+  $("historyempty").hidden = !(h.loaded && h.entries.length === 0);
+  $("historyerror").hidden = !h.error;
+  $("historyerror").textContent = h.error || "";
+  $("historystatus").textContent = h.loading ? "Loading..." : h.loaded && h.entries.length ? `Showing ${h.entries.length} of ${h.total}` : "";
+  const more = $("historymore");
+  more.hidden = !(h.error ? true : h.loaded && h.nextBefore !== null);
+  more.disabled = h.loading;
+  more.textContent = h.error ? "Try again" : "Show older";
+}
+
+const historyView = new HistoryBrowser({
+  fetch: (...a) => fetch(...a),
+  getCfg: () => ctl.cfg,
+  onState: renderHistory,
+});
+$("historylink").addEventListener("click", (e) => {
+  e.preventDefault();
+  ctl.pauseMic();  // the microphone controls are hidden while History is open: do not leave a recording running behind them
+  pageScroll = $("page").scrollTop;
+  historyView.open();
+  $("historyview").scrollTop = 0;
+  $("historyback").focus({ focusVisible: false });  // where Back is, for a screen reader; no ring for a mouse click
+});
+$("historyback").addEventListener("click", () => {
+  historyView.back();
+  $("page").scrollTop = pageScroll;
+});
+$("historymore").addEventListener("click", () => historyView.more());
 $("options").addEventListener("click", (e) => {
   e.preventDefault();
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();

@@ -350,6 +350,120 @@ class Server(Base):
         self.assertEqual((h["log_path"], h["log_writable"]), (os.path.join(LOG, "inside-a-file.md"), False))
 
 
+class HistoryRead(Base):
+    """GET /history: the log parsed back into entries, newest first, paged with a stable cursor."""
+
+    def seed(self, n, **kw):
+        for i in range(n):
+            historylog.append(f"Title {i}", ["claude-dip", "claude-dive", "codex-dip", "codex-dive"][i % 4], f"https://v.test/{i}",
+                              f"Summary {i}\n\n- point {i}", path=LOG, channel=kw.get("channel", f"Chan {i}" if i % 2 == 0 else None))
+
+    def test_requires_the_bearer_token_and_a_loopback_host(self):
+        self.seed(1)
+        self.assertEqual(self.req("GET", "/history", auth=False)[0], 401)
+        self.assertEqual(self.req("GET", "/history", headers={"Authorization": "Bearer nope"}, auth=False)[0], 401)
+        self.assertEqual(self.req("GET", "/history", headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.req("GET", "/history", headers={"Host": "evil.example"})[0], 403)
+        self.assertEqual(self.req("GET", "/history", headers={"Origin": "chrome-extension://abc"})[0], 200)
+        self.assertEqual(self.req("POST", "/history", {})[0], 404)
+
+    def test_missing_log_is_an_empty_list(self):
+        c, j = self.req("GET", "/history")
+        self.assertEqual((c, j["entries"], j["total"], j["next_before"]), (200, [], 0, None))
+
+    def test_entries_come_back_newest_first_with_every_field(self):
+        self.seed(3)
+        c, j = self.req("GET", "/history")
+        self.assertEqual(c, 200)
+        self.assertEqual([e["title"] for e in j["entries"]], ["Title 2", "Title 1", "Title 0"])
+        e = j["entries"][0]
+        self.assertEqual((e["channel"], e["mode"], e["mode_label"], e["url"], e["summary"], e["index"]),
+                         ("Chan 2", "codex-dip", "Codex Dip", "https://v.test/2", "Summary 2\n\n- point 2", 2))
+        self.assertRegex(e["date"], r"^\d{4}-\d\d-\d\d$")
+        self.assertRegex(e["time"], r"^\d\d:\d\d$")
+        self.assertEqual(j["entries"][1]["channel"], "")
+        self.assertEqual((j["total"], j["next_before"]), (3, None))
+
+    def test_paging_with_a_cursor_never_repeats_or_skips_even_while_entries_arrive(self):
+        self.seed(45)
+        c, p1 = self.req("GET", "/history")
+        self.assertEqual((len(p1["entries"]), p1["limit"], p1["total"], p1["next_before"]), (20, 20, 45, 25))
+        self.assertEqual(p1["entries"][0]["title"], "Title 44")
+        self.seed(3)  # three more finish while the reader is looking at page 1
+        c, p2 = self.req("GET", f"/history?before={p1['next_before']}")
+        self.assertEqual([e["title"] for e in p2["entries"]], [f"Title {i}" for i in range(24, 4, -1)])
+        c, p3 = self.req("GET", f"/history?before={p2['next_before']}")
+        self.assertEqual([e["title"] for e in p3["entries"]], [f"Title {i}" for i in range(4, -1, -1)])
+        self.assertIsNone(p3["next_before"])
+        c, small = self.req("GET", "/history?limit=2")
+        self.assertEqual([e["index"] for e in small["entries"]], [47, 46])
+        self.assertEqual(small["next_before"], 46)
+
+    def test_bad_parameters_are_400(self):
+        self.seed(2)
+        for q in ("limit=0", "limit=101", "limit=-1", "limit=abc", "limit=", "before=-1", "before=x", "before=1.5", "limit=2&before=%20"):
+            self.assertEqual(self.req("GET", "/history?" + q)[0], 400, q)
+        self.assertEqual(self.req("GET", "/history?before=0")[1]["entries"], [])
+        self.assertEqual(len(self.req("GET", "/history?before=99999")[1]["entries"]), 2)  # a cursor past the end is the newest page
+
+    def test_unreadable_log_is_503_not_500_and_the_path_is_not_leaked(self):
+        os.environ["DIPDIVE_LOG_PATH"] = os.path.dirname(LOG)  # a directory where the file should be
+        c, j = self.req("GET", "/history")
+        self.assertEqual((c, j["error_code"]), (503, "log_unreadable"))
+        self.assertNotIn(os.path.dirname(LOG), json.dumps(j))
+
+    def test_damaged_and_hand_edited_log_is_tolerated(self):
+        good = historylog.format_entry("Good one", "claude-dip", "https://v.test/g", "ok summary")
+        junk = ("# Dip'n'Dive Log\n\nsome note typed by hand\n\n---\n\n## No meta line here\n\njust text\n\n---\n\n"
+                "## Bad stamp\n\n2026-13 | x | not a link\n\n---\n\n---\n\n---\n\n"
+                + good + "## Half an entry with no separator\n\nChannel: C\n\n2026-10-01 09:00 | Claude Dip | [u](<https://v.test/h>)\nsummary but the file was cut")
+        with open(LOG, "wb") as f:
+            f.write(junk.encode() + b"\xff\xfe broken utf8 \n")
+        c, j = self.req("GET", "/history")
+        self.assertEqual(c, 200)
+        self.assertEqual([e["title"] for e in j["entries"]], ["Half an entry with no separator", "Good one"])
+        self.assertTrue(j["entries"][0]["summary"].startswith("summary but the file was cut"))
+        for text in ("", "\n\n\n", "not markdown at all", "---", "\x00\x00\x00"):
+            with open(LOG, "w") as f:
+                f.write(text)
+            c, j = self.req("GET", "/history")
+            self.assertEqual((c, j["entries"]), (200, []), repr(text))
+
+    def test_round_trip_of_awkward_summaries_titles_and_urls(self):
+        awk = "Intro\n\n---\n\n## A heading inside\n\n```\n---\ncode with a rule\n```\n\n- - -\n\n  ---  \n\ntail [x](https://a.test) <b>raw</b>"
+        historylog.append("# Title with [brackets] and\nnewline", "codex-dive", "https://v.test/a?x=1&y=<2>[3]\\", awk, path=LOG, channel="  Chan\nnel  ")
+        historylog.append("Second", "claude-dive", "https://v.test/b", "```\nopen fence never closed", path=LOG)
+        historylog.append("Third", "claude-dip", "https://v.test/c", "after", path=LOG)
+        es = self.req("GET", "/history")[1]["entries"]
+        self.assertEqual([e["title"] for e in es], ["Third", "Second", "Title with [brackets] and newline"])
+        e = es[2]
+        self.assertEqual((e["channel"], e["url"], e["mode"]), ("Chan nel", "https://v.test/a?x=1&y=<2>[3]\\", "codex-dive"))
+        self.assertEqual(e["summary"], awk)  # rules unescaped, the in-fence line untouched, nothing split the entry
+        self.assertEqual(es[1]["summary"], "```\nopen fence never closed\n```")
+
+    def test_a_real_job_shows_up_and_clear_history_leaves_it_there(self):
+        models.CLAUDE = fake_claude()
+        c, r = self.submit("claude-dive", "h1", "/h")
+        self.assertIn(c, (200, 202))
+        self.wait(r["job_id"])
+        self.assertTrue(self.svc.wait_idle(30))
+        self.req("POST", "/clear", {})
+        j = self.req("GET", "/history")[1]
+        self.assertEqual((j["total"], j["entries"][0]["mode_label"], j["entries"][0]["summary"]), (1, "Claude Dive", "fake summary"))
+
+    def test_a_log_over_the_read_cap_is_read_from_its_tail(self):
+        self.seed(30)
+        old = historylog.MAX_READ
+        try:
+            historylog.MAX_READ = os.path.getsize(LOG) // 2
+            j = self.req("GET", "/history?limit=100")[1]
+        finally:
+            historylog.MAX_READ = old
+        self.assertEqual(j["entries"][0]["title"], "Title 29")
+        self.assertTrue(0 < len(j["entries"]) < 30)
+        self.assertEqual([e["title"] for e in j["entries"]], [f"Title {i}" for i in range(29, 29 - len(j["entries"]), -1)])
+
+
 def joblog_dir():
     from dipdive import joblog
     return joblog.LOG_DIR
