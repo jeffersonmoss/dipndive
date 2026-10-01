@@ -187,7 +187,10 @@ export class Controller {
     if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) this.clearedElsewhere(cg);
     // A save box was changed in some window (maybe for this very entry, or one this summary shares through the result
     // cache): ask the companion again rather than trust what this panel showed.
-    if (changes.savedChange && changes.savedChange.newValue && typeof this.s.saved === "boolean") this.refreshSaved();
+    if (changes.savedChange && changes.savedChange.newValue && typeof this.s.saved === "boolean") {
+      if (this.s.savingSaved) this.noteIncoming(changes.savedChange.newValue.rev);  // kept for when this panel's own answer arrives
+      this.refreshSaved();
+    }
     if (changes.base || changes.token) {
       this.d.storage.get(["base", "token"]).then((st) => {
         this.cfg = { base: st.base, token: st.token };
@@ -388,7 +391,7 @@ export class Controller {
     } catch (e) { this.failure(gen, e); return; }
     if (res.ok && this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     if (res.ok) this.resetAsk();  // the Q&A history goes too
-    this.resetView({ status: res.ok ? "History cleared." : "Could not clear history.", busy: false });
+    this.resetView({ status: res.ok ? (res.localError ? `History cleared. Could not reset this browser's panel state: ${res.localError}` : "History cleared.") : "Could not clear history.", busy: false });
   }
 
   // The "Save this Dip to history" checkbox. Unticked: the companion takes this summary's entry out of the history log
@@ -403,6 +406,7 @@ export class Controller {
     if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
     const gen = this.selGen, was = this.s.saved;
     this.savedSeq = (this.savedSeq || 0) + 1;  // a refresh that started before this change must not overwrite its result
+    this.incoming = null;                      // revisions heard from other windows while this change is on its way (noteIncoming)
     this.emit({ saved: !!on, savingSaved: true, savedUnknown: false });
     const still = () => gen === this.selGen && this.s.jobId === jobId;
     let r;
@@ -415,6 +419,10 @@ export class Controller {
     if (!still()) return false;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json); return false; }
     if (r.status === 200 && typeof r.json.saved === "boolean") {
+      // Another window (or a GET) may have shown a newer log revision while this answer was on its way. This answer is
+      // then older than what is known: do not show it as the result, find out what the log says now.
+      if (this.incomingNewerThan(r.json.history_rev)) return this.reconcileNewer(jobId, on, still, r.json);
+      this.incoming = null;
       this.noteRev(r.json.history_rev);
       this.emit({ saved: r.json.saved, savingSaved: false, savedUnknown: false, status: r.json.saved ? "Saved to history." : "Removed from history." });
       await this.announceSaved(jobId, r.json.saved, r.json.history_rev);
@@ -427,7 +435,44 @@ export class Controller {
       : r.status === 404 ? "This summary is no longer in the history log."
       : r.status === 409 && r.json.error_code === "entry_ambiguous" ? "This entry was edited by hand in the log, so it was left as it is."
       : "The history log could not be changed on the iMac.";
+    const hadIncoming = this.incoming !== null;
+    this.incoming = null;
     this.emit({ saved: r.status === 404 ? null : was, savingSaved: false, savedUnknown: false, status: why });
+    if (hadIncoming && r.status !== 404) await this.refreshSaved();  // a refresh that was held back while this change ran
+    return false;
+  }
+
+  // While this panel's own change is on its way, answers about the box that arrive from elsewhere (another window's
+  // broadcast, a GET on focus) are not applied, but the newest revision they carry is kept. `rev` is not a number when
+  // the sender did not say which revision: that is kept as "something newer, unknown".
+  noteIncoming(rev) {
+    const n = typeof rev === "number" ? rev : Infinity;
+    if (this.incoming === null || n > this.incoming) this.incoming = n;
+  }
+
+  // True when something newer than the answer (revision `rev`) was heard while it was on its way.
+  incomingNewerThan(rev) {
+    if (this.incoming === null) return false;
+    return typeof rev !== "number" || this.incoming > rev;
+  }
+
+  // The answer to this panel's change is older than a revision heard meanwhile (so its "saved" may no longer be true).
+  // Ask the companion; apply the answer only if it is at least as new as what was heard. If that cannot be settled, show
+  // the box as uncertain rather than as the older answer's outcome.
+  async reconcileNewer(jobId, on, still, answer) {
+    const heard = this.incoming;
+    this.incoming = null;
+    this.noteRev(answer.history_rev);
+    this.emit({ status: "Another window changed this entry while this change was being made. Checking..." });
+    const now = await this.refreshSaved({ force: true, atLeast: Number.isFinite(heard) ? heard : null });
+    if (!still()) return false;
+    if (typeof now === "boolean") {
+      await this.announceSaved(jobId, now, this.savedRev);
+      return now === !!on;
+    }
+    if (now === null && this.s.saved === null && this.s.jobId === jobId && !this.s.savingSaved) return false;  // the entry is gone: refreshSaved said so
+    this.emit({ saved: answer.saved, savingSaved: false, savedUnknown: true,
+      status: "Another window changed this entry at the same time, and the companion could not confirm what the log says now. Click the box to try again." });
     return false;
   }
 
@@ -464,16 +509,21 @@ export class Controller {
   // An answer is dropped when a local change started after this request did (savedSeq), or the summary changed. When
   // the companion's clear generation has moved on (another machine pressed Clear history), the panel resets as a cleared
   // panel does: the old summary, its box and its thread go.
-  async refreshSaved({ force = false } = {}) {
+  // `atLeast`: with force, an answer whose revision is below it (or has none) is not trusted and not applied.
+  async refreshSaved({ force = false, atLeast = null } = {}) {
     const jobId = this.s.jobId;
     if (!jobId || this.s.mode === "temp" || !this.s.result) return null;
-    if (this.s.savingSaved && !force) return null;
+    const busy = this.s.savingSaved && !force;  // a change of this panel is on its way: look, keep the revision, apply nothing
     const gen = this.selGen, seq = this.savedSeq || 0;
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 5000);
     } catch { return null; }
     if (gen !== this.selGen || this.s.jobId !== jobId) return null;
+    if (busy) {
+      if (this.s.savingSaved && seq === (this.savedSeq || 0) && r.status === 200 && r.json) this.noteIncoming(r.json.history_rev);
+      return null;
+    }
     const cg = r.json && r.json.clear_generation;
     if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) {
       this.clearedElsewhere(cg, STALE_MESSAGE);
@@ -483,6 +533,7 @@ export class Controller {
     if (r.status !== 200 || !r.json) return null;
     const rev = r.json.history_rev;
     if (typeof rev === "number" && rev < this.savedRev) return null;  // an older answer than one already applied
+    if (atLeast !== null && (typeof rev !== "number" || rev < atLeast)) return null;  // older than what was heard: no use
     this.noteRev(rev);
     const v = typeof r.json.history_saved === "boolean" ? r.json.history_saved : null;
     const patch = { saved: v, savingSaved: false, savedUnknown: false };

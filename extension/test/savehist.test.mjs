@@ -105,7 +105,7 @@ test("Clear history from the Options page: /clear, every slot dropped, every ope
     remove: async (keys) => { for (const k of keys) delete shared[k]; },
   };
   const res = await clearCompanion({ fetch: A.c.d.fetch, cfg: { base: shared.base, token: shared.token }, storage, onGeneration: (g) => seen.push(g) });
-  assert.deepEqual(res, { ok: true, status: 200, clearGeneration: 1 });
+  assert.deepEqual(res, { ok: true, status: 200, clearGeneration: 1, localError: null });
   assert.deepEqual(seen, [1]);
   assert.equal(shared.clearGen, 1);
   assert.deepEqual(Object.keys(shared).filter((k) => k.startsWith("slot:")), []);
@@ -114,7 +114,7 @@ test("Clear history from the Options page: /clear, every slot dropped, every ope
 });
 
 // The real options.js against a stubbed page: Clear history needs a second, explicit click.
-async function optionsPage() {
+async function optionsPage({ removeFails = null, unreachable = false } = {}) {
   const els = {};
   const el = (id) => (els[id] ||= { id, hidden: false, disabled: false, value: "", textContent: "", className: "", handlers: {}, focused: 0,
     addEventListener(t, f) { this.handlers[t] = f; }, focus() { this.focused++; } });
@@ -128,9 +128,9 @@ async function optionsPage() {
   globalThis.chrome = { storage: { local: {
     get: async (k) => (k === null ? { ...store } : Object.fromEntries((Array.isArray(k) ? k : [k]).filter((x) => x in store).map((x) => [x, store[x]]))),
     set: async (o) => Object.assign(store, o),
-    remove: async (ks) => { for (const k of [].concat(ks)) delete store[k]; },
+    remove: async (ks) => { if (removeFails) throw removeFails; for (const k of [].concat(ks)) delete store[k]; },
   } }, permissions: { request: async () => true } };
-  globalThis.fetch = async (url, init) => { fetches.push({ url, method: init.method }); return { status: 200, json: async () => ({ clear_generation: 4 }) }; };
+  globalThis.fetch = async (url, init) => { fetches.push({ url, method: init.method }); if (unreachable) throw new TypeError("Failed to fetch"); return { status: 200, json: async () => ({ clear_generation: 4 }) }; };
   await import(`../options.js?run=${Math.random()}`);
   return { els, store, fetches, doc, restore: () => Object.assign(globalThis, saved) };
 }
@@ -235,7 +235,7 @@ function readPng(file) {
   return { w, h, px: out };
 }
 
-test("every logo stands out from its black button by at least 3:1, full-strength Dive and washed-out Dip alike", () => {
+test("every logo stands out from its black button: Dive by at least 3:1, the darker (partly transparent) Dip by at least 2.5:1", () => {
   const lum = ([r, g, b]) => [r, g, b].map((v) => v / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((s, c, i) => s + c * [0.2126, 0.7152, 0.0722][i], 0);
   const vsBlack = (rgb) => (lum(rgb) + 0.05) / 0.05;
   const medians = {};
@@ -246,19 +246,34 @@ test("every logo stands out from its black button by at least 3:1, full-strength
       const shown = [];
       for (let i = 0; i < px.length; i += 4) {
         const a = px[i + 3] / 255;
-        if (a > 0.5) shown.push(vsBlack([px[i] * a, px[i + 1] * a, px[i + 2] * a]));  // over the black button
+        if (a > 0.25) shown.push(vsBlack([px[i] * a, px[i + 1] * a, px[i + 2] * a]));  // over the black button
       }
       shown.sort((x, y) => x - y);
       const median = shown[shown.length >> 1];
       assert.ok(shown.length > size * size * 0.1, `${name}-${size} has a visible mark`);
-      assert.ok(median >= 3, `${name}-${size}: median ${median.toFixed(2)}:1 against black`);
+      const need = name.endsWith("-dip") ? 2.5 : 3;
+      assert.ok(median >= need, `${name}-${size}: median ${median.toFixed(2)}:1 against black, needs ${need}`);
       medians[`${name}-${size}`] = median;
     }
   }
-  // Dip is the washed-out (lighter) form of the same logo
-  assert.ok(medians["claude-dip-72"] > medians["claude-dive-72"] && medians["codex-dip-72"] > medians["codex-dive-72"], JSON.stringify(medians));
+  // Dip is the same logo faded toward black (partly transparent over the black button): darker than Dive, never lighter
+  assert.ok(medians["claude-dip-72"] < medians["claude-dive-72"] && medians["codex-dip-72"] < medians["codex-dive-72"], JSON.stringify(medians));
+  for (const n of ["claude", "codex"]) {
+    const dive = readPng(new URL(`../icons/modes/${n}-dive-72.png`, import.meta.url)), dip = readPng(new URL(`../icons/modes/${n}-dip-72.png`, import.meta.url));
+    let faded = 0, solid = 0;
+    for (let i = 0; i < dive.px.length; i += 4) {
+      if (dive.px[i + 3] < 250) continue;
+      solid++;
+      const same = [0, 1, 2].every((k) => dip.px[i + k] === dive.px[i + k]);  // the colours are kept, not mixed toward white
+      const ratio = dip.px[i + 3] / dive.px[i + 3];
+      if (same && ratio > 0.45 && ratio < 0.65) faded++;
+    }
+    assert.ok(solid > 100 && faded === solid, `${n}-dip is the Dive logo at about half opacity (${faded} of ${solid} solid pixels)`);
+  }
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /temp: '<svg[^']*stroke="#ffffff"[^']*stroke-dasharray/, "Temp chat: a white dotted speech bubble (21:1 on black)");
+  assert.match(js, /temp: '<svg[^']*<path d="M7\.9 20A9 9 0 1 0 4 16\.1L2 22Z"/, "round (a circle with a small tail, like ChatGPT's temporary chat), not a rectangle");
+  assert.ok(!/temp: '[^']*h13a2\.5/.test(js), "the old rectangular bubble is gone");
   assert.match(js, /<span class="sr-only">\$\{m\.label\}<\/span>/, "each button keeps its name");
 });
 
@@ -436,4 +451,120 @@ test("a server error after the change was made is reconciled and announced, not 
   assert.equal(A.log.fetches.at(-1).path, `/jobs/${jid}`, "asked the companion");
   assert.deepEqual([A.state.last.saved, B.state.last.saved, server.jobs[jid].saved], [true, true, true]);
   assert.match(A.state.last.status, /Saved to history/);
+});
+
+// ---------- review fixes: a delayed save answer vs a newer revision; Clear history reporting ----------
+
+// Panels A and B show the same summary. A unticks it and its answer is held on the way (the companion has already made
+// the change: revision 1). Meanwhile B ticks it again (revision 2) and tells A.
+async function delayedRemoveVsRestore() {
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot() };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  const A = rig({ shared, server, bus });
+  const B = rig({ shared, server, bus });
+  await A.c.init(1); await A.tick();
+  const jid = A.state.last.jobId;
+  shared[slotKey(2)] = slot({ windowId: 2, requestId: "slot-req-2", consumed: true, jobId: jid, mode: "claude-dip" });
+  await B.c.init(2);
+  server.freeze = (path) => path.startsWith("/history/") && !server.frozenOnce && (server.frozenOnce = true);
+  const pa = A.c.setSaved(false);                      // the answer (saved false, revision 1) is held back
+  await new Promise((res) => setTimeout(res, 0));
+  server.freeze = null;
+  assert.equal(await B.c.setSaved(true), true);        // B's restore: revision 2, announced to A
+  await new Promise((res) => setTimeout(res, 0));
+  assert.equal(A.state.last.savingSaved, true, "A is still waiting for its own answer");
+  assert.equal(server.jobs[jid].saved, true);
+  assert.equal(server.rev, 2);
+  return { A, B, server, pa, jid };
+}
+
+test("review 2: a delayed save answer does not override a newer revision heard meanwhile; A reconciles to what the log says", async () => {
+  const { A, server, pa, jid } = await delayedRemoveVsRestore();
+  A.holds.shift()();                                    // A's old answer arrives: saved false at revision 1
+  assert.equal(await pa, false, "A's own change did not end as clicked");
+  assert.equal(A.state.last.saved, true, "the log has it (revision 2), so the box is ticked");
+  assert.ok(!/Removed from history/.test(A.state.last.status), A.state.last.status);
+  assert.equal(A.state.last.savingSaved, false);
+  assert.equal(A.state.last.savedUnknown, false);
+  assert.equal(A.c.savedRev, 2);
+  assert.equal(server.jobs[jid].saved, true);
+});
+
+test("review 2: when the newer revision cannot be resolved, the box is uncertain, never 'Removed from history.'", async () => {
+  const { A, server, pa } = await delayedRemoveVsRestore();
+  server.fail = new TypeError("Failed to fetch");       // the companion cannot be reached for the follow-up GETs
+  A.holds.shift()();
+  assert.equal(await pa, false);
+  assert.equal(A.state.last.savedUnknown, true, "shown as indeterminate");
+  assert.equal(A.state.last.savingSaved, false, "and the box can be clicked to try again");
+  assert.ok(!/Removed from history/.test(A.state.last.status), A.state.last.status);
+  assert.match(A.state.last.status, /could not confirm|Click the box/);
+  server.fail = null;
+  assert.equal(await A.c.setSaved(false), true, "a click retries");
+  assert.equal(A.state.last.saved, false);
+  assert.equal(A.state.last.savedUnknown, false);
+});
+
+test("review 2: a newer revision learned from a GET while the change is on its way is also kept; an older one is harmless", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  r.server.freeze = (path) => path.startsWith("/history/") && !r.server.f1 && (r.server.f1 = true);
+  const p = r.c.setSaved(false);                        // answer (revision 1) held
+  await new Promise((res) => setTimeout(res, 0));
+  r.server.freeze = null;
+  r.server.jobs.job1.saved = true; r.server.rev = 2;    // another machine restored it (no broadcast reaches this browser)
+  assert.equal(await r.c.refreshSaved(), null, "a focus GET while saving applies nothing");
+  assert.equal(r.state.last.savingSaved, true);
+  r.holds.shift()();
+  assert.equal(await p, false);
+  assert.equal(r.state.last.saved, true);
+  assert.ok(!/Removed from history/.test(r.state.last.status), r.state.last.status);
+  // and with nothing newer heard, the answer is applied as before
+  assert.equal(await r.c.setSaved(false), true);
+  assert.equal(r.state.last.saved, false);
+  assert.match(r.state.last.status, /Removed from history/);
+});
+
+test("review 3: Clear history reports a storage failure after the companion succeeded as a partial success, not 'not cleared'", async () => {
+  const stored = { clearGen: 0, "slot:1": { url: "x" } };
+  const storage = { get: async () => ({ ...stored }), remove: async () => { throw new Error("storage quota exceeded"); }, set: async (o) => Object.assign(stored, o) };
+  const fetch = async () => ({ status: 200, json: async () => ({ clear_generation: 5 }) });
+  const res = await clearCompanion({ fetch, cfg: { base: "http://c.test", token: "t".repeat(40) }, storage });
+  assert.equal(res.ok, true, "the companion cleared");
+  assert.equal(res.localError, "storage quota exceeded");
+  assert.equal(stored.clearGen, 5, "the new generation is still written, so open panels learn of the clear");
+  const setFails = { ...storage, remove: async () => {}, set: async () => { throw new Error("set failed"); } };
+  assert.equal((await clearCompanion({ fetch, cfg: { base: "http://c.test", token: "t".repeat(40) }, storage: setFails })).localError, "set failed");
+  const refused = await clearCompanion({ fetch: async () => ({ status: 401, json: async () => ({}) }), cfg: { base: "http://c.test", token: "t".repeat(40) }, storage });
+  assert.deepEqual([refused.ok, refused.localError], [false, null]);
+});
+
+test("review 3: the Options page says what happened: cleared but this browser's state could not be reset", async () => {
+  const p = await optionsPage({ removeFails: new Error("QuotaExceededError") });
+  try {
+    p.els.clear.handlers.click();
+    await p.els.clearyes.handlers.click();
+    assert.deepEqual(p.fetches, [{ url: "http://c.test/clear", method: "POST" }]);
+    assert.match(p.els.clearmsg.textContent, /^History cleared\. Could not reset this browser's panel state: QuotaExceededError/);
+    assert.ok(!/Not cleared|cannot reach/i.test(p.els.clearmsg.textContent), p.els.clearmsg.textContent);
+    assert.match(p.els.clearmsg.className, /bad/);
+  } finally { p.restore(); }
+  const q = await optionsPage({ unreachable: true });
+  try {
+    q.els.clear.handlers.click();
+    await q.els.clearyes.handlers.click();
+    assert.match(q.els.clearmsg.textContent, /^Not cleared: cannot reach the companion/, "a real network failure is still reported as such");
+  } finally { q.restore(); }
+});
+
+test("review 3: the panel's own Clear history says the same when its storage cleanup fails", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  const real = r.c.d.storage.remove;
+  r.c.d.storage.remove = async () => { throw new Error("disk full"); };
+  await r.c.clearHistory();
+  r.c.d.storage.remove = real;
+  assert.equal(r.state.last.status, "History cleared. Could not reset this browser's panel state: disk full");
+  assert.equal(r.state.last.result, null, "the summary is gone: the companion cleared");
 });

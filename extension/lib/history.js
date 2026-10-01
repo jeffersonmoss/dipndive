@@ -74,20 +74,69 @@ export function entryHtml(e) {
   return `${head}${ch}<div class="hmeta">${meta}</div>${body}`;
 }
 
+// Message that tells an open History page to load its data again (sent to a tab the History button brought forward).
+export const HISTORY_REFRESH = "dipdive-history-refresh";
+// Message the panel sends to the service worker, which alone opens or reuses the History tab (see createHistoryOpener).
+export const OPEN_HISTORY = "dipdive-open-history";
+
+// Runs `load()` for the History page, and again when asked to refresh. Only one load runs at a time: a refresh that
+// arrives while one is running makes exactly one more load follow it (the data it fetched may be older than the request),
+// so a burst of triggers (the tab brought forward, then becoming visible) costs at most two loads and a slow old load can
+// never overwrite a newer one. `load` is the whole sequence for one pass (reread the settings, refetch every page, show).
+// Resolves when no load is running or queued any more.
+export function createHistoryRefresher(load) {
+  let running = null, again = false;
+  async function loop() {
+    do {
+      again = false;
+      try { await load(); } catch { /* load reports its own failure to the page; the next trigger tries again */ }
+    } while (again);
+  }
+  return {
+    refresh() {
+      if (running) { again = true; return running; }
+      running = loop().finally(() => { running = null; });
+      return running;
+    },
+  };
+}
+
 // The History button: show the History tab, reusing one that is already open (in any window) rather than opening
-// another. chrome.runtime.getContexts needs no extra permission (Chrome 116+).
-export async function openHistoryTab(chromeApi, url) {
+// another. chrome.runtime.getContexts needs no extra permission (Chrome 116+). A tab that is brought forward is told to
+// reload its data (the page would otherwise show what it loaded when it was opened).
+export async function openHistoryTab(chromeApi, url, known = {}) {
   try {
-    if (chromeApi.runtime && chromeApi.runtime.getContexts) {
+    let tab = null;
+    if (typeof known.tabId === "number") {
+      // a tab this worker opened a moment ago may not be listed by getContexts yet: ask for it directly
+      const t = await chromeApi.tabs.get(known.tabId).catch(() => null);
+      const at = t && (t.url || t.pendingUrl);  // an extension sees its own pages' addresses; the user may have navigated away
+      if (t && typeof t.id === "number" && (!at || at === url)) tab = { tabId: t.id, windowId: t.windowId };
+    }
+    if (!tab && chromeApi.runtime && chromeApi.runtime.getContexts) {
       const open = await chromeApi.runtime.getContexts({ contextTypes: ["TAB"], documentUrls: [url] });
-      const tab = open && open.find((c) => typeof c.tabId === "number" && c.tabId >= 0);
-      if (tab) {
-        await chromeApi.tabs.update(tab.tabId, { active: true });
-        if (chromeApi.windows && chromeApi.windows.update && typeof tab.windowId === "number") await chromeApi.windows.update(tab.windowId, { focused: true });
-        return "reused";
-      }
+      tab = (open && open.find((c) => typeof c.tabId === "number" && c.tabId >= 0)) || null;
+    }
+    if (tab) {
+      await chromeApi.tabs.update(tab.tabId, { active: true });
+      if (chromeApi.windows && chromeApi.windows.update && typeof tab.windowId === "number") await chromeApi.windows.update(tab.windowId, { focused: true });
+      try { await chromeApi.tabs.sendMessage(tab.tabId, { type: HISTORY_REFRESH }); } catch { /* the page is still loading (it loads on its own) or gone */ }
+      return "reused";
     }
   } catch { /* fall through: open a new one */ }
-  await chromeApi.tabs.create({ url });
+  const t = await chromeApi.tabs.create({ url });
+  if (known && t && typeof t.id === "number") known.tabId = t.id;
   return "opened";
+}
+
+// The service worker's opener: ONE lookup-or-create at a time, shared by every panel. A click that arrives while one is
+// running joins it (same promise, same answer) instead of racing it to open a second tab; the tab it opened is
+// remembered, so a click right after is found even before getContexts lists the new page.
+export function createHistoryOpener(chromeApi, url) {
+  let inflight = null;
+  const known = {};
+  return function open() {
+    if (!inflight) inflight = openHistoryTab(chromeApi, url, known).finally(() => { inflight = null; });
+    return inflight;
+  };
 }

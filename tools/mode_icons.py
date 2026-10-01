@@ -3,19 +3,23 @@
 Sources: the Claude and Codex app icons (256 x 256), extracted on 2026-10-01 from Jefferson's installed Claude.app and
 ChatGPT.app. The sources are not kept; this script documents exactly how the committed files were made:
   python3 tools/mode_icons.py <claude.png> <codex.png>
+The sources are gone, so the Dip logos can also be rebuilt from the committed Dive logos alone:
+  python3 tools/mode_icons.py --dip-from-dive
 1. Codex: the app icon as it is. Only its white surroundings are made transparent (color-to-alpha against white, for the
    light pixels connected to the border, so the white terminal prompt inside the blossom is untouched).
 2. Claude: the starburst alone, in Claude orange (#D97757), on transparency (the buttons are black): each pixel keeps
    as much opacity as it was white (the star was white on the orange square), so the star's soft edge survives.
 3. Each is cropped to its shape, centred on a square, and written at 36 px and 72 px (2x) as <name>-dive.
-4. The Dip versions (<name>-dip) are the washed-out form: saturation lowered and the colours mixed toward white.
+4. The Dip versions (<name>-dip) are the same logo faded toward black, as if it were partly transparent over the black
+   button: the colours are kept and the opacity is DIP_OPACITY (0.58). Darker than Dive, never pastel.
 """
 import sys
 from collections import deque
-from PIL import Image, ImageEnhance
+from PIL import Image
 
 OUT = "extension/icons/modes"
 SIZES = (36, 72)
+DIP_OPACITY = 0.58
 
 
 def codex(src):
@@ -65,19 +69,28 @@ def square(im):
     return out
 
 
-def washed(im, sat, white):
-    rgb = ImageEnhance.Color(im.convert("RGB")).enhance(sat)
-    rgb = Image.blend(rgb, Image.new("RGB", im.size, (255, 255, 255)), white)
-    rgb.putalpha(im.getchannel("A"))
-    return rgb
+def faded(im, opacity=DIP_OPACITY):
+    """The same logo at `opacity` (colours untouched): over the black button it reads as the logo faded toward black."""
+    out = im.convert("RGBA")
+    out.putalpha(out.getchannel("A").point(lambda v: round(v * opacity)))
+    return out
 
 
 def main(claude_src, codex_src):
-    for name, im, sat, white in (("claude", square(claude(claude_src)), 0.45, 0.45), ("codex", square(codex(codex_src)), 0.35, 0.40)):
-        for kind, img in (("dive", im), ("dip", washed(im, sat, white))):
+    for name, im in (("claude", square(claude(claude_src))), ("codex", square(codex(codex_src)))):
+        for kind, img in (("dive", im), ("dip", faded(im))):
             for s in SIZES:
                 img.resize((s, s), Image.LANCZOS).save(f"{OUT}/{name}-{kind}-{s}.png", optimize=True)
 
 
+def dip_from_dive():
+    for name in ("claude", "codex"):
+        for s in SIZES:
+            faded(Image.open(f"{OUT}/{name}-dive-{s}.png")).save(f"{OUT}/{name}-dip-{s}.png", optimize=True)
+
+
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    if sys.argv[1:2] == ["--dip-from-dive"]:
+        dip_from_dive()
+    else:
+        main(*sys.argv[1:3])

@@ -1,5 +1,6 @@
 // Service worker logic with chrome injected, so it can be unit-tested (plan 3.1.3 and 3.1.4).
 import { DEFAULT_MODE, menuLabel, normalizeMode } from "./modes.js";
+import { OPEN_HISTORY, createHistoryOpener } from "./history.js";
 import { pickUrl } from "./urls.js";
 
 export const MENU_ID = "dipdive-run";
@@ -51,5 +52,15 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
     const slot = { url, requestId: uuid(), windowId, ts: Date.now(), consumed: false };
     chrome.storage.local.set({ [slotKey(windowId)]: slot }).then(() => pruneSlots(chrome.storage.local));
   });
+  // The panels' History button asks the service worker to open or reuse the History tab. One worker, one in-flight
+  // lookup-or-create shared by every panel and window, so two quick clicks cannot both find no tab and open two.
+  if (chrome.runtime.onMessage && chrome.runtime.getURL) {
+    const openHistory = createHistoryOpener(chrome, chrome.runtime.getURL("history.html"));
+    chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
+      if (!m || m.type !== OPEN_HISTORY) return false;
+      openHistory().then((how) => sendResponse({ ok: true, how }), (e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+      return true;  // the answer is sent later
+    });
+  }
   return { setLabel };
 }

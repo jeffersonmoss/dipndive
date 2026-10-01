@@ -4,17 +4,17 @@ import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
-import { openHistoryTab } from "./lib/history.js";
+import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
 
-// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, washed out for Dip; Temp chat is a dotted
+// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, the same logo partly transparent over the black button (darker) for Dip; Temp chat is a dotted
 // speech bubble. Decorative: the button's name is its hidden label.
 const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/modes/${name}-72.png 2x" width="34" height="34" alt="">`;
 const MODE_ICON = {
   "claude-dive": logo("claude-dive"), "claude-dip": logo("claude-dip"), "codex-dip": logo("codex-dip"), "codex-dive": logo("codex-dive"),
-  temp: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 4.5h13a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 3.5v-3.5h-1A2.5 2.5 0 0 1 3 15V7a2.5 2.5 0 0 1 2.5-2.5z" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.1 3"/></svg>',
+  temp: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.1 3"/></svg>',
 };
 
 // Buttons are built once; state changes only flip aria-pressed and classes.
@@ -199,7 +199,15 @@ $("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checke
 
 // ---------- History: its own tab (history.html), reused when one is already open ----------
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
-$("historylink").addEventListener("click", () => openHistoryTab(chrome, historyUrl));
+// The service worker does the lookup-or-create (one at a time for every panel), so two quick clicks open one tab. Only when
+// the worker cannot be reached does the panel do it itself.
+$("historylink").addEventListener("click", async () => {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: OPEN_HISTORY });
+    if (r && r.ok) return;
+  } catch { /* no worker answered */ }
+  openHistoryTab(chrome, historyUrl);
+});
 // the gear: Settings (the Options page, where Clear history also lives)
 $("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();

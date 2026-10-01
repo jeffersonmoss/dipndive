@@ -171,15 +171,19 @@ try {
 
     // 8. History opens history.html in a tab of its own, which loads the log; a second click reuses that tab
     const historyTabs = async () => (await targets()).filter((t) => t.type === "page" && t.url === `${origin}/history.html`);
-    await q(`document.getElementById("historylink").click()`);
-    const firstTab = await until(async () => (await historyTabs()).length === 1, 8000);
+    await q(`document.getElementById("historylink").click(); document.getElementById("historylink").click(); document.getElementById("historylink").click()`);
+    const firstTab = await until(async () => (await historyTabs()).length >= 1, 8000);
+    await sleep(1500);
     check("History opened history.html in a tab", !!firstTab);
+    check("three quick clicks opened exactly one History tab (the service worker serializes them)", (await historyTabs()).length === 1, (await historyTabs()).length);
     if (firstTab) {
       const hp = await attachTo((await historyTabs())[0]);
       check("the History tab loaded the log from the companion", await until(() => hp.eval(`document.body.dataset.loaded === "yes" && document.querySelectorAll("#list .hentry").length > 0`), 15000));
+      await hp.eval(`window.__hist = 0; const f = window.fetch; window.fetch = (...a) => { if (String(a[0]).includes("/history")) window.__hist++; return f(...a); }; document.getElementById("search").value = "a"; true`);
       await q(`document.getElementById("historylink").click()`);
       await sleep(1500);
       check("a second click reuses the open History tab", (await historyTabs()).length === 1, (await historyTabs()).length);
+      check("and the reused tab reloaded its data, keeping the search text", await until(() => hp.eval(`window.__hist > 0 && document.getElementById("search").value === "a" && document.body.dataset.loaded === "yes"`), 8000), await hp.eval(`window.__hist`));
     }
   });
 } catch (e) {

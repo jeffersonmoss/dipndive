@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { PAGE_SIZE, entryHtml, loadAllHistory, matches, openHistoryTab, searchText } from "../lib/history.js";
+import { HISTORY_REFRESH, OPEN_HISTORY, PAGE_SIZE, createHistoryOpener, createHistoryRefresher, entryHtml, loadAllHistory, matches, openHistoryTab, searchText } from "../lib/history.js";
 
 const TOKEN = "t".repeat(40);
 const CFG = { base: "http://c.test", token: TOKEN };
@@ -136,30 +136,32 @@ test("panel.html: History is the first button of the bottom row; the status line
   const ids = [...html.matchAll(/\bid="(\w+)"/g)].map((m) => m[1]);
   assert.equal(new Set(ids).size, ids.length, "ids are unique");
   for (const id of [...js.matchAll(/\$\("(\w+)"\)/g)].map((m) => m[1])) assert.ok(ids.includes(id), `panel.js uses #${id}, which panel.html lacks`);
-  assert.match(js, /\$\("historylink"\)\.addEventListener\("click", \(\) => openHistoryTab\(chrome, historyUrl\)\)/);
+  assert.match(js, /\$\("historylink"\)\.addEventListener\("click", async \(\) => \{[\s\S]*chrome\.runtime\.sendMessage\(\{ type: OPEN_HISTORY \}\)[\s\S]*openHistoryTab\(chrome, historyUrl\)/, "the panel asks the service worker; it opens the tab itself only when none answers");
   assert.match(js, /chrome\.runtime\.getURL\("history\.html"\)/);
 });
 
 // The real history.js run against a stubbed page: it loads everything, renders it safely, and the search filters live.
-async function historyPage(c) {
+async function historyPage(c, storage = { base: CFG.base, token: CFG.token }) {
   const els = {};
+  const docHandlers = {}, msgHandlers = [];
   const node = (id) => (els[id] ||= { id, hidden: false, textContent: "", value: "", handlers: {}, children: [],
     addEventListener(t, f) { this.handlers[t] = f; }, replaceChildren(...k) { this.children = k.flatMap((x) => x.children || [x]); } });
   for (const id of ["search", "count", "list", "empty", "error"]) node(id);
   const saved = { document: globalThis.document, chrome: globalThis.chrome, fetch: globalThis.fetch };
   globalThis.document = {
-    getElementById: (id) => node(id), body: { dataset: {} },
+    getElementById: (id) => node(id), body: { dataset: {} }, hidden: false, addEventListener: (t, f) => { docHandlers[t] = f; },
     createElement: () => ({ hidden: false, className: "", innerHTML: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } }),
     createDocumentFragment: () => ({ children: [], appendChild(x) { this.children.push(x); } }),
   };
-  globalThis.chrome = { storage: { local: { get: async () => ({ base: CFG.base, token: CFG.token }) } } };
+  globalThis.chrome = { storage: { local: { get: async () => ({ ...storage }) } }, runtime: { onMessage: { addListener: (f) => msgHandlers.push(f) } } };
   globalThis.fetch = c.fetch;
   const restore = () => Object.assign(globalThis, saved);
   try {
     await import(`../history.js?run=${Math.random()}`);
     for (let i = 0; i < 20 && !globalThis.document.body.dataset.loaded; i++) await new Promise((r) => setTimeout(r, 0));
   } catch (e) { restore(); throw e; }
-  return { els, body: globalThis.document.body, restore };
+  const settle = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0)); };
+  return { els, body: globalThis.document.body, doc: globalThis.document, docHandlers, send: (m) => msgHandlers.forEach((f) => f(m)), storage, settle, restore };
 }
 
 test("history page: every entry is rendered, newest first, then a live search hides what does not match and counts", async () => {
@@ -203,4 +205,151 @@ test("history.html: a search box at the top, the list, its own script; no inline
   assert.ok(!/<script[^>]*>[^<]/.test(h));
   const css = fs.readFileSync(new URL("../history.css", import.meta.url), "utf8");
   assert.match(css, /prefers-color-scheme: dark/, "light and dark");
+});
+
+// ---------- review fixes: a reused History tab reloads; concurrent History clicks open one tab ----------
+
+test("review 1: the History page reloads on a refresh message and when the tab shows again, keeps the search, and re-reads the settings", async () => {
+  const c = companion(3);
+  const p = await historyPage(c);
+  try {
+    assert.equal(p.els.list.children.length, 3);
+    p.els.search.value = "title 2";
+    p.els.search.handlers.input();
+    assert.equal(p.els.count.textContent, "1 of 3 entries match");
+    const before = c.calls.length;
+    c.n = 5; c.rev = 1;                                  // two summaries arrived while the tab sat in the background
+    p.storage.token = "n".repeat(40);                   // and the token was corrected in the options
+    p.send({ type: HISTORY_REFRESH });
+    await p.settle();
+    assert.ok(c.calls.length > before, "the pages were fetched again");
+    assert.equal(c.auths.at(-1), `Bearer ${"n".repeat(40)}`, "the settings were read from storage again");
+    assert.equal(p.els.list.children.length, 5, "the new entries are shown");
+    assert.equal(p.els.search.value, "title 2", "the query is kept");
+    assert.equal(p.els.list.children.filter((r) => !r.hidden).length, 1, "and still filters");
+    assert.equal(p.els.count.textContent, "1 of 5 entries match");
+    c.n = 4; c.rev = 2;                                  // one was removed in the panel
+    p.docHandlers.visibilitychange();                    // the tab is visible again (document.hidden is false)
+    await p.settle();
+    assert.equal(p.els.list.children.length, 4, "a removed summary disappears");
+    p.send({ type: "something-else" });
+    await p.settle();
+    assert.equal(c.calls.filter((u) => !u.includes("before")).length, 3, "other messages do nothing");
+    p.doc.hidden = true;
+    p.docHandlers.visibilitychange();
+    await p.settle();
+    assert.equal(c.calls.filter((u) => !u.includes("before")).length, 3, "no reload while hidden");
+  } finally { p.restore(); }
+});
+
+test("review 1: a reload recovers from an error once the settings are corrected, and a failed reload keeps what was shown", async () => {
+  const c = companion(3, { status: 401 });
+  const p = await historyPage(c, { base: CFG.base, token: "bad" });
+  try {
+    assert.equal(p.body.dataset.loaded, "error");
+    assert.equal(p.els.error.hidden, false);
+    c.status = 200;
+    p.storage.token = TOKEN;
+    p.send({ type: HISTORY_REFRESH });
+    await p.settle();
+    assert.equal(p.body.dataset.loaded, "yes");
+    assert.equal(p.els.error.hidden, true, "the old error is gone");
+    assert.equal(p.els.list.children.length, 3);
+    c.error = new TypeError("Failed to fetch");
+    p.send({ type: HISTORY_REFRESH });
+    await p.settle();
+    assert.equal(p.els.error.hidden, false);
+    assert.equal(p.els.list.children.length, 3, "the entries already shown stay beside the error line");
+  } finally { p.restore(); }
+});
+
+test("review 1: refreshes are coalesced: one running, at most one more queued, and the newest data wins", async () => {
+  const log = [];
+  let release;
+  const gate = () => new Promise((r) => { release = r; });
+  let n = 0;
+  const r = createHistoryRefresher(async () => { const id = ++n; log.push(`start${id}`); await gate(); log.push(`end${id}`); });
+  const first = r.refresh();
+  await Promise.resolve();
+  r.refresh(); r.refresh(); r.refresh();                // a burst while the first load runs
+  release();
+  await new Promise((x) => setTimeout(x, 0));
+  release();
+  await first;
+  assert.deepEqual(log, ["start1", "end1", "start2", "end2"], "exactly one follow-up load");
+  const failing = createHistoryRefresher(async () => { throw new Error("boom"); });
+  await failing.refresh();                              // a throwing load does not break later refreshes
+  await failing.refresh();
+});
+
+test("review 1: bringing an open History tab forward also tells it to reload; a page that cannot hear it is not an error", async () => {
+  const calls = [];
+  const api = (sendOk) => ({
+    runtime: { getContexts: async () => [{ tabId: 7, windowId: 3 }] },
+    tabs: { update: async (id) => calls.push(["update", id]), create: async () => calls.push(["create"]),
+            sendMessage: async (id, m) => { calls.push(["send", id, m]); if (!sendOk) throw new Error("Receiving end does not exist"); } },
+    windows: { update: async () => {} },
+  });
+  const url = "chrome-extension://x/history.html";
+  assert.equal(await openHistoryTab(api(true), url), "reused");
+  assert.deepEqual(calls.at(-1), ["send", 7, { type: HISTORY_REFRESH }]);
+  calls.length = 0;
+  assert.equal(await openHistoryTab(api(false), url), "reused", "a failed message does not open a second tab");
+  assert.ok(!calls.some((c) => c[0] === "create"));
+});
+
+// A Chrome whose tab calls take time, and whose getContexts lists a tab only after it has loaded, as the real one does.
+function slowChrome() {
+  const tabs = [];
+  let nextId = 10;
+  const wait = () => new Promise((r) => setTimeout(r, 5));
+  const L = [];
+  const chrome = {
+    runtime: {
+      getURL: (p) => `chrome-extension://x/${p}`,
+      onMessage: { addListener: (f) => L.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      getContexts: async (f) => { await wait(); return tabs.filter((t) => t.loaded && f.documentUrls.includes(t.url)).map((t) => ({ tabId: t.id, windowId: 1 })); },
+    },
+    tabs: {
+      create: async ({ url }) => { await wait(); const t = { id: nextId++, url, loaded: false, windowId: 1 }; tabs.push(t); setTimeout(() => { t.loaded = true; }, 40); return t; },
+      update: async () => { await wait(); },
+      get: async (id) => { const t = tabs.find((x) => x.id === id); if (!t) throw new Error("No tab"); return t; },
+      sendMessage: async () => {},
+    },
+    windows: { update: async () => {} },
+    storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener() {} } },
+    contextMenus: { create() {}, update() {}, onClicked: { addListener() {} } },
+    sidePanel: { open() {}, setPanelBehavior() {} },
+  };
+  return { chrome, tabs, send: (m) => new Promise((res) => { L[0](m, {}, res) || res(undefined); }) };
+}
+
+test("review 4: concurrent History clicks from several panels open exactly one tab (serialized in the service worker)", async () => {
+  const { registerBackground } = await import("../lib/background-core.js");
+  const w = slowChrome();
+  registerBackground(w.chrome);
+  const answers = await Promise.all([1, 2, 3, 4].map(() => w.send({ type: OPEN_HISTORY })));
+  assert.equal(w.tabs.length, 1, "one tab, not one per click");
+  assert.ok(answers.every((a) => a && a.ok));
+  const again = await w.send({ type: OPEN_HISTORY });       // a click right after, before getContexts lists the new page
+  assert.equal(again.how, "reused");
+  assert.equal(w.tabs.length, 1);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal((await w.send({ type: OPEN_HISTORY })).how, "reused", "and after it has loaded");
+  assert.equal(w.tabs.length, 1);
+  w.tabs.length = 0;                                         // the user closed it
+  assert.equal((await w.send({ type: OPEN_HISTORY })).how, "opened");
+  assert.equal(w.tabs.length, 1);
+  assert.equal(await w.send({ type: "other" }), undefined, "other messages are not answered");
+});
+
+test("review 4: the opener without the worker would race: two unserialized calls open two tabs, the shared opener does not", async () => {
+  const w = slowChrome();
+  const url = "chrome-extension://x/history.html";
+  await Promise.all([openHistoryTab(w.chrome, url), openHistoryTab(w.chrome, url)]);
+  assert.equal(w.tabs.length, 2, "the bug the review reproduced");
+  const w2 = slowChrome();
+  const open = createHistoryOpener(w2.chrome, url);
+  await Promise.all([open(), open()]);
+  assert.equal(w2.tabs.length, 1);
 });

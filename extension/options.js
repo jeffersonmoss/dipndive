@@ -52,7 +52,8 @@ $("clearyes").addEventListener("click", async () => {
   try {
     const st = await chrome.storage.local.get(["base", "token"]);
     const res = await clearCompanion({ fetch: (...a) => fetch(...a), cfg: { base: st.base, token: st.token }, storage });
-    if (res.ok) clearSay("History cleared. Open side panels have started fresh; the history log file is kept.", "ok");
+    if (res.ok && res.localError) clearSay(`History cleared. Could not reset this browser's panel state: ${res.localError}. Open side panels may still show old summaries until they are closed and reopened.`, "bad");
+    else if (res.ok) clearSay("History cleared. Open side panels have started fresh; the history log file is kept.", "ok");
     else if (res.status === 401) clearSay("Not cleared: the companion did not accept the token.", "bad");
     else clearSay(`Not cleared: the companion returned HTTP ${res.status}.`, "bad");
   } catch (e) {
