@@ -1,7 +1,9 @@
-// Five panel buttons in display order. "temp" is the Temp chat button (source-only job, no model call).
+// Five panel buttons in display order, left to right: the shallowest immersion (Temp chat) is in the center and the water
+// gets deeper toward both edges (Dip, then Dive). The panel builds its buttons in this order, so the Tab order is the
+// same. "temp" is the Temp chat button (source-only job, no model call).
 export const MODES = [
-  { id: "claude-dip", label: "Claude Dip", top: "Claude", bottom: "Dip" },
   { id: "claude-dive", label: "Claude Dive", top: "Claude", bottom: "Dive" },
+  { id: "claude-dip", label: "Claude Dip", top: "Claude", bottom: "Dip" },
   { id: "temp", label: "Temp chat", top: "Temp", bottom: "chat" },
   { id: "codex-dip", label: "Codex Dip", top: "Codex", bottom: "Dip" },
   { id: "codex-dive", label: "Codex Dive", top: "Codex", bottom: "Dive" },

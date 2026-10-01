@@ -439,6 +439,30 @@ class AskServer(Base):
         self.wait(again["job_id"])
         self.assertEqual(len(calls(self.rec, "claude-")), 2)
 
+    def test_a_stale_clear_generation_refuses_the_question_without_a_job_a_model_call_or_stored_history(self):
+        secret = "private zebra question from the stale panel"
+        _, first = self.ask("what is it about?", rid="g0")
+        self.wait(first["job_id"])
+        gen = first["clear_generation"]
+        calls_before = len(calls(self.rec, "claude-"))
+        self.assertEqual(self.req("POST", "/clear", {})[0], 200)  # another machine clears
+        for mode in ("claude-ask", "codex-ask"):
+            c, r = self.ask(secret, mode=mode, rid=f"g-{mode}", history=[{"q": "earlier zebra", "a": "earlier zebra answer"}],
+                            summary="the zebra summary on screen", clearGeneration=gen)
+            self.assertEqual((c, r.get("error_code"), r.get("clear_generation")), (409, "stale_clear_generation", gen + 1), mode)
+            self.assertNotIn("job_id", r)
+        self.assertEqual(len(calls(self.rec, "claude-")), calls_before, "no Claude call")
+        self.assertEqual(len(calls(self.rec, "codex-")), 0, "no Codex call")
+        self.assertEqual((self.svc.jobs, self.svc.by_request, self.svc.by_prekey), ({}, {}, {}))
+        for d in ("jobs", "results", "sources", "logs"):
+            p = os.path.join(_SUP, d)
+            blob = "".join(read(p, f) for f in os.listdir(p)) if os.path.isdir(p) else ""
+            self.assertNotIn("zebra", blob, d)
+        # with the generation it was told about, the same question is a normal new job, answered
+        c, ok = self.ask(secret, rid="g-ok", history=[], clearGeneration=gen + 1)
+        self.assertEqual(c, 202)
+        self.assertEqual(self.wait(ok["job_id"])["state"], "done")
+
 
 def tearDownModule():
     # test_server's own teardown may already have run (combined runs): the support folder is re-made by Base.setUp

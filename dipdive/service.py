@@ -126,13 +126,21 @@ class Service:
             self._save(j)
 
     # ---------- API ----------
-    def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None):
+    def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None, clear_generation=None):
         """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question, the
-        capped history and the summary shown are part of every key (raises ask.AskError on bad input)."""
+        capped history and the summary shown are part of every key (raises ask.AskError on bad input).
+
+        `clear_generation` is the generation the client last saw. One older than the current is refused with 409
+        stale_clear_generation, and no job, history or log is made: the client's summary and thread were built on history
+        a /clear (from another machine, say) has since removed. None means the client has seen no generation yet."""
         norm = norm_source_id(url)
         question, history, summary, qkey = ask.prepare(mode, question, history, summary)
         pre_key = _sha(norm, mode, model_id(mode), PROMPT_VERSION, *([qkey] if qkey else []))
         with self.lock:
+            if clear_generation is not None and clear_generation < self.generation:
+                return 409, {"error_code": "stale_clear_generation",
+                             "error_message": "history was cleared since this client last synced",
+                             "clear_generation": self.generation}
             jid = self.by_request.get(request_id)
             if jid and jid in self.jobs:
                 old = self.jobs[jid]

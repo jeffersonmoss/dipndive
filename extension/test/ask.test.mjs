@@ -26,7 +26,7 @@ test("ask: the question is sent about the current source, an answer lands in the
   assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(await r.c.askQuestion("okay, what is the deal with the chocolate?"), true);
   const [p] = asks(r);
-  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], summary: "Summary for claude-dip", force: false });
+  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], summary: "Summary for claude-dip", force: false, clearGeneration: 0 });
   assert.ok(p.body.requestId.startsWith("uuid-"));
   assert.equal(p.auth, "Bearer " + "t".repeat(40));
   assert.equal(r.state.last.asking.q, "okay, what is the deal with the chocolate?");

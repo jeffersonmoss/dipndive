@@ -153,13 +153,16 @@ def make_handler(svc: Service, token: str):
                 if u.path == "/jobs":
                     url, mode, rid, force = d.get("url"), d.get("mode"), d.get("requestId"), d.get("force", False)
                     question, history, summary = d.get("question"), d.get("history"), d.get("summary")
+                    cgen = d.get("clearGeneration")  # the clear generation the client last saw (absent: it has seen none)
                     if (not isinstance(url, str) or not re.match(r"^https?://", url) or len(url) > 4096
                             or mode not in MODES or not isinstance(rid, str) or not 1 <= len(rid) <= 128
-                            or not isinstance(force, bool)):
+                            or not isinstance(force, bool)
+                            or (cgen is not None and (type(cgen) is not int or cgen < 0))):
                         return self._send(400, {"error_code": "bad_request",
-                                                "error_message": "need url (http/https), mode, requestId, optional force:boolean"})
+                                                "error_message": "need url (http/https), mode, requestId, optional force:boolean "
+                                                                 "and clearGeneration:integer"})
                     try:
-                        return self._send(*svc.submit(url, mode, rid, force, question, history, summary))
+                        return self._send(*svc.submit(url, mode, rid, force, question, history, summary, cgen))
                     except AskError as e:
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clear":

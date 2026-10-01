@@ -9,6 +9,12 @@ import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, nor
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
 
+// The companion refuses a POST /jobs that carries an older clear generation than its own (409, no job made): another
+// machine pressed Clear history since this panel last heard from the companion.
+export const STALE_CODE = "stale_clear_generation";
+export const STALE_MESSAGE = "History was cleared on another machine.";
+const isStaleRefusal = (r) => r.status === 409 && !!r.json && r.json.error_code === STALE_CODE;
+
 const MESSAGES = {
   no_captions: "This video has no usable captions, so there is nothing to summarize.",
   no_article_text: "Could not get the article text (it may be paywalled, behind a login, or not an article).",
@@ -21,6 +27,7 @@ const MESSAGES = {
   interrupted: "The companion restarted during this job. Press the button again.",
   request_id_conflict: "Internal request conflict. Right-click the link again.",
   bad_request: "The companion refused that question. Try a shorter one.",
+  [STALE_CODE]: STALE_MESSAGE,
 };
 
 export function describeError(code, message) {
@@ -214,6 +221,38 @@ export class Controller {
     this.resetView({ status: "History was cleared in another window.", busy: false });
   }
 
+  // Every POST /jobs (summaries, Temp chat and questions) carries the clear generation this panel knows, so the companion
+  // can refuse work that was built on history another machine has since cleared. Unknown (nothing heard yet): omitted.
+  genField() {
+    return typeof this.clearGen === "number" ? { clearGeneration: this.clearGen } : {};
+  }
+
+  // The companion refused a POST /jobs as stale (409 stale_clear_generation, no job made). What this panel shows
+  // (summary, thread) was built on history that is gone: forget it, adopt the companion's generation so the next press or
+  // question works, say so, and send nothing again by itself. `q` is the question that was refused, if there was one: it
+  // goes back in the box (the message sits next to it); otherwise the message is shown in the page.
+  async staleRefused(json, q) {
+    const cg = json && json.clear_generation;
+    if (typeof cg === "number") this.clearGen = cg;
+    this.selGen++;        // a job of this panel still on its way belongs to the old history
+    this.stopTimer();
+    // An unsent slot (a right-click or Go that was just refused) must not be submitted by a later panel reopen.
+    const unsent = this.slot && !this.slot.consumed ? this.slot.requestId : null;
+    if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
+    this.resetAsk();      // thread, draft, any answer on its way, the microphone
+    if (q === undefined) {
+      this.resetView({ error: STALE_MESSAGE, status: "", busy: false });
+    } else {
+      this.resetView({ status: "", busy: false });
+      this.restoreDraft(q, STALE_MESSAGE);
+    }
+    if (unsent) {
+      const key = slotKey(this.windowId);
+      const st = await this.d.storage.get([key]);
+      if (st[key] && !st[key].consumed && st[key].requestId === unsent) await this.d.storage.remove(key);
+    }
+  }
+
   // Returns false when the response must be discarded: a stale selection, or a generation older than one already seen
   // (the companion was reset: adopt its generation and ask for another press so the panel never waits forever).
   // A newer generation means another window cleared the history; the question thread belonged to the old one.
@@ -251,8 +290,10 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url: this.slot.url, mode: apiMode(mode), requestId, force: !!force }, 5000);
+        { url: this.slot.url, mode: apiMode(mode), requestId, force: !!force, ...this.genField() }, 5000);
     } catch (e) { this.failure(gen, e); return; }
+    if (gen !== this.selGen) return;
+    if (isStaleRefusal(r)) { await this.staleRefused(r.json); return; }
     if (!this.accept(gen, r.json)) return;
     if (r.status === 409 && !retried) {  // requestId already used for another mode: start over with a fresh id
       return this.submit(mode, { requestId: this.d.uuid(), force, fromSlot: false, retried: true });
@@ -463,8 +504,10 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false }, 5000);
+        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false, ...this.genField() }, 5000);
     } catch (e) { this.askFailure(gen, q, e); return false; }
+    if (gen !== this.askGen) return false;
+    if (isStaleRefusal(r)) { await this.staleRefused(r.json, q); return false; }
     if (!this.acceptAsk(gen, r.json, q)) return false;
     if (r.status === 401) { this.restoreDraft(q, "The token was rejected. Check the options page."); return false; }
     if (r.status >= 400 || !r.json.job_id) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return false; }

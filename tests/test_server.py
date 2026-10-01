@@ -41,6 +41,10 @@ class ArticleH(http.server.BaseHTTPRequestHandler):
 def fake_claude(sleep=0.0, counter=None):
     d = tempfile.mkdtemp(prefix="dipdive-test-bin-")
     _BINS.append(d)
+    with open(os.path.join(d, "TEMP_README.md"), "w") as f:
+        f.write("# Temporary folder\n\nPurpose: fake model binary for tests/test_server.py\n"
+                "Made by: T1 Dip Dive chat on this Mac\nNeeded until: the test module ends (tearDownModule deletes it)\n"
+                "Costly to recreate: no.\n")
     p = os.path.join(d, "fake")
     ok = {"subtype": "success", "stop_reason": "end_turn", "is_error": False, "result": "fake summary", "permission_denials": []}
     open(p, "w").write(f"#!{sys.executable}\nimport sys,json,time\nsys.stdin.read()\n"
@@ -442,6 +446,79 @@ class Round3(Base):
             self.assertIn(k, h)
         self.assertEqual(h["codex_ready"], bool(h["codex_logged_in"] and h["codex_isolation_ok"]))
         self.assertFalse(h["codex_logged_in"])  # no DipDive Codex login exists in the test home
+
+
+class StaleClearGeneration(Base):
+    """Cross-machine clear: a client that last saw an older clear generation than the companion's is refused with 409
+    stale_clear_generation, and nothing is made (no job, no fetch, no model call, no stored history)."""
+
+    def clear(self, n=1):
+        for _ in range(n):
+            self.assertEqual(self.req("POST", "/clear", {})[0], 200)
+
+    def assert_nothing_stored(self):
+        self.assertEqual((self.svc.jobs, self.svc.by_request, self.svc.by_prekey), ({}, {}, {}))
+        for d in ("jobs", "sources", "results", "logs"):
+            p = os.path.join(_SUP, d)
+            self.assertEqual(os.listdir(p) if os.path.isdir(p) else [], [], d)
+
+    def test_an_older_generation_is_409_and_makes_nothing(self):
+        counter = os.path.join(_SUP, "model-calls")
+        models.CLAUDE = fake_claude(counter=counter)
+        before = hits["n"]
+        self.clear(2)
+        for mode in ("claude-dip", "claude-dive", "codex-dip", "source"):
+            for stale in (0, 1):
+                c, r = self.submit(mode, f"s-{mode}-{stale}", clearGeneration=stale)
+                self.assertEqual((c, r.get("error_code"), r.get("clear_generation")), (409, "stale_clear_generation", 2), (mode, stale))
+                self.assertNotIn("job_id", r)
+        self.assertEqual(hits["n"], before, "the source was never fetched")
+        self.assertFalse(os.path.exists(counter), "no model call")
+        self.assertTrue(self.svc.wait_idle(5))
+        self.assert_nothing_stored()
+
+    def test_the_refused_request_id_is_not_remembered(self):
+        self.clear()
+        self.assertEqual(self.submit("source", "same", clearGeneration=0)[0], 409)
+        c, r = self.submit("source", "same", clearGeneration=1)
+        self.assertEqual((c, r["clear_generation"]), (202, 1))
+        self.assertEqual(self.wait(r["job_id"])["state"], "done")
+
+    def test_current_newer_absent_and_null_generations_are_accepted(self):
+        self.clear()
+        for i, extra in enumerate(({"clearGeneration": 1}, {"clearGeneration": 7}, {}, {"clearGeneration": None})):
+            c, r = self.submit("source", f"ok{i}", path=f"/p{i}", **extra)
+            self.assertEqual((c, r.get("clear_generation")), (202, 1), extra)
+            self.assertEqual(self.wait(r["job_id"])["state"], "done")
+
+    def test_a_non_integer_generation_is_400_and_makes_nothing(self):
+        for i, bad in enumerate(("1", 1.5, True, False, -1, [], {})):
+            c, r = self.submit("source", f"bad{i}", clearGeneration=bad)
+            self.assertEqual((c, r.get("error_code")), (400, "bad_request"), bad)
+        self.assert_nothing_stored()
+
+    def test_a_request_replayed_after_a_clear_with_its_old_generation_is_refused(self):
+        _, old = self.submit("source", "before", clearGeneration=0)
+        self.wait(old["job_id"])
+        self.clear()
+        c, r = self.submit("source", "before", clearGeneration=0)
+        self.assertEqual((c, r.get("error_code")), (409, "stale_clear_generation"))
+        self.assertEqual(self.req("GET", "/jobs/" + old["job_id"])[0], 404)
+        c, fresh = self.submit("source", "before")  # a client that knows no generation is served, as the panel is after a restart
+        self.assertEqual(c, 202)
+        self.assertNotEqual(fresh["job_id"], old["job_id"])
+        self.wait(fresh["job_id"])
+
+    def test_two_machines_one_clears_and_the_other_is_told_before_it_is_served(self):
+        _, a1 = self.submit("source", "a1")  # machine A's panel has not sent a generation yet
+        self.assertEqual(a1["clear_generation"], 0)
+        self.wait(a1["job_id"])
+        self.clear()  # machine B presses Clear history
+        c, r = self.submit("source", "a2", path="/b", clearGeneration=a1["clear_generation"])
+        self.assertEqual((c, r["error_code"], r["clear_generation"]), (409, "stale_clear_generation", 1))
+        c, r2 = self.submit("source", "a3", path="/b", clearGeneration=r["clear_generation"])  # A adopted the new generation
+        self.assertEqual(c, 202)
+        self.assertEqual(self.wait(r2["job_id"])["state"], "done")
 
 
 def tearDownModule():

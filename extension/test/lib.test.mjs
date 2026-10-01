@@ -45,12 +45,31 @@ test("markdown: attribute breakout in a link is escaped", () => {
 });
 
 test("modes: order, default, menu label uses 'and', temp is source-only", () => {
-  assert.deepEqual(MODES.map((m) => m.id), ["claude-dip", "claude-dive", "temp", "codex-dip", "codex-dive"]);
+  assert.deepEqual(MODES.map((m) => m.id), ["claude-dive", "claude-dip", "temp", "codex-dip", "codex-dive"]);
+  assert.deepEqual(MODES.map((m) => m.label), ["Claude Dive", "Claude Dip", "Temp chat", "Codex Dip", "Codex Dive"],
+    "left to right: the shallowest immersion in the center, deeper toward both edges");
   assert.equal(DEFAULT_MODE, "codex-dip");
   assert.equal(menuLabel("codex-dip"), "Dip'n'Dive");
   assert.ok(!menuLabel("temp").includes("&"));
   assert.equal(apiMode("temp"), "source");
   assert.equal(apiMode("claude-dive"), "claude-dive");
+});
+
+test("the five buttons are built in MODES order and nothing reorders them, so the Tab order is the visual order", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  // one loop over MODES creates each button and appends it, in that order
+  assert.match(js, /for \(const m of MODES\) \{\n[\s\S]*?document\.createElement\("button"\)[\s\S]*?\$\("buttons"\)\.appendChild\(b\);[\s\S]*?\n\}/);
+  assert.ok(!/tabindex/i.test(h) && !/tabindex/i.test(js), "no tabindex anywhere: focus follows document order");
+  assert.ok(!/<button[^>]*class="mode/.test(h), "the buttons are not also written by hand in the markup");
+  assert.match(css, /#buttons \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+  // no style that places a button anywhere but its natural cell
+  const rules = [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => /#buttons|button\.(mode|claude-|codex-|temp)/.test(m[1])).map((m) => m[2]).join(";");
+  assert.ok(rules.length > 500, "the button rules were found");
+  for (const re of [/(?<![-\w])order\s*:/, /grid-(column|row|area)/, /row-reverse|column-reverse/, /(?<![-\w])direction\s*:/, /grid-auto-flow\s*:[^;]*dense/]) {
+    assert.ok(!re.test(rules), `a rule reorders the buttons: ${re}`);
+  }
 });
 
 test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {

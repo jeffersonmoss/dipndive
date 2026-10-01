@@ -53,6 +53,11 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
       if (path === "/health") return respond(200, server.health);
       if (init.method === "POST" && path === "/jobs") {
         if (server.conflictOnce) { server.conflictOnce = false; return respond(409, { error_code: "request_id_conflict" }); }
+        // The companion's rule (dipdive/service.py submit): a generation older than the current one is refused, no job made.
+        // Off unless a test turns it on, so the older tests keep exercising the fallback of an answer that carries a new one.
+        if (server.staleCheck && typeof body.clearGeneration === "number" && body.clearGeneration < server.clearGen) {
+          return respond(409, { error_code: "stale_clear_generation", error_message: "history was cleared since this client last synced", clear_generation: server.clearGen });
+        }
         const id = `job${++server.seq}`;
         if (server.postStatus) return respond(server.postStatus, { error_code: server.postError || "bad_request", error_message: null });
         server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history };
