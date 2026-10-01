@@ -1,0 +1,37 @@
+/* The History page: the panel's palette (panel.css), light and dark through prefers-color-scheme, in a full-width
+   reading column. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2; --fg: #1c1b19; --muted: #6b675f; --card: #ffffff; --line: #d9d5cc; --link: #1a55c4;
+  --err-bg: #fde8e6; --err-fg: #8c1d13; --mark: #ffe08a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1d1c1a; --fg: #ecebe7; --muted: #9b968c; --card: #262522; --line: #3b3935; --link: #8ab4ff;
+    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --mark: #6b5310;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
+header#top { position: sticky; top: 0; z-index: 1; background: var(--bg); border-bottom: 1px solid var(--line); padding: 14px 24px 10px; }
+.bar, #count, main { max-width: 820px; margin: 0 auto; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+h1 { margin: 0; font-size: 19px; font-weight: 650; flex: none; }
+#search { flex: 1; min-width: 220px; padding: 9px 12px; font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+#search:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+#count { margin-top: 6px; }
+.muted { color: var(--muted); font-size: 13px; }
+main { padding: 16px 24px 48px; }
+#list { display: flex; flex-direction: column; gap: 12px; }
+.hentry { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 20px 6px; overflow-wrap: anywhere; }
+.htitle { display: block; font-weight: 600; font-size: 17px; line-height: 1.35; color: var(--link); text-decoration: none; }
+a.htitle:hover { text-decoration: underline; }
+span.htitle { color: var(--fg); }
+.hchannel, .hmeta { font-size: 13px; color: var(--muted); }
+.hsummary a { color: var(--link); }
+.hsummary code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+.hsummary pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
+.htitle:focus-visible, .hsummary a:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.error { background: var(--err-bg); color: var(--err-fg); padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+[hidden] { display: none !important; }

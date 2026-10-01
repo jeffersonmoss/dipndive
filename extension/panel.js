@@ -4,9 +4,18 @@ import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
+import { openHistoryTab } from "./lib/history.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
+
+// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, washed out for Dip; Temp chat is a dotted
+// speech bubble. Decorative: the button's name is its hidden label.
+const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/modes/${name}-72.png 2x" width="34" height="34" alt="">`;
+const MODE_ICON = {
+  "claude-dive": logo("claude-dive"), "claude-dip": logo("claude-dip"), "codex-dip": logo("codex-dip"), "codex-dive": logo("codex-dive"),
+  temp: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 4.5h13a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 3.5v-3.5h-1A2.5 2.5 0 0 1 3 15V7a2.5 2.5 0 0 1 2.5-2.5z" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.1 3"/></svg>',
+};
 
 // Buttons are built once; state changes only flip aria-pressed and classes.
 const buttons = {};
@@ -16,7 +25,7 @@ for (const m of MODES) {
   b.className = `mode ${m.id}`;
   b.dataset.mode = m.id;
   b.setAttribute("aria-pressed", "false");
-  b.innerHTML = `<span>${m.top}</span><span>${m.bottom}</span>`;
+  b.innerHTML = `${MODE_ICON[m.id]}<span class="sr-only">${m.label}</span>`;  // the name is the label; the tooltip too
   b.title = m.label;
   $("buttons").appendChild(b);
   buttons[m.id] = b;
@@ -61,7 +70,20 @@ function render(s) {
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
+  renderSave(s);
   document.body.classList.toggle("busy", !!s.busy);
+}
+
+// ---------- "Save this Dip to history" ----------
+// Shown only next to a finished Dip or Dive that has an entry in the companion's history log; never in Temp chat.
+function renderSave(s) {
+  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";  // also while unknown
+  $("saveline").hidden = !show;
+  if (!show) return;
+  $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
+  $("savehist").checked = s.saved;
+  $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
+  $("savehist").disabled = !!s.savingSaved;
 }
 
 // ---------- question box ----------
@@ -111,9 +133,15 @@ function renderThread(s) {
 }
 
 function renderAsk(s) {
+  // The bottom row is there whenever the companion is set up, so History is always one click away; the question box,
+  // Speak and Ask only once there is a source to ask about.
+  $("ask").hidden = !s.configured;
   const show = s.configured && !!s.source;
-  $("ask").hidden = !show;
-  if (!show) return;
+  $("askform").hidden = !show;
+  if (!show) {
+    for (const id of ["micmsg", "micsetup", "askerror"]) $(id).hidden = true;
+    return;
+  }
   renderThread(s);
   const m = s.mic;
   const live = m.state !== MIC.IDLE;
@@ -161,15 +189,19 @@ $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 $("mic").addEventListener("click", () => ctl.toggleMic());
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
-window.addEventListener("focus", () => ctl.refreshMic());
+window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log
 // Chrome keeps a side panel that another panel replaced alive (and recognition with it), with no Stop button in sight:
 // stop listening when the panel is hidden, keeping the words in the box.
 document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.pauseMic(); else ctl.refreshMic(); });
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
-$("clear").addEventListener("click", (e) => { e.preventDefault(); ctl.clearHistory(); });
-$("options").addEventListener("click", (e) => {
-  e.preventDefault();
+$("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checked));
+
+// ---------- History: its own tab (history.html), reused when one is already open ----------
+const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
+$("historylink").addEventListener("click", () => openHistoryTab(chrome, historyUrl));
+// the gear: Settings (the Options page, where Clear history also lives)
+$("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
 });
 chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));

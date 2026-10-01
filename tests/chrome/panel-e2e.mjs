@@ -168,6 +168,19 @@ try {
     report.afterStop = { turns: outcome.turns, message: outcome.msg, error: outcome.err, pending: outcome.pending };
     check("after stop: either the recognized words were sent and answered, or one line says nothing was heard",
       outcome.turns === 1 || /did not hear/.test(outcome.msg) || outcome.pending, report.afterStop);
+
+    // 8. History opens history.html in a tab of its own, which loads the log; a second click reuses that tab
+    const historyTabs = async () => (await targets()).filter((t) => t.type === "page" && t.url === `${origin}/history.html`);
+    await q(`document.getElementById("historylink").click()`);
+    const firstTab = await until(async () => (await historyTabs()).length === 1, 8000);
+    check("History opened history.html in a tab", !!firstTab);
+    if (firstTab) {
+      const hp = await attachTo((await historyTabs())[0]);
+      check("the History tab loaded the log from the companion", await until(() => hp.eval(`document.body.dataset.loaded === "yes" && document.querySelectorAll("#list .hentry").length > 0`), 15000));
+      await q(`document.getElementById("historylink").click()`);
+      await sleep(1500);
+      check("a second click reuses the open History tab", (await historyTabs()).length === 1, (await historyTabs()).length);
+    }
   });
 } catch (e) {
   report.fatal = String(e && e.stack || e);

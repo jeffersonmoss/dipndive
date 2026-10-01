@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Dip'n'Dive history</title>
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <header id="top">
+    <div class="bar">
+      <h1>Dip'n'Dive history</h1>
+      <input id="search" type="search" placeholder="Search titles, channels and summaries" aria-label="Search the history" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="count" class="muted" role="status" aria-live="polite">Loading...</div>
+  </header>
+  <main>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div id="empty" class="muted" hidden>Nothing has been logged yet. A Dip or Dive summary is added here every time one finishes.</div>
+    <div id="list" role="list"></div>
+  </main>
+  <script type="module" src="history.js"></script>
+</body>
+</html>

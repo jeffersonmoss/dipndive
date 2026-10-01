@@ -142,9 +142,9 @@ test("panel has the question box below the result, a mic button next to it, and 
   assert.match(h, /<form id="askform"/);
   assert.match(h, /id="askinput"[^>]*placeholder="Ask a question"/);
   assert.ok(h.indexOf('id="askinput"') < h.indexOf('id="mic"'), "mic is next to the box");
-  assert.match(h, /<button id="mic" type="button" data-state="idle"/);
+  assert.match(h, /<button id="mic" class="rowbtn" type="button" data-state="idle"/);
   assert.match(h, /<button id="micsetup" type="button" hidden>Enable microphone<\/button>/);
-  assert.match(h, /<button id="askgo" type="submit">Ask<\/button>/);
+  assert.match(h, /<button id="askgo" class="rowbtn" type="submit" title="Ask">\s*<svg[^>]*aria-hidden="true"[\s\S]*?<span class="sr-only">Ask<\/span>\s*<\/button>/);
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
   assert.match(css, /#mic\[data-state="listening"\]/, "recording has its own visual state");
 });
@@ -162,7 +162,8 @@ test("the question controls are docked below the scrolling page, with every mess
   assert.match(css, /body \{[^}]*height: 100vh; overflow: hidden/);
   assert.match(css, /#page \{[^}]*flex: 1; min-height: 0; overflow-y: auto/);
   assert.match(css, /#ask \{ flex: none;/);
-  assert.match(css, /#mic \{[^}]*width: 92px/, "the mic button keeps its width whatever its label says");
+  assert.match(css, /#mic \{[^}]*width: \d+px; height: \d+px/, "the mic button keeps its size whatever its label says");
+  assert.ok(!/#mic\[data-state="(listening|starting|stopping)"\][^{]*\{[^}]*transform/.test(css), "and does not move while recording");
 });
 
 test("mic button accessibility: its name is its visible label, no changing aria-label, and the recording colour has AA contrast in both themes", () => {

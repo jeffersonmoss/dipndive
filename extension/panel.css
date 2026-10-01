@@ -6,6 +6,7 @@
   --temp: #ffffff; --temp-edge: #b9b5ab; --on-pale: #2a2724;
   --err-bg: #fde8e6; --err-fg: #8c1d13; --warn-bg: #fff3d6; --warn-fg: #6a4a00; --link: #1a55c4;
   --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff; --q-bg: #ebe8e1;
+  --mode-bg: #000000; --mode-border: #000000; --mode-ledge: #48453f;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -15,6 +16,7 @@
     --temp: #e9e8e4; --temp-edge: #8b877d;
     --err-bg: #4a1f1b; --err-fg: #ffb4ab; --warn-bg: #4a3a12; --warn-fg: #ffd98a; --link: #8ab4ff;
     --rec: #c62a1c; --rec-edge: #8f150c; --q-bg: #34322e;
+    --mode-border: #34322e; --mode-ledge: #5a5750;
   }
 }
 * { box-sizing: border-box; }
@@ -35,24 +37,25 @@ body {
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
 #buttons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+/* Five black squares (the 7900f77 size) with the provider's logo: Claude's starburst, the Codex app logo, full strength for
+   Dive and washed out for Dip, and a dotted speech bubble for Temp chat. Unpressed they stand on a ledge; pressed they
+   sink, lose the ledge, take inset shading and a rim and glow in the provider's colour (--rim), in both themes. */
 button.mode {
-  aspect-ratio: 1; min-height: 56px; border-radius: 12px; border: 2px solid; cursor: pointer; padding: 4px 2px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15;
-  font-family: inherit; font-weight: 600; font-size: 12px; line-height: 1.15; transition: transform .06s, box-shadow .06s;
-  /* raised look: a hard darker edge underneath */
+  aspect-ratio: 1; min-height: 56px; border-radius: 12px; border: 2px solid var(--mode-border); cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center; background: var(--mode-bg); color: #ffffff;
+  box-shadow: 0 4px 0 var(--mode-ledge); transition: transform .06s, box-shadow .06s;
 }
-button.mode span:last-child { font-size: 13px; }
-button.claude-dip   { background: var(--claude-pale); color: var(--on-pale); border-color: var(--claude-pale-edge); box-shadow: 0 4px 0 var(--claude-pale-edge); }
-button.claude-dive  { background: var(--claude); color: var(--on-claude); border-color: var(--claude-edge); box-shadow: 0 4px 0 var(--claude-edge); }
-button.temp         { background: var(--temp); color: #2a2724; border-color: var(--temp-edge); box-shadow: 0 4px 0 var(--temp-edge); }
-button.codex-dip    { background: var(--codex-pale); color: var(--on-pale); border-color: var(--codex-pale-edge); box-shadow: 0 4px 0 var(--codex-pale-edge); }
-button.codex-dive   { background: var(--codex); color: var(--on-codex); border-color: var(--codex-edge); box-shadow: 0 4px 0 var(--codex-edge); }
-/* physically pressed: inset shadow, slight drop, darker edge */
+button.mode img, button.mode svg { width: 34px; height: 34px; display: block; pointer-events: none; }
+button.claude-dive, button.claude-dip { --rim: #D97757; --glow: rgba(217, 119, 87, .55); }
+button.codex-dive, button.codex-dip   { --rim: #5B8CFF; --glow: rgba(91, 140, 255, .55); }
+button.temp                           { --rim: #e9e6df; --glow: rgba(233, 230, 223, .4); }
+button.mode:hover:not(:disabled):not([aria-pressed="true"]) { border-color: var(--rim); }
+/* physically pressed: sunk by its ledge, inset shading, and a rim and glow in the provider's colour */
 button.mode[aria-pressed="true"] {
   transform: translateY(3px);
-  box-shadow: inset 0 4px 10px rgba(0, 0, 0, .5), inset 0 0 0 1px rgba(0, 0, 0, .25);
-  border-color: rgba(0, 0, 0, .55);
-  filter: brightness(.92);
+  border-color: var(--rim);
+  background: radial-gradient(circle at 50% 58%, #161616 0, #000 72%);
+  box-shadow: inset 0 4px 10px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .06), 0 0 9px 1px var(--glow);
 }
 button.mode:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; filter: grayscale(.6); }
 button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
@@ -67,7 +70,17 @@ button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link);
 #result code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
 #result pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
 /* question box */
-#ask { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 12px; border-top: 1px solid var(--line); background: var(--bg); }
+/* the docked bottom row: History, the question box, Speak and Ask, about a third less tall than before (36 px controls) */
+#ask { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 5px 12px 6px; border-top: 1px solid var(--line); background: var(--bg); }
+#askrow { display: flex; gap: 6px; align-items: stretch; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* History and Ask: black buttons with white icons, in both themes (Speak is the white one) */
+.rowbtn {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0;
+  border-radius: 10px; border: 1px solid var(--mode-border); background: var(--mode-bg); color: #ffffff; cursor: pointer;
+}
+.rowbtn:active:not(:disabled) { transform: translateY(1px); }
+#historylink:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 #thread:empty { display: none; }
 #thread { display: flex; flex-direction: column; gap: 8px; }
 .turn { display: flex; flex-direction: column; gap: 4px; }
@@ -77,22 +90,24 @@ button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link);
 .turn .a a { color: var(--link); }
 .turn .a code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
 .turn .a pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
-#askform { display: flex; gap: 8px; align-items: stretch; }
-#askinput { flex: 1; min-width: 0; padding: 9px 10px; font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+#askform { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: stretch; }
+#askinput { flex: 1; min-width: 0; height: 36px; padding: 0 10px; font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 #askinput:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
 #askinput:read-only { border-style: dashed; }
 #mic {
-  /* fixed width: the label changes (Speak, Wait..., Stop, Send...) and the button must not move or resize */
-  display: flex; align-items: center; justify-content: center; gap: 5px; flex: none; width: 92px; min-height: 44px; padding: 0 6px;
-  border-radius: 12px; border: 2px solid var(--temp-edge); background: var(--temp); color: #2a2724; cursor: pointer;
-  font-family: inherit; font-weight: 600; font-size: 13px; line-height: 1; box-shadow: 0 3px 0 var(--temp-edge);
+  /* a solid white button with a black microphone, in both themes. Fixed size and no transform in any state: it must not
+     move or resize between the click that starts a recording and the click that stops it. Its name is the hidden label
+     (Speak, Wait..., Stop, Send...). */
+  width: 44px; height: 36px; border-radius: 10px; border: 2px solid var(--temp-edge); background: #ffffff; color: #111111;
+  box-shadow: 0 2px 0 var(--temp-edge);
 }
-#mic[data-state="listening"], #mic[data-state="starting"] { background: var(--rec); color: var(--on-rec); border-color: var(--rec-edge); box-shadow: inset 0 3px 8px rgba(0,0,0,.45); transform: translateY(2px); animation: rec 1.2s ease-in-out infinite; }
-#mic[data-state="stopping"] { opacity: .8; animation: none; }
+/* listening: red with a white microphone and a pulsing ring, in the same place and size */
+#mic[data-state="listening"], #mic[data-state="starting"] { background: var(--rec); color: var(--on-rec); border-color: var(--rec-edge); box-shadow: inset 0 2px 6px rgba(0,0,0,.45); animation: rec 1.2s ease-in-out infinite; }
+#mic[data-state="stopping"] { background: var(--rec); color: var(--on-rec); border-color: var(--rec-edge); opacity: .8; animation: none; }
 #mic:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+#mic:active:not(:disabled) { transform: none; }
 #mic:focus-visible, #askgo:focus-visible, #micsetup:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
-@keyframes rec { 0%, 100% { box-shadow: inset 0 3px 8px rgba(0,0,0,.45), 0 0 0 0 rgba(224,64,47,.55); } 50% { box-shadow: inset 0 3px 8px rgba(0,0,0,.45), 0 0 0 6px rgba(224,64,47,0); } }
-#askgo { flex: none; padding: 0 14px; font-family: inherit; font-weight: 600; font-size: 14px; line-height: 1.2; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+@keyframes rec { 0%, 100% { box-shadow: inset 0 2px 6px rgba(0,0,0,.45), 0 0 0 0 rgba(224,64,47,.55); } 50% { box-shadow: inset 0 2px 6px rgba(0,0,0,.45), 0 0 0 5px rgba(224,64,47,0); } }
 #askgo:disabled { opacity: .45; cursor: not-allowed; }
 #askgo:active:not(:disabled) { transform: translateY(1px); }
 .micmsg { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
@@ -103,9 +118,20 @@ button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link);
 .error { background: var(--err-bg); color: var(--err-fg); }
 .warn { background: var(--warn-bg); color: var(--warn-fg); }
 .note { background: var(--card); border: 1px solid var(--line); }
-footer { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-top: auto; }
-footer .links { display: flex; gap: 12px; font-size: 12px; white-space: nowrap; }
-footer a { color: var(--link); }
+/* the status line also carries the save box and the Settings gear, so they add no row */
+footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: auto; }
+footer #status { flex: 1 1 auto; min-width: 0; }
+footer .links { display: flex; align-items: center; gap: 8px; font-size: 12px; white-space: nowrap; }
+.savebox { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--fg); }
+.savebox input { width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--link); }
+.savebox input:disabled { cursor: progress; }
+.savebox input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.iconbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer;
+}
+.iconbtn:hover { color: var(--fg); }
+.iconbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 body.busy #status::after { content: ""; display: inline-block; width: 10px; height: 10px; margin-left: 6px; border: 2px solid var(--muted); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { button.mode { transition: none; } body.busy #status::after { animation: none; } #mic[data-state="listening"], #mic[data-state="starting"] { animation: none; } }
