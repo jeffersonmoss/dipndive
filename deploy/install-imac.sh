@@ -55,7 +55,7 @@ run launchctl kickstart -k "gui/$(id -u)/$LABEL"
 TAILSCALE="$(command -v tailscale || true)"
 [ -n "$TAILSCALE" ] || TAILSCALE=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 [ -x "$TAILSCALE" ] || { echo "tailscale not found; install it, then re-run" >&2; exit 1; }
-run "$TAILSCALE" serve --bg --https=443 "http://127.0.0.1:$PORT"
+run "$TAILSCALE" serve --bg --https="${SERVE_PORT:-8443}" "http://127.0.0.1:$PORT"
 
 if [ "$DRY" != 1 ]; then
   sleep 3
