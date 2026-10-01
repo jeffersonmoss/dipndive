@@ -1,10 +1,13 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
 import { pruneSlots, slotKey } from "./background-core.js";
-import { normalizeTyped } from "./urls.js";
+import { normalizeTyped, sourceKey } from "./urls.js";
+import { ASK_LIMITS, askProvider, capHistory, cleanQuestion } from "./ask.js";
+import { MIC, VoiceInput } from "./voice.js";
 import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
+export const ASK_POLL_MS = 1200;
 
 const MESSAGES = {
   no_captions: "This video has no usable captions, so there is nothing to summarize.",
@@ -17,6 +20,7 @@ const MESSAGES = {
   queue_full: "The companion is busy. Try again in a minute.",
   interrupted: "The companion restarted during this job. Press the button again.",
   request_id_conflict: "Internal request conflict. Right-click the link again.",
+  bad_request: "The companion refused that question. Try a shorter one.",
 };
 
 export function describeError(code, message) {
@@ -35,13 +39,28 @@ export class Controller {
     this.selGen = 0;       // bumped on every selection; older responses are discarded
     this.clearGen = null;  // highest companion clear generation seen
     this.timer = null;
+    this.askTimer = null;
+    this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
     this.tempText = null;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
       codexOk: null, codexReason: "",
+      // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
+      // controller, not the user, writes it), and the microphone state
+      thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
+      mic: null,
     };
+    this.voice = new VoiceInput({
+      SpeechRecognition: deps.speech || null,
+      permissions: deps.permissions || null,
+      setTimer: deps.setVoiceTimer || deps.setTimer,
+      clearTimer: deps.clearVoiceTimer || deps.clearTimer,
+      onChange: (m) => this.onMic(m),
+      onFinal: (text, o) => this.onVoiceText(text, o),
+    });
+    this.s.mic = this.voice.snapshot();
   }
 
   emit(patch = {}) {
@@ -85,6 +104,7 @@ export class Controller {
     }
     await this.checkHealth();
     this.emit({ mode: this.effectiveMode(normalizeMode(all.mode)) });
+    this.voice.refreshPermission();  // shows Enable microphone up front when the grant is missing
     let mine = all[slotKey(windowId)];
     if (!mine) {
       // After a browser restart window ids change: take the newest slot and move it to this window.
@@ -106,9 +126,12 @@ export class Controller {
       return;
     }
     const isNew = !this.slot || this.slot.requestId !== slot.requestId;
+    const prev = this.slot;
     this.slot = slot;
     this.emit({ source: { url: slot.url } });
     if (!isNew) return;
+    // The question thread belongs to one source: another source starts a fresh one.
+    if (!prev || sourceKey(prev.url) !== sourceKey(slot.url)) this.resetAsk();
     if (slot.consumed && slot.jobId) {
       this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)) });
       await this.beginTracking(slot.jobId);
@@ -290,6 +313,132 @@ export class Controller {
       await this.d.storage.remove(Object.keys(all).filter((k) => k.startsWith("slot:")));
       if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     }
+    if (r.status === 200) this.resetAsk();  // the Q&A history goes too
     this.resetView({ status: r.status === 200 ? "History cleared." : "Could not clear history.", busy: false });
+  }
+
+  // ---------- question box ----------
+  stopAskTimer() {
+    if (this.askTimer !== null) { this.d.clearTimer(this.askTimer); this.askTimer = null; }
+  }
+
+  // New source or cleared history: forget the thread, drop any answer still on its way, stop listening.
+  resetAsk() {
+    this.askGen++;
+    this.stopAskTimer();
+    this.voice.cancel();
+    this.emit({ thread: [], asking: null, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
+  }
+
+  // The user typed in the box (no re-render: the field already shows it).
+  typed(text) {
+    this.s.draft = String(text ?? "");
+  }
+
+  onMic(m) {
+    const live = m.state === MIC.LISTENING || m.state === MIC.STOPPING;
+    const patch = { mic: m };
+    if (live && m.text !== this.s.draft) { patch.draft = m.text; patch.draftSeq = this.s.draftSeq + 1; }
+    this.emit(patch);
+  }
+
+  // Recognized text lands in the box; it is sent automatically unless recognition failed part way.
+  onVoiceText(text, { send }) {
+    this.emit({ draft: text, draftSeq: this.s.draftSeq + 1 });
+    return send ? this.askQuestion(text) : undefined;
+  }
+
+  async toggleMic() {
+    if (this.s.asking) return;
+    if (!this.slot && this.s.mic.state === MIC.IDLE) {
+      this.emit({ askError: "Paste a link or right-click a link first, then ask." });
+      return;
+    }
+    this.emit({ askError: null });
+    await this.voice.toggle();
+  }
+
+  refreshMic() {
+    return this.voice.refreshPermission();
+  }
+
+  // Side panels cannot show Chrome's permission prompt, so the one-time grant happens in a normal tab.
+  openMicSetup() {
+    this.d.openTab(this.d.micSetupUrl);
+    this.voice.noteSetupOpened();
+  }
+
+  restoreDraft(q, error) {
+    this.emit({ asking: null, askError: error, draft: q, draftSeq: this.s.draftSeq + 1 });
+  }
+
+  askFailure(gen, q, e) {
+    if (gen !== this.askGen) return;
+    this.stopAskTimer();
+    const msg = e instanceof ApiError && e.kind === "config" ? "Set the companion URL and token in the extension options."
+      : "Cannot reach the companion. Is the iMac on and connected to Tailscale?";
+    this.restoreDraft(q, msg);
+  }
+
+  acceptAsk(gen, json) {
+    if (gen !== this.askGen) return false;
+    const cg = json && json.clear_generation;
+    if (typeof cg === "number") {
+      if (this.clearGen !== null && cg < this.clearGen) return false;
+      this.clearGen = cg;
+    }
+    return true;
+  }
+
+  // Ask about the current source. `text` defaults to the box. Returns true once the question was sent.
+  async askQuestion(text) {
+    const q = cleanQuestion(text === undefined ? this.s.draft : text);
+    if (!this.s.configured) { this.emit({ askError: "Set the companion URL and token in the extension options." }); return false; }
+    if (!q) { this.emit({ askError: "Type or say a question first." }); return false; }
+    if (q.length > ASK_LIMITS.question) { this.emit({ askError: `That question is too long (over ${ASK_LIMITS.question} characters).` }); return false; }
+    if (!this.slot) { this.emit({ askError: "Paste a link or right-click a link first, then ask." }); return false; }
+    if (this.s.asking) { this.emit({ askError: "Wait for the current answer first." }); return false; }
+    const gen = ++this.askGen;
+    this.stopAskTimer();
+    const url = this.slot.url;
+    const history = capHistory(this.s.thread);
+    this.emit({ asking: { q, label: "Thinking..." }, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
+    const mode = this.s.mode;
+    if (!String(mode).startsWith("claude")) {
+      await this.checkHealth();  // Codex may have signed out since the panel opened
+      if (gen !== this.askGen) return false;
+    }
+    const provider = askProvider(mode, this.s.codexOk);
+    let r;
+    try {
+      r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
+        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, force: false }, 5000);
+    } catch (e) { this.askFailure(gen, q, e); return false; }
+    if (!this.acceptAsk(gen, r.json)) return false;
+    if (r.status === 401) { this.restoreDraft(q, "The token was rejected. Check the options page."); return false; }
+    if (r.status >= 400 || !r.json.job_id) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return false; }
+    await this.pollAsk(r.json.job_id, gen, q);
+    return true;
+  }
+
+  async pollAsk(jobId, gen, q) {
+    if (gen !== this.askGen) return;
+    let r;
+    try {
+      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 5000);
+    } catch (e) { this.askFailure(gen, q, e); return; }
+    if (!this.acceptAsk(gen, r.json)) return;
+    if (r.status === 404) { this.restoreDraft(q, "That answer is gone (history was cleared). Ask again."); return; }
+    if (r.status >= 400) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return; }
+    const j = r.json;
+    if (j.state === "done") {
+      this.emit({ thread: [...this.s.thread, { q, a: j.result_markdown || "" }], asking: null, askError: null });
+    } else if (j.state === "error") {
+      this.restoreDraft(q, describeError(j.error_code, j.error_message));
+    } else {
+      const label = { queued: "Thinking...", fetching: "Fetching the source...", summarizing: "Thinking..." }[j.state] || "Thinking...";
+      this.emit({ asking: { q, label } });
+      this.askTimer = this.d.setTimer(() => { this.askTimer = null; return this.pollAsk(jobId, gen, q); }, ASK_POLL_MS);
+    }
   }
 }

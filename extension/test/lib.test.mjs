@@ -116,3 +116,37 @@ test("panel has the URL field (placeholder, Go button, form submit) and the mani
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.ok(!m.permissions.includes("clipboardRead"));
 });
+
+test("panel has the question box below the result, a mic button next to it, and the Enable microphone button", () => {
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  assert.ok(h.indexOf('id="result"') < h.indexOf('id="askform"'), "box is below the result");
+  assert.match(h, /<form id="askform"/);
+  assert.match(h, /id="askinput"[^>]*placeholder="Ask about this source"/);
+  assert.ok(h.indexOf('id="askinput"') < h.indexOf('id="mic"'), "mic is next to the box");
+  assert.match(h, /<button id="mic" type="button" aria-pressed="false"/);
+  assert.match(h, /<button id="micsetup" type="button" hidden>Enable microphone<\/button>/);
+  assert.match(h, /<button id="askgo" type="submit">Ask<\/button>/);
+  // messages sit BELOW the controls: a line appearing while listening must not push the mic button away from the cursor
+  assert.ok(h.indexOf('id="askform"') < h.indexOf('id="micmsg"') && h.indexOf('id="askform"') < h.indexOf('id="micsetup"'));
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  assert.match(css, /#mic\[aria-pressed="true"\]/, "recording has its own visual state");
+});
+
+test("microphone setup page: one-time getUserMedia in a normal tab, tracks stopped at once, back to the panel", () => {
+  const h = fs.readFileSync(new URL("../mic.html", import.meta.url), "utf8");
+  const j = fs.readFileSync(new URL("../mic.js", import.meta.url), "utf8");
+  assert.match(h, /src="mic\.js"/);
+  assert.match(j, /getUserMedia\(\{ audio: true \}\)/);
+  assert.ok(j.indexOf("getUserMedia") < j.indexOf("t.stop()"), "the tracks are stopped after the grant");
+  assert.match(j, /go back to the Dip'n'Dive panel/);
+  assert.match(j, /chrome:\/\/settings\/content\/siteDetails/, "blocked case points at the Chrome setting");
+  assert.match(h, /Allow<\/b> \(not "Allow this time"\)/);
+  const p = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(p, /getURL\("mic\.html"\)/);
+});
+
+test("the microphone needs no extra manifest permission", () => {
+  const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
+  assert.ok(!m.permissions.includes("audioCapture"));
+  assert.ok(!m.permissions.includes("offscreen"), "no offscreen document: recognition runs in the panel itself");
+});

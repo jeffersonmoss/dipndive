@@ -27,6 +27,25 @@ export function knownVideo(u) {
   return false;
 }
 
+// Identity of a source for the question box: the YouTube video id when the URL names one video, else the URL
+// without its fragment. Two links with the same key are the same source, so the Q&A thread is kept.
+export function sourceKey(u) {
+  let url;
+  try {
+    url = new URL(u);
+  } catch {
+    return String(u);
+  }
+  if (knownVideo(u)) {
+    const h = url.hostname.toLowerCase();
+    const id = h === "youtu.be" ? url.pathname.slice(1, 12)
+      : url.pathname === "/watch" ? url.searchParams.get("v") : url.pathname.split("/")[2].slice(0, 11);
+    return `yt:${id}`;
+  }
+  url.hash = "";
+  return url.href;
+}
+
 // linkUrl; then srcUrl only if http(s) and a known video (on YouTube it is usually a blob: URL);
 // then frameUrl when it is a known video embed; then pageUrl.
 export function pickUrl(info) {

@@ -1,0 +1,442 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { slotKey } from "../lib/background-core.js";
+import { ASK_LIMITS, askProvider, capHistory, cleanQuestion } from "../lib/ask.js";
+import { MIC } from "../lib/voice.js";
+import { renderMarkdown } from "../lib/markdown.js";
+import { sourceKey } from "../lib/urls.js";
+import { makePermissions, makeSpeech, rig, slot } from "./rig.mjs";
+
+const posts = (r) => r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
+const asks = (r) => posts(r).filter((p) => p.body.mode.endsWith("-ask"));
+// Let one pending asynchronous step (a held fetch, a resolved promise chain) run.
+const flush = () => new Promise((x) => setTimeout(x, 0));
+
+// A panel with a summary already shown and the question box usable.
+async function ready(opts = {}) {
+  const r = rig({ slot: slot(), mode: "claude-dip", ...opts });
+  await r.c.init(1);
+  await r.tick();  // summary job finishes
+  return r;
+}
+
+test("ask: the question is sent about the current source, an answer lands in the thread, the summary stays", async () => {
+  const r = await ready();
+  assert.equal(r.state.last.result, "Summary for claude-dip");
+  assert.equal(await r.c.askQuestion("okay, what is the deal with the chocolate?"), true);
+  const [p] = asks(r);
+  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], force: false });
+  assert.ok(p.body.requestId.startsWith("uuid-"));
+  assert.equal(p.auth, "Bearer " + "t".repeat(40));
+  assert.equal(r.state.last.asking.q, "okay, what is the deal with the chocolate?");
+  await r.tick();
+  assert.deepEqual(r.state.last.thread, [{ q: "okay, what is the deal with the chocolate?", a: "Answer to: okay, what is the deal with the chocolate? [0 earlier]" }]);
+  assert.equal(r.state.last.asking, null);
+  assert.equal(r.state.last.result, "Summary for claude-dip", "the Dip result is untouched");
+  assert.equal(r.state.last.draft, "");
+});
+
+test("ask works with no summary at all (a question instead of Dip)", async () => {
+  const r = rig({ slot: slot({ consumed: true, jobId: "x" }), mode: "claude-dip" });
+  r.server.jobs.x = { state: "queued", mode: "claude-dip", url: "https://v.test/watch", polls: 0 };
+  await r.c.init(1);
+  await r.c.askQuestion("just tell me about the chocolate");
+  await r.tick(); await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+});
+
+test("follow-ups send the earlier questions and answers in this panel for this source", async () => {
+  const r = await ready();
+  await r.c.askQuestion("first?"); await r.tick();
+  await r.c.askQuestion("and why?"); await r.tick();
+  await r.c.askQuestion("last one"); await r.tick();
+  const [a, b, c] = asks(r);
+  assert.deepEqual(a.body.history, []);
+  assert.deepEqual(b.body.history, [{ q: "first?", a: "Answer to: first? [0 earlier]" }]);
+  assert.equal(c.body.history.length, 2);
+  assert.equal(c.body.history[1].q, "and why?");
+  assert.equal(r.state.last.thread.length, 3);
+  assert.equal(r.state.last.thread[2].a, "Answer to: last one [2 earlier]");
+});
+
+test("history sent is capped to the newest turns and the character budget", async () => {
+  const r = await ready();
+  for (let i = 0; i < 9; i++) r.c.s.thread.push({ q: `old question ${i}`, a: "w".repeat(1100) });
+  await r.c.askQuestion("now?");
+  const h = asks(r)[0].body.history;
+  assert.ok(h.length <= ASK_LIMITS.turns);
+  assert.equal(h.at(-1).q, "old question 8");
+  assert.ok(!h.some((t) => t.q === "old question 2"));
+  assert.ok(h.reduce((n, t) => n + t.q.length + t.a.length, 0) <= ASK_LIMITS.budget);
+});
+
+test("capHistory matches the Python cap on the shared fixtures", () => {
+  const fx = JSON.parse(fs.readFileSync(new URL("../../tests/ask_cap_fixtures.json", import.meta.url), "utf8"));
+  assert.ok(fx.length >= 6);
+  for (const c of fx) assert.deepEqual(capHistory(c.history), c.expected, c.name);
+  assert.equal(cleanQuestion("  a \n b\t c "), "a b c");
+});
+
+test("provider follows the pressed button; Temp chat asks Codex unless Codex is unavailable", async () => {
+  assert.equal(askProvider("claude-dip", true), "claude");
+  assert.equal(askProvider("claude-dive", false), "claude");
+  assert.equal(askProvider("codex-dip", true), "codex");
+  assert.equal(askProvider("codex-dive", null), "codex");
+  assert.equal(askProvider("codex-dive", false), "claude");
+  assert.equal(askProvider("temp", true), "codex");
+  assert.equal(askProvider("temp", null), "codex");
+  assert.equal(askProvider("temp", false), "claude");
+  const cases = [["claude-dive", "claude-ask"], ["codex-dip", "codex-ask"], ["codex-dive", "codex-ask"], ["temp", "codex-ask"]];
+  for (const [mode, want] of cases) {
+    const r = rig({ slot: slot(), mode, health: { codex_ready: true, codex_logged_in: true } });
+    await r.c.init(1);
+    await r.c.selectMode(mode);  // press that button
+    await r.c.askQuestion("who said it?");
+    assert.equal(asks(r)[0].body.mode, want, mode);
+  }
+  const off = rig({ slot: slot(), mode: "temp", health: { codex_ready: false, codex_logged_in: false } });
+  await off.c.init(1);
+  await off.c.selectMode("temp");
+  await off.c.askQuestion("who said it?");
+  assert.equal(asks(off)[0].body.mode, "claude-ask", "Temp chat with Codex unavailable asks Claude");
+});
+
+test("Codex health is looked at again when asking, so a sign-out after the panel opened is noticed", async () => {
+  const r = rig({ slot: slot(), mode: "codex-dip", health: { codex_ready: true, codex_logged_in: true } });
+  await r.c.init(1);
+  await r.tick();
+  r.server.health = { codex_ready: false, codex_logged_in: false };
+  await r.c.askQuestion("still there?");
+  assert.equal(asks(r)[0].body.mode, "claude-ask");
+  assert.equal(r.state.last.codexOk, false);
+});
+
+test("a Claude ask makes no health request", async () => {
+  const r = await ready();
+  const before = r.log.fetches.filter((f) => f.path === "/health").length;
+  await r.c.askQuestion("hello?");
+  assert.equal(r.log.fetches.filter((f) => f.path === "/health").length, before);
+});
+
+test("a new source starts a fresh thread; the same source keeps it", async () => {
+  const r = await ready();
+  await r.c.askQuestion("q1"); await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+  // the same video written another way, a new right-click on it: same source, thread kept
+  await r.c.onSlot(slot({ url: "https://v.test/watch#t=5", requestId: "again" })); await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+  assert.equal(sourceKey("https://youtu.be/dQw4w9WgXcQ?t=5"), sourceKey("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=9"));
+  assert.notEqual(sourceKey("https://youtu.be/dQw4w9WgXcQ"), sourceKey("https://youtu.be/aaaaaaaaaaa"));
+  assert.equal(sourceKey("https://example.com/a#x"), sourceKey("https://example.com/a#y"));
+  // another source: right-click
+  await r.c.onSlot(slot({ url: "https://other.test/page", requestId: "other" }));
+  assert.deepEqual(r.state.last.thread, []);
+  await r.tick();
+  await r.c.askQuestion("q2");
+  assert.deepEqual(asks(r).at(-1).body.history, [], "nothing from the old source is sent");
+  await r.tick();
+  // another source: typed link
+  await r.c.submitTyped("https://third.test/x");
+  assert.deepEqual(r.state.last.thread, []);
+  assert.equal(r.state.last.asking, null);
+});
+
+test("an answer that arrives after the source changed is discarded", async () => {
+  const r = await ready();
+  r.server.hold = (path, body) => path === "/jobs" && body.mode === "claude-ask";
+  const pending = r.c.askQuestion("slow question");
+  await flush();
+  r.server.hold = null;
+  await r.c.onSlot(slot({ url: "https://other.test/page", requestId: "other" }));
+  r.holds.forEach((h) => h());
+  await pending;
+  await r.tick(); await r.tick();
+  assert.deepEqual(r.state.last.thread, []);
+  assert.equal(r.state.last.asking, null);
+  assert.equal(r.state.last.draft, "", "the old question does not come back into the box");
+});
+
+test("clear history clears the Q&A thread, the box and any answer on its way", async () => {
+  const r = await ready();
+  await r.c.askQuestion("q1"); await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+  r.server.hold = (path) => path.startsWith("/jobs/job");  // the poll for q2 is held on the wire
+  const pending = r.c.askQuestion("q2");
+  await flush();
+  r.c.typed("half typed");
+  await r.c.clearHistory();
+  assert.deepEqual(r.state.last.thread, []);
+  assert.equal(r.state.last.asking, null);
+  assert.equal(r.state.last.draft, "");
+  r.server.hold = null;
+  r.holds.forEach((h) => h());
+  await pending;
+  await flush();
+  assert.deepEqual(r.state.last.thread, [], "a pre-clear answer is not shown");
+  assert.equal(r.state.last.asking, null);
+  // after the clear the same panel asks with no earlier turns
+  await r.c.onSlot(slot({ url: "https://v.test/watch", requestId: "after-clear" })); await r.tick();
+  await r.c.askQuestion("q3");
+  assert.deepEqual(asks(r).at(-1).body.history, []);
+});
+
+test("an old clear generation in an answer is discarded", async () => {
+  const r = await ready();
+  r.c.clearGen = 5;
+  await r.c.askQuestion("q"); await r.tick();
+  assert.equal(r.c.clearGen, 5);  // server answers with generation 0: older, discarded
+  assert.deepEqual(r.state.last.thread, []);
+});
+
+test("only one question at a time; the second is refused with a message", async () => {
+  const r = await ready();
+  await r.c.askQuestion("one");
+  assert.equal(await r.c.askQuestion("two"), false);
+  assert.match(r.state.last.askError, /Wait for the current answer/);
+  assert.equal(asks(r).length, 1);
+});
+
+test("empty, too long, unconfigured and no-source cases are refused with one line and send nothing", async () => {
+  const r = await ready();
+  assert.equal(await r.c.askQuestion("   "), false);
+  assert.match(r.state.last.askError, /Type or say a question/);
+  assert.equal(await r.c.askQuestion("x".repeat(ASK_LIMITS.question + 1)), false);
+  assert.match(r.state.last.askError, /too long/);
+  assert.equal(asks(r).length, 0);
+  const none = rig({ mode: "claude-dip" });
+  await none.c.init(1);
+  assert.equal(await none.c.askQuestion("hello"), false);
+  assert.match(none.state.last.askError, /Paste a link or right-click/);
+  const off = rig({ cfg: {} });
+  await off.c.init(1);
+  assert.equal(await off.c.askQuestion("hello"), false);
+  assert.match(off.state.last.askError, /options/);
+  assert.equal(off.log.fetches.length, 0);
+});
+
+test("failures keep the question in the box so it can be sent again", async () => {
+  const r = await ready();
+  r.server.fail = new Error("down");
+  await r.c.askQuestion("will fail");
+  assert.match(r.state.last.askError, /Cannot reach the companion/);
+  assert.equal(r.state.last.draft, "will fail");
+  assert.equal(r.state.last.asking, null);
+  assert.deepEqual(r.state.last.thread, []);
+  r.server.fail = null;
+  await r.c.askQuestion();  // from the box
+  await r.tick();
+  assert.equal(r.state.last.thread[0].q, "will fail");
+  assert.equal(r.state.last.askError, null);
+
+  const e = await ready();
+  e.server.postStatus = 429; e.server.postError = "queue_full";
+  await e.c.askQuestion("busy");
+  assert.match(e.state.last.askError, /busy/);
+  assert.equal(e.state.last.draft, "busy");
+  e.server.postStatus = 401; e.server.postError = "unauthorized";
+  await e.c.askQuestion();
+  assert.match(e.state.last.askError, /token was rejected/);
+
+  const j = await ready();
+  await j.c.askQuestion("model trouble");
+  const id = Object.keys(j.server.jobs).at(-1);
+  j.server.jobs[id].fail = "timeout";
+  await j.tick(); await j.tick();
+  assert.match(j.state.last.askError, /took too long/);
+  assert.equal(j.state.last.draft, "model trouble");
+  assert.deepEqual(j.state.last.thread, []);
+});
+
+test("a job that disappeared (history cleared elsewhere) says so and keeps the question", async () => {
+  const r = await ready();
+  await r.c.askQuestion("gone soon");
+  const id = Object.keys(r.server.jobs).at(-1);
+  delete r.server.jobs[id];
+  await r.tick();
+  assert.match(r.state.last.askError, /history was cleared/);
+  assert.equal(r.state.last.draft, "gone soon");
+});
+
+test("the typed draft is tracked without re-rendering the field", async () => {
+  const r = await ready();
+  const seq = r.state.last.draftSeq;
+  r.c.typed("what happens next");
+  assert.equal(r.state.last.draftSeq, seq);
+  await r.c.askQuestion();  // from the box
+  assert.equal(asks(r)[0].body.question, "what happens next");
+});
+
+test("answers are rendered by the safe renderer and questions are plain text in the panel", () => {
+  const html = renderMarkdown('Fine <img src=x onerror=alert(1)> [x](javascript:alert(1)) ![p](https://e.test/p.png) **ok**');
+  assert.ok(!/<img/i.test(html));
+  assert.ok(!/href="javascript/i.test(html));
+  assert.match(html, /<strong>ok<\/strong>/);
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(js, /qe\.textContent = q;/, "the question goes in as text");
+  assert.match(js, /ae\.innerHTML = html/);
+  assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
+});
+
+// ---------- the microphone through the controller ----------
+
+async function micReady({ permission = "granted", ...opts } = {}) {
+  const speech = makeSpeech();
+  const permissions = makePermissions(permission);
+  const r = rig({ slot: slot(), mode: "claude-dip", speech, permissions, ...opts });
+  await r.c.init(1);
+  await r.tick();
+  return { r, speech, permissions };
+}
+const R = (t, final = false) => ({ t, final });
+
+test("mic: click to listen, words appear live in the box, click again and the question is sent automatically", async () => {
+  const { r, speech } = await micReady();
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("start"); rec.fire("audiostart");
+  assert.equal(r.state.last.mic.state, MIC.LISTENING);
+  const seq = r.state.last.draftSeq;
+  rec.result([R("okay what is")]);
+  assert.equal(r.state.last.draft, "okay what is");
+  assert.ok(r.state.last.draftSeq > seq, "the panel is told to redraw the box");
+  rec.result([R("okay what is the deal with the chocolate")]);
+  assert.equal(r.state.last.draft, "okay what is the deal with the chocolate");
+  assert.equal(asks(r).length, 0, "nothing is sent before the second click");
+  await r.c.toggleMic();
+  assert.equal(r.state.last.mic.state, MIC.STOPPING);
+  rec.finish([R("okay what is the deal with the chocolate", true)]);
+  await flush();
+  assert.equal(asks(r).length, 1);
+  assert.equal(asks(r)[0].body.question, "okay what is the deal with the chocolate");
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  assert.equal(r.state.last.asking.q, "okay what is the deal with the chocolate");
+  assert.equal(r.state.last.draft, "", "the box empties as the question goes out");
+  await r.tick();
+  assert.equal(r.state.last.thread.length, 1);
+});
+
+test("mic: a spoken follow-up carries the earlier turns", async () => {
+  const { r, speech } = await micReady();
+  await r.c.askQuestion("typed first"); await r.tick();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  await r.c.toggleMic();
+  speech.last.finish([R("and why is that", true)]);
+  await flush();
+  assert.deepEqual(asks(r)[1].body.history.map((t) => t.q), ["typed first"]);
+});
+
+test("mic: silence sends nothing and says so", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  await r.c.toggleMic();
+  speech.last.finish();
+  await flush();
+  assert.equal(asks(r).length, 0);
+  assert.match(r.state.last.mic.message, /did not hear anything/);
+});
+
+test("mic: a recognition error keeps the partial words in the box and does not send them", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  speech.last.result([R("half of a thought")]);
+  speech.last.fire("error", { error: "network" });
+  await flush();
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.draft, "half of a thought");
+  assert.match(r.state.last.mic.message, /Google's speech service/);
+  await r.c.askQuestion();  // the user can still send it with the Ask button
+  assert.equal(asks(r)[0].body.question, "half of a thought");
+});
+
+test("mic: permission missing at start offers Enable microphone; the setup button opens the extension page in a tab", async () => {
+  const { r, speech, permissions } = await micReady({ permission: "prompt" });
+  assert.equal(r.state.last.mic.needPermission, true, "offered up front, before any click");
+  assert.match(r.state.last.mic.message, /Enable microphone/);
+  await r.c.toggleMic();
+  assert.equal(speech.recs.length, 0);
+  assert.equal(r.state.last.mic.needPermission, true);
+  r.c.openMicSetup();
+  assert.deepEqual(r.log.tabs, ["chrome-extension://test/mic.html"]);
+  assert.match(r.state.last.mic.message, /Allow the microphone in the new tab/);
+  permissions.set("granted");  // the user clicked Allow in the tab and came back
+  await flush();
+  assert.equal(r.state.last.mic.needPermission, false);
+  assert.match(r.state.last.mic.message, /Microphone is on/);
+  assert.equal(speech.recs.length, 0, "no listening starts by itself");
+  await r.c.toggleMic();
+  assert.equal(speech.recs.length, 1);
+  speech.last.fire("audiostart");
+  assert.equal(r.state.last.mic.state, MIC.LISTENING);
+});
+
+test("mic: a not-allowed error from the recognizer itself also offers Enable microphone", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("error", { error: "not-allowed" });
+  assert.equal(r.state.last.mic.needPermission, true);
+  assert.match(r.state.last.mic.message, /Enable microphone/);
+});
+
+test("mic: not offered without a source, and ignored while an answer is being fetched", async () => {
+  const speech = makeSpeech();
+  const none = rig({ mode: "claude-dip", speech, permissions: makePermissions() });
+  await none.c.init(1);
+  await none.c.toggleMic();
+  assert.equal(speech.recs.length, 0);
+  assert.match(none.state.last.askError, /Paste a link or right-click/);
+  const { r, speech: sp2 } = await micReady();
+  await r.c.askQuestion("pending one");
+  await r.c.toggleMic();
+  assert.equal(sp2.recs.length, 0, "the mic is off while a question is in flight");
+});
+
+test("mic: changing the source while listening stops the recording and sends nothing", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  speech.last.result([R("about the first video")]);
+  await r.c.onSlot(slot({ url: "https://other.test/page", requestId: "other" }));
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  assert.ok(speech.last.calls.includes("abort"));
+  speech.last.finish([R("about the first video", true)]);
+  await flush();
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.draft, "");
+});
+
+test("mic: clear history while listening stops the recording too", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  await r.c.clearHistory();
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  assert.ok(speech.last.calls.includes("abort"));
+});
+
+test("mic: no SpeechRecognition in the browser leaves the button unavailable with one line", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await r.c.init(1);
+  assert.equal(r.state.last.mic.available, false);
+  assert.match(r.state.last.mic.message, /not available in this browser/);
+});
+
+test("the Ask button and Enter are the same path as the mic (askQuestion with the box text)", async () => {
+  const r = await ready();
+  r.c.typed("  typed   question ");
+  await r.c.askQuestion();
+  assert.equal(asks(r)[0].body.question, "typed question");
+});
+
+test("slots and storage are untouched by questions (nothing about them is persisted)", async () => {
+  const r = await ready();
+  const before = JSON.stringify(r.store);
+  await r.c.askQuestion("private question"); await r.tick();
+  assert.equal(JSON.stringify(r.store), before);
+  assert.ok(!JSON.stringify(r.store).includes("private question"));
+  assert.ok(r.store[slotKey(1)]);
+});
