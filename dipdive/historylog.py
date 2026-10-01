@@ -70,19 +70,21 @@ def _body(summary: str) -> str:
     return "\n".join(out)
 
 
-def format_entry(title: str, mode: str, url: str, summary: str, when: float = None) -> str:
+def format_entry(title: str, mode: str, url: str, summary: str, when: float = None, channel: str = None) -> str:
     t = _one_line(title) or _one_line(url) or "Untitled"
     t = t.lstrip("#").strip() or t  # a leading # would nest the heading level
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(when if when is not None else time.time()))
     label = LABELS.get(mode, mode)
     shown = _one_line(url).replace("[", "%5B").replace("]", "%5D")
-    return f"## {t}\n\n{stamp} | {label} | [{shown}]({_md_url(url)})\n\n{_body(summary)}\n\n---\n\n"
+    ch = _one_line(channel if isinstance(channel, str) else "")
+    chline = f"Channel: {ch}\n\n" if ch else ""
+    return f"## {t}\n\n{chline}{stamp} | {label} | [{shown}]({_md_url(url)})\n\n{_body(summary)}\n\n---\n\n"
 
 
-def append(title: str, mode: str, url: str, summary: str, path: str = None) -> str:
+def append(title: str, mode: str, url: str, summary: str, path: str = None, channel: str = None) -> str:
     """Append one entry (creating the file with a heading if missing). Returns the path. Raises OSError on failure."""
     p = path or log_path()
-    entry = format_entry(title, mode, url, summary).encode("utf-8", "replace")
+    entry = format_entry(title, mode, url, summary, channel=channel).encode("utf-8", "replace")
     with _thread_lock:
         d = os.path.dirname(os.path.abspath(p))
         os.makedirs(d, exist_ok=True)

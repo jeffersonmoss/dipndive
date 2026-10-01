@@ -15,7 +15,7 @@ import unittest
 from tests.test_server import Base, LOG, _SUP, fake_claude  # noqa: E402  (sets DIPDIVE_SUPPORT and DIPDIVE_LOG_PATH first)
 from tests.test_ask import fake_claude_recording, fake_codex_recording  # noqa: E402
 
-from dipdive import historylog, models  # noqa: E402
+from dipdive import acquire, historylog, models, service  # noqa: E402
 
 _DIRS = []
 
@@ -141,6 +141,69 @@ class Format(unittest.TestCase):
         shutil.rmtree(self.d, ignore_errors=True)
 
 
+class Channel(unittest.TestCase):
+    def setUp(self):
+        self.d = rec_dir()
+        self.p = os.path.join(self.d, "Log.md")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_entry_has_channel_line_under_heading_and_neutralized(self):
+        historylog.append("T", "claude-dip", "https://e.com/v", "s", path=self.p, channel="  TEDx\nTalks\r\n## x ")
+        historylog.append("U", "claude-dip", "https://e.com/u", "s", path=self.p, channel="")
+        historylog.append("V", "claude-dip", "https://e.com/w", "s", path=self.p)
+        t = read_log(self.p)
+        self.assertRegex(t, r"## T\n\nChannel: TEDx Talks ## x\n\n\d{4}-\d\d-\d\d \d\d:\d\d \| Claude Dip \|")
+        self.assertEqual(t.count("Channel:"), 1, "missing channel: the line is omitted")
+        self.assertRegex(t, r"## U\n\n\d{4}")
+        self.assertRegex(t, r"## V\n\n\d{4}")
+
+    def test_channel_name_prefers_channel_then_uploader(self):
+        self.assertEqual(acquire.channel_name({"channel": "A", "uploader": "B"}), "A")
+        self.assertEqual(acquire.channel_name({"channel": "  ", "uploader": " B "}), "B")
+        self.assertEqual(acquire.channel_name({"channel": None}), "")
+        self.assertEqual(acquire.channel_name({"channel": 5, "uploader": ["x"]}), "")
+
+    def _youtube(self, info):
+        def fake(args, timeout):
+            if "-J" in args:
+                return json.dumps(info)
+            base = args[args.index("-o") + 1]
+            with open(base + ".en.json3", "w") as f:
+                json.dump({"events": [{"tStartMs": 0, "segs": [{"utf8": "hello world"}]}]}, f)
+            return ""
+        real = acquire._ytdlp
+        acquire._ytdlp = fake
+        try:
+            return acquire.fetch_youtube("https://youtu.be/abcdefghijk", "abcdefghijk")
+        finally:
+            acquire._ytdlp = real
+
+    def test_youtube_source_carries_channel_with_uploader_fallback_and_none(self):
+        base = {"title": "Vid", "language": "en", "subtitles": {"en": [{"url": "https://x/a", "ext": "json3"}]},
+                "automatic_captions": {}}
+        self.assertEqual(self._youtube(dict(base, channel="TEDx Talks", uploader="Other")).meta["channel"], "TEDx Talks")
+        self.assertEqual(self._youtube(dict(base, uploader="Only Uploader")).meta["channel"], "Only Uploader")
+        self.assertEqual(self._youtube(dict(base)).meta["channel"], "")
+
+    def _article(self, head):
+        page = ARTICLE_PAGE % (head, "".join(f"<p>Paragraph {i} about topic {i*7919} with distinct words and more filler text here.</p>" for i in range(40)))
+        real = acquire._fetch_html
+        acquire._fetch_html = lambda u, **k: (page.encode(), u)
+        try:
+            return acquire.fetch_article("http://x.test/")
+        finally:
+            acquire._fetch_html = real
+
+    def test_article_site_name_when_provided_otherwise_empty(self):
+        self.assertEqual(self._article('<meta property="og:site_name" content="The Daily Test">').meta["channel"], "The Daily Test")
+        self.assertEqual(self._article("").meta["channel"], "")
+
+
+ARTICLE_PAGE = "<html><head><title>T</title>%s</head><body><article>%s</article></body></html>"
+
+
 class Server(Base):
     def setUp(self):
         super().setUp()
@@ -211,6 +274,28 @@ class Server(Base):
         self.assertEqual(sorted(re.search(r"\| (Claude \w+) \|", e).group(1) for e in es), ["Claude Dip", "Claude Dive"])
         for e in es:
             self.assertTrue(e.endswith("fake summary"))
+
+    def test_channel_from_the_cached_source_reaches_dip_and_dive_entries(self):
+        real, fetches = service.acquire, []
+
+        def fake(url):
+            fetches.append(url)
+            return acquire.Source("youtube", "abcdefghijk", "Cached Vid", url, "text " * 200, {"channel": "TEDx Talks"})
+        service.acquire = fake
+        try:
+            self.run_job("claude-dip", "y1")
+            self.run_job("codex-dive", "y2")  # source comes from the cache
+        finally:
+            service.acquire = real
+        self.assertEqual(len(fetches), 1)
+        es = entries(read_log(LOG))
+        self.assertEqual(len(es), 2)
+        for e in es:
+            self.assertRegex(e, r"^## Cached Vid\n\nChannel: TEDx Talks\n\n\d{4}-")
+
+    def test_source_without_channel_omits_the_line(self):
+        self.run_job("claude-dip", "n1")                       # the local article has no site name
+        self.assertNotIn("Channel:", read_log(LOG))
 
     def test_log_failure_does_not_fail_the_job_and_is_logged_to_the_job_log(self):
         blocker = os.path.join(os.path.dirname(LOG), "blocker")

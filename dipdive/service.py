@@ -331,7 +331,7 @@ class Service:
                         _atomic_write(rp, {"result": cached, "created": time.time()})
             self._set(j, state="done", result_markdown=cached)
             if fresh and j["mode"] in historylog.LOGGED_MODES and j["generation"] == self.generation:
-                self._log_history(j, s["title"], cached)
+                self._log_history(j, s["title"], cached, (s.get("meta") or {}).get("channel"))
         except DipDiveError as e:
             msg = e.message
             if e.code in ("auth", "quota", "rate_limited") and j["mode"] != "source":
@@ -342,10 +342,10 @@ class Service:
             joblog.write({"internal_error": traceback.format_exc(), "url": j["url"], "mode": j["mode"]})
             self._set(j, state="error", error_code="internal_error", error_message=f"{type(e).__name__}: {e}")
 
-    def _log_history(self, j, title, summary):
+    def _log_history(self, j, title, summary, channel=None):
         """Append the finished summary to the durable history log. Never raises: a log failure goes to the job log."""
         try:
-            historylog.append(title or "", j["mode"], j["url"], summary)
+            historylog.append(title or "", j["mode"], j["url"], summary, channel=channel)
         except BaseException as e:
             try:
                 joblog.write({"history_log_error": f"{type(e).__name__}: {e}", "path": historylog.log_path(),
