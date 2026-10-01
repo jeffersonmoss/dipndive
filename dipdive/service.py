@@ -1,4 +1,5 @@
 """Companion service core (plan 3.2): job store, source cache, workers, health. No HTTP here."""
+import errno
 import hashlib
 import json
 import os
@@ -60,6 +61,7 @@ class Service:
     def __init__(self, support=None, start_workers=True):
         self.dir = support or SUPPORT
         self.jobs_dir, self.src_dir, self.res_dir = (os.path.join(self.dir, d) for d in ("jobs", "sources", "results"))
+        self.removed_dir = os.path.join(self.dir, "history-removed")  # log entries unticked in the panel, kept to restore
         for d in (self.jobs_dir, self.src_dir, self.res_dir):
             os.makedirs(d, exist_ok=True)
         self.lock = threading.RLock()
@@ -183,7 +185,10 @@ class Service:
     def public(self, j):
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"],
                 "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
-                "error_message": j["error_message"], "clear_generation": self.generation}
+                "error_message": j["error_message"], "clear_generation": self.generation,
+                # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
+                # the panel), None when it has none (asks, Temp chat, errors, a log failure, an entry deleted by hand)
+                "history_saved": historylog.saved_state(j["log_id"], self.removed_dir) if j.get("log_id") else None}
 
     def get_job(self, jid):
         with self.lock:
@@ -203,11 +208,13 @@ class Service:
         return 200, {"title": s["title"], "url": s["url"], "text": s["text"], "clear_generation": self.generation}
 
     def clear(self):
-        with self.lock, joblog.write_lock:
+        # The history log's write lock first (the same order as set_saved), so a remove or restore is never half done
+        # around a clear: it finishes before, or it starts after and finds the new generation and no removed store.
+        with historylog.locked(), self.lock, joblog.write_lock:
             self.generation += 1
             _atomic_write(self.state_path, {"clear_generation": self.generation})
             self.jobs.clear(); self.by_request.clear(); self.by_prekey.clear()
-            for d in (self.jobs_dir, self.src_dir, self.res_dir, joblog.LOG_DIR):
+            for d in (self.jobs_dir, self.src_dir, self.res_dir, joblog.LOG_DIR, self.removed_dir):
                 shutil.rmtree(d, ignore_errors=True)
             for d in (self.jobs_dir, self.src_dir, self.res_dir):
                 os.makedirs(d, exist_ok=True)
@@ -313,11 +320,12 @@ class Service:
             fullkey = _sha(j["norm_id"], j["mode"], model_id(j["mode"]), PROMPT_VERSION,
                            s["hash"], *([j["qkey"]] if j.get("qkey") else []))
             rp = os.path.join(self.res_dir, fullkey + ".json")
-            cached = None
+            cached, log_id = None, None
             if not j["force"]:
                 try:
-                    cached = _read_json(rp)["result"]
-                except (OSError, ValueError, KeyError):
+                    stored = _read_json(rp)
+                    cached, log_id = stored["result"], stored.get("log_id")
+                except (OSError, ValueError, KeyError, TypeError):
                     pass
             fresh = cached is None  # only a result made by a model call just now is new; cache hits were logged already
             if cached is None:
@@ -329,9 +337,18 @@ class Service:
                 with self.lock:
                     if j["generation"] == self.generation:
                         _atomic_write(rp, {"result": cached, "created": time.time()})
-            self._set(j, state="done", result_markdown=cached)
+            # Logged before the job reads as done, so a panel that sees "done" also sees whether it has a log entry.
             if fresh and j["mode"] in historylog.LOGGED_MODES and j["generation"] == self.generation:
-                self._log_history(j, s["title"], cached, (s.get("meta") or {}).get("channel"))
+                if self._log_history(j, s["title"], cached, (s.get("meta") or {}).get("channel")):
+                    log_id = j["job_id"]
+                    with self.lock:  # a later cache hit on this result points at the same entry
+                        if j["generation"] == self.generation:
+                            try:
+                                _atomic_write(rp, {"result": cached, "created": time.time(), "log_id": log_id})
+                            except OSError:
+                                pass
+            self._set(j, state="done", result_markdown=cached,
+                      log_id=log_id if isinstance(log_id, str) and len(log_id) == 32 else None)
         except DipDiveError as e:
             msg = e.message
             if e.code in ("auth", "quota", "rate_limited") and j["mode"] != "source":
@@ -343,15 +360,49 @@ class Service:
             self._set(j, state="error", error_code="internal_error", error_message=f"{type(e).__name__}: {e}")
 
     def _log_history(self, j, title, summary, channel=None):
-        """Append the finished summary to the durable history log. Never raises: a log failure goes to the job log."""
+        """Append the finished summary to the durable history log, tagged with the job id. Returns True when it was
+        written. Never raises: a log failure goes to the job log."""
         try:
-            historylog.append(title or "", j["mode"], j["url"], summary, channel=channel)
+            historylog.append(title or "", j["mode"], j["url"], summary, channel=channel, job_id=j["job_id"])
+            return True
         except BaseException as e:
             try:
                 joblog.write({"history_log_error": f"{type(e).__name__}: {e}", "path": historylog.log_path(),
                               "url": j["url"], "mode": j["mode"]})
             except BaseException:
                 pass
+            return False
+
+    def set_saved(self, jid, saved, clear_generation=None):
+        """POST /history/<id>/remove or /restore: take a summary's entry out of the history log or put it back.
+        `jid` is a job id: the job's own entry, or for a job served from the result cache the entry of the job that made
+        the result; an id with no job record (an older entry) is taken as the entry's own id. Idempotent. A request
+        that carries a clear generation older than the current one is refused (409 stale_clear_generation): the summary
+        it was made for belongs to history that has been cleared. The whole change runs under the log's write lock, the
+        same lock Clear history takes first. Returns (http_status, body)."""
+        with historylog.locked():
+            with self.lock:
+                if clear_generation is not None and clear_generation < self.generation:
+                    return 409, {"error_code": "stale_clear_generation",
+                                 "error_message": "history was cleared since this client last synced",
+                                 "clear_generation": self.generation}
+                j = self.jobs.get(jid)
+                log_id = (j.get("log_id") if j else jid) or None
+            if not log_id:
+                return 404, {"error_code": "not_logged", "error_message": "this summary has no entry in the history log"}
+            try:
+                now = (historylog.restore_entry if saved else historylog.remove_entry)(log_id, self.removed_dir)
+            except historylog.NoSuchEntry:
+                return 404, {"error_code": "no_such_entry", "error_message": "no history log entry has that id"}
+            except historylog.AmbiguousEntry:
+                return 409, {"error_code": "entry_ambiguous",
+                             "error_message": "the entry runs into its neighbour (edited by hand?); the log was not changed"}
+            except historylog.LogUnreadable as e:
+                return 503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"}
+            except OSError as e:
+                return 503, {"error_code": "log_unwritable",
+                             "error_message": f"the history log cannot be written ({errno.errorcode.get(e.errno, 'OSError')})"}
+        return 200, {"job_id": jid, "saved": now, "clear_generation": self.generation}
 
     # ---------- pruning ----------
     def prune(self):

@@ -20,7 +20,8 @@ export class HistoryBrowser {
   constructor({ fetch, getCfg, onState }) {
     this.d = { fetch, getCfg, onState };
     this.gen = 0;  // bumped on open and Back: a page that was still on its way for an older view is dropped
-    this.s = { open: false, loading: false, entries: [], total: 0, nextBefore: null, error: null, loaded: false };
+    this.rev = null;  // the log's revision when the first page was read; a later page asks for the same one
+    this.s = { open: false, loading: false, entries: [], total: 0, nextBefore: null, error: null, loaded: false, notice: "" };
   }
 
   emit(patch) {
@@ -31,7 +32,8 @@ export class HistoryBrowser {
   // Always starts again from the newest entry, so a summary that finished since the last look is in it.
   async open() {
     this.gen++;
-    this.emit({ open: true, loading: false, entries: [], total: 0, nextBefore: null, error: null, loaded: false });
+    this.rev = null;
+    this.emit({ open: true, loading: false, entries: [], total: 0, nextBefore: null, error: null, loaded: false, notice: "" });
     await this.load(null);
   }
 
@@ -50,7 +52,7 @@ export class HistoryBrowser {
   async load(before) {
     const gen = this.gen;
     this.emit({ loading: true, error: null });
-    const qs = `limit=${PAGE_SIZE}${before === null ? "" : `&before=${before}`}`;
+    const qs = `limit=${PAGE_SIZE}${before === null ? "" : `&before=${before}`}${before !== null && this.rev !== null ? `&revision=${this.rev}` : ""}`;
     let r;
     try {
       r = await request(this.d.fetch, this.d.getCfg(), "GET", `/history?${qs}`, null, TIMEOUT_MS);
@@ -60,10 +62,20 @@ export class HistoryBrowser {
     }
     if (gen !== this.gen) return;
     const j = r.json || {};
+    // An entry was removed or restored since the first page (the positions moved): start again from the newest rather
+    // than repeat or skip entries.
+    if (r.status === 409 && j.error_code === "history_changed" && before !== null) {
+      this.rev = null;
+      this.emit({ loading: false, entries: [], total: 0, nextBefore: null, loaded: false,
+        notice: "The history changed while you were reading it, so it starts again from the newest." });
+      await this.load(null);
+      return;
+    }
     if (r.status !== 200 || !Array.isArray(j.entries)) {
       this.emit({ loading: false, error: describeHistoryError(null, r.status, r.status === 401 ? "unauthorized" : j.error_code) });
       return;
     }
+    if (before === null) this.rev = typeof j.revision === "number" ? j.revision : null;
     this.emit({ loading: false, loaded: true, entries: [...this.s.entries, ...j.entries], total: typeof j.total === "number" ? j.total : 0,
       nextBefore: typeof j.next_before === "number" ? j.next_before : null });
   }

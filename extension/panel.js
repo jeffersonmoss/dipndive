@@ -62,7 +62,20 @@ function render(s) {
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
+  renderSave(s);
   document.body.classList.toggle("busy", !!s.busy);
+}
+
+// ---------- "Save this Dip to history" ----------
+// Shown only next to a finished Dip or Dive that has an entry in the companion's history log; never in Temp chat.
+function renderSave(s) {
+  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";  // also while unknown
+  $("saveline").hidden = !show;
+  if (!show) return;
+  $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
+  $("savehist").checked = s.saved;
+  $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
+  $("savehist").disabled = !!s.savingSaved;
 }
 
 // ---------- question box ----------
@@ -162,13 +175,13 @@ $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 $("mic").addEventListener("click", () => ctl.toggleMic());
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
-window.addEventListener("focus", () => ctl.refreshMic());
+window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log
 // Chrome keeps a side panel that another panel replaced alive (and recognition with it), with no Stop button in sight:
 // stop listening when the panel is hidden, keeping the words in the box.
 document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.pauseMic(); else ctl.refreshMic(); });
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
-$("clear").addEventListener("click", (e) => { e.preventDefault(); ctl.clearHistory(); });
+$("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checked));
 
 // ---------- history view ----------
 // Entries already in the DOM stay (Show older only appends), so the list keeps its scroll position while a page loads.
@@ -190,7 +203,8 @@ function renderHistory(h) {
   $("historyempty").hidden = !(h.loaded && h.entries.length === 0);
   $("historyerror").hidden = !h.error;
   $("historyerror").textContent = h.error || "";
-  $("historystatus").textContent = h.loading ? "Loading..." : h.loaded && h.entries.length ? `Showing ${h.entries.length} of ${h.total}` : "";
+  const shown = h.loading ? "Loading..." : h.loaded && h.entries.length ? `Showing ${h.entries.length} of ${h.total}` : "";
+  $("historystatus").textContent = [h.notice, shown].filter(Boolean).join(" ");
   const more = $("historymore");
   more.hidden = !(h.error ? true : h.loaded && h.nextBefore !== null);
   more.disabled = h.loading;
@@ -202,8 +216,7 @@ const historyView = new HistoryBrowser({
   getCfg: () => ctl.cfg,
   onState: renderHistory,
 });
-$("historylink").addEventListener("click", (e) => {
-  e.preventDefault();
+$("historylink").addEventListener("click", () => {
   ctl.pauseMic();  // the microphone controls are hidden while History is open: do not leave a recording running behind them
   pageScroll = $("page").scrollTop;
   historyView.open();
@@ -215,8 +228,8 @@ $("historyback").addEventListener("click", () => {
   $("page").scrollTop = pageScroll;
 });
 $("historymore").addEventListener("click", () => historyView.more());
-$("options").addEventListener("click", (e) => {
-  e.preventDefault();
+// the gear: Settings (the Options page, where Clear history also lives)
+$("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
 });
 chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));

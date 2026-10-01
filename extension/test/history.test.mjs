@@ -220,12 +220,15 @@ test("entry text is inert: HTML is escaped, non-http links are never links, imag
   assert.ok(odd.includes("https://v.test/z"), odd);
 });
 
-test("panel.html: a History link between Clear history and Options, a view with a Back button, and panel.js wires them", () => {
+test("panel.html: the footer has the save box, History and the Settings gear (no Clear history), a view with a Back button, and panel.js wires them", () => {
   const html = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  const links = [...html.match(/<div class="links">([\s\S]*?)<\/div>/)[1].matchAll(/<a id="(\w+)"[^>]*>([^<]*)<\/a>/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(links, [["clear", "Clear history"], ["historylink", "History"], ["options", "Options"]]);
+  const foot = html.match(/<footer>([\s\S]*?)<\/footer>/)[1];
+  const order = [...foot.matchAll(/\bid="(saveline|historylink|options)"/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["saveline", "historylink", "options"], "the save box, then History next to the gear");
+  assert.match(foot, /<button id="historylink" class="textbtn" type="button">History<\/button>/);
+  assert.ok(!/id="clear"|Clear history/.test(html), "Clear history lives on the Options page only");
   assert.match(html, /<button id="historyback" type="button">[^<]*Back<\/button>/);
   assert.match(html, /<button id="historymore" type="button" hidden>/);
   const ids = [...html.matchAll(/\bid="(\w+)"/g)].map((m) => m[1]);
@@ -236,4 +239,37 @@ test("panel.html: a History link between Clear history and Options, a view with 
   assert.match(js, /\$\("historymore"\)\.addEventListener\("click"/);
   assert.match(css, /body\.history-open #page, body\.history-open #ask \{ display: none; \}/);
   assert.ok(!/<script[^>]*>[^<]/.test(html), "no inline script");
+});
+
+test("a removal or restore between pages: the next page is refused as changed and the list starts again from the newest", async () => {
+  // review finding: positions moved under the cursor, so Show older repeated or skipped entries
+  const c = companion(45);
+  c.rev = 7;
+  const inner = c.fetch;
+  c.fetch = async (url, init) => {
+    const u = new URL(url);
+    if (u.searchParams.has("revision") && Number(u.searchParams.get("revision")) !== c.rev) {
+      c.calls.push({ url, method: init.method });
+      return { status: 409, json: async () => ({ error_code: "history_changed", revision: c.rev }) };
+    }
+    const r = await inner(url, init);
+    const j = await r.json();
+    return { status: r.status, json: async () => ({ ...j, revision: c.rev }) };
+  };
+  const m = make(c);
+  await m.h.open();
+  assert.equal(c.calls[0].url, `http://c.test/history?limit=${PAGE_SIZE}`, "the first page carries no revision");
+  await m.h.more();
+  assert.equal(c.calls[1].url, `http://c.test/history?limit=${PAGE_SIZE}&before=25&revision=7`);
+  assert.equal(m.last.entries.length, 40);
+  c.n = 44; c.rev = 8;   // an entry was removed in another window
+  await m.h.more();
+  assert.equal(c.calls[2].url, `http://c.test/history?limit=${PAGE_SIZE}&before=5&revision=7`);
+  assert.equal(c.calls[3].url, `http://c.test/history?limit=${PAGE_SIZE}`, "started again from the newest");
+  assert.equal(m.last.entries.length, 20);
+  assert.deepEqual(titles(m.last).slice(0, 1), ["Title 43"]);
+  assert.match(m.last.notice, /starts again from the newest/);
+  assert.equal(m.last.error, null);
+  await m.h.more();
+  assert.equal(c.calls.at(-1).url, `http://c.test/history?limit=${PAGE_SIZE}&before=24&revision=8`);
 });

@@ -18,6 +18,7 @@ TOKEN_PATH = os.path.join(joblog.SUPPORT, "token")
 MAX_BODY = 64 * 1024
 HOST_OK = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\]|[a-z0-9.-]+\.ts\.net)(:\d+)?$", re.I)
 JOB_PATH = re.compile(r"^/jobs/([0-9a-f]{32})$")
+SAVE_PATH = re.compile(r"^/history/([0-9a-f]{32})/(remove|restore)$")
 
 
 MIN_TOKEN = 32
@@ -158,12 +159,16 @@ def make_handler(svc: Service, token: str):
             try:
                 limit = num("limit", historylog.PAGE_DEFAULT, 1, historylog.PAGE_MAX)
                 before = num("before", None, 0, 10**9)
+                rev = num("revision", None, 0, 10**9)
             except ValueError as e:
                 return self._send(400, {"error_code": "bad_request",
                                         "error_message": f"{e.args[0]} must be a whole number"
                                                          f"{' from 1 to %d' % historylog.PAGE_MAX if e.args[0] == 'limit' else ''}"})
             try:
-                page = historylog.read_page(before, limit)
+                page = historylog.read_page(before, limit, rev=rev)
+            except historylog.HistoryChanged as e:
+                return self._send(409, {"error_code": "history_changed", "revision": e.current,
+                                        "error_message": "entries were removed or restored since that page; start again from the newest"})
             except historylog.LogUnreadable as e:
                 return self._send(503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"})
             self._send(200, page)
@@ -193,6 +198,12 @@ def make_handler(svc: Service, token: str):
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
+                m = SAVE_PATH.match(u.path)
+                if m:
+                    cgen = d.get("clearGeneration")
+                    if cgen is not None and (type(cgen) is not int or cgen < 0):
+                        return self._send(400, {"error_code": "bad_request", "error_message": "clearGeneration must be a whole number"})
+                    return self._send(*svc.set_saved(m.group(1), m.group(2) == "restore", cgen))
             except UnicodeError:  # text that cannot be encoded (a lone surrogate in url or requestId): the client's mistake
                 return self._send(400, {"error_code": "bad_request", "error_message": "text is not valid unicode"})
             except Exception as e:

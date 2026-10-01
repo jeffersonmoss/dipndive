@@ -1,17 +1,15 @@
 // The History link of the panel, as a plain page (lib/shim.js) against the dev harness's REAL companion (fake model
 // binaries, a seeded temp history log), in a throwaway headless Chrome. Mouse only: every step is a click.
-//   node tests/chrome/panel-history.mjs [--shots]     (--shots also writes extension/docs/panel-history.jpg and -dark.jpg)
+// Also the footer's "Save this Dip to history" box against the real companion log (untick removes, tick restores).
+//   node tests/chrome/panel-history.mjs            (screenshots: tests/chrome/screenshots.mjs)
 // Prints one JSON report and exits 1 if any check failed. Everything it starts is removed on exit.
-import fs from "node:fs";
-import path from "node:path";
 import { withBrowser } from "./chrome-run.mjs";
-import { REPO, panelUrl, startHarness, stopHarness, until } from "./harness-run.mjs";
+import { panelUrl, startHarness, stopHarness, until } from "./harness-run.mjs";
 
 const SEEDED = 45;
 const TOTAL = SEEDED + 1;   // the Dip the panel opens with is logged too
 const report = { checks: [] };
 const check = (name, ok, detail) => { report.checks.push({ name, ok: !!ok, ...(detail !== undefined ? { detail } : {}) }); };
-const shots = process.argv.includes("--shots");
 
 let harness = null;
 try {
@@ -26,9 +24,11 @@ try {
     const count = () => q(`document.querySelectorAll("#historylist .hentry").length`);
     check("the Dip appeared", await until(() => q(`document.getElementById("result").textContent.includes("crater")`), 20000));
 
-    // 1. the link, in the footer next to Clear history and Options
-    const links = await q(`[...document.querySelectorAll("footer .links a")].map((a) => a.textContent)`);
-    check("footer links read Clear history, History, Options", JSON.stringify(links) === JSON.stringify(["Clear history", "History", "Options"]), links);
+    // 1. the button, in the footer between the save box and the Settings gear; Clear history is not in the panel
+    const foot = await q(`[...document.querySelectorAll("footer .links > *")].filter((e) => !e.hidden).map((e) => e.getAttribute("aria-label") || e.textContent.trim())`);
+    check("footer reads Save this Dip to history, History, Settings", JSON.stringify(foot) === JSON.stringify(["Save this Dip to history", "History", "Settings"]), foot);
+    check("no Clear history in the panel", await q(`!document.getElementById("clear") && !document.body.textContent.includes("Clear history")`));
+    check("the gear is at least 40 px square", await q(`(() => { const r = document.getElementById("options").getBoundingClientRect(); return r.width >= 40 && r.height >= 40; })()`));
     check("the History view is closed to begin with", await q(`document.getElementById("historyview").hidden && !document.body.classList.contains("history-open")`));
     await q(`document.getElementById("page").scrollTop = 0`);
 
@@ -46,16 +46,6 @@ try {
     const bar = await q(`(() => { const v = document.getElementById("historyview"); v.scrollTop = 600; const r = document.getElementById("historyback").getBoundingClientRect(); return [Math.round(r.top), Math.round(r.height)]; })()`);
     check("Back stays reachable while the list is scrolled (sticky bar, 30 px or taller)", bar[0] >= 0 && bar[0] < 40 && bar[1] >= 30, bar);
     await q(`document.getElementById("historyview").scrollTop = 0`);
-    if (shots) {
-      const out = path.join(REPO, "extension/docs");
-      for (const [scheme, name] of [["light", "panel-history.jpg"], ["dark", "panel-history-dark.jpg"]]) {
-        await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
-        const { data } = await page.send("Page.captureScreenshot", { format: "jpeg", quality: 88 });
-        fs.writeFileSync(path.join(out, name), Buffer.from(data, "base64"));
-      }
-      await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
-    }
-
     // 3. Show older, twice
     await q(`document.getElementById("historymore").click()`);
     check("Show older adds the next 20", await until(async () => (await count()) === 40, 10000), await count());
@@ -75,6 +65,22 @@ try {
     check("opening again starts from the newest and has the new entry first", await until(async () => (await q(`document.querySelector("#historylist .htitle")?.textContent`)) === "Page /hist-a", 10000) &&
       (await q(`document.getElementById("historystatus").textContent`)) === `Showing 20 of ${TOTAL + 1}`, await q(`document.querySelector("#historylist .htitle")?.textContent`));
     await q(`document.getElementById("historyback").click()`);
+
+    // 5b. untick "Save this Dive to history": the Dive's entry leaves the log; tick it again: it is back
+    const total = () => q(`document.getElementById("historystatus").textContent`);
+    check("the box names the Dive and is ticked", await until(() => q(`!document.getElementById("saveline").hidden && document.getElementById("savelabel").textContent === "Save this Dive to history" && document.getElementById("savehist").checked`), 10000));
+    await q(`document.getElementById("savehist").click()`);
+    check("unticked: the companion confirms", await until(() => q(`!document.getElementById("savehist").checked && !document.getElementById("savehist").disabled && document.getElementById("status").textContent === "Removed from history."`), 10000));
+    await q(`document.getElementById("historylink").click()`);
+    check("the Dive's entry is gone from History", await until(async () => (await total()) === `Showing 20 of ${TOTAL}`, 10000), await total());
+    await q(`document.getElementById("historyback").click()`);
+    await q(`document.getElementById("savehist").click()`);
+    check("ticked again: restored", await until(() => q(`document.getElementById("savehist").checked && document.getElementById("status").textContent === "Saved to history."`), 10000));
+    await q(`document.getElementById("historylink").click()`);
+    check("the Dive's entry is back, newest first", await until(async () => (await total()) === `Showing 20 of ${TOTAL + 1}` && (await q(`document.querySelector("#historylist .hmeta")?.textContent`)).endsWith("Claude Dive"), 10000), await total());
+    await q(`document.getElementById("historyback").click()`);
+    await q(`document.querySelector('button.mode[data-mode="temp"]').click()`);
+    check("Temp chat: no save box", await until(() => q(`document.getElementById("saveline").hidden && !document.getElementById("copy").hidden`), 15000));
 
     // 6. a wrong token: a plain message with Try again, no crash
     await page.eval(`localStorage.setItem("dipdive-dev:token", JSON.stringify("x".repeat(40)))`);
