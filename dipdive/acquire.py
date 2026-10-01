@@ -323,21 +323,53 @@ def declared_paywalled(html: str) -> bool:
     return False
 
 
-def _dom_article_text(html: str) -> str:
-    """Second opinion on extraction: paragraphs (40+ chars) inside the first <article>, <main> or role=main."""
+_JUNK_TAGS = {"aside", "nav", "footer", "form", "script", "style", "noscript", "iframe", "button"}
+_JUNK_ATTR = re.compile(r"comment|related|promo|newsletter|sidebar|recirc|more-stories|share|social|advert|outbrain|"
+                        r"taboola|disqus|subscribe|signup|trending|read-next", re.I)
+
+
+def _shingles(text: str, n: int = 5) -> set:
+    w = re.findall(r"\w+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(max(len(w) - n + 1, 0))}
+
+
+def _clean_paragraphs(el) -> str:
+    """Paragraphs (40+ chars) of el with comment, related, promo, newsletter, aside, nav and footer parts removed."""
+    import copy
+    el = copy.deepcopy(el)
+    for d in list(el.iterdescendants()):
+        if not isinstance(d.tag, str):
+            continue
+        attrs = f"{d.get('class') or ''} {d.get('id') or ''}"
+        if d.tag in _JUNK_TAGS or _JUNK_ATTR.search(attrs):
+            if d.getparent() is not None:
+                d.drop_tree()
+    ps = [" ".join(p.text_content().split()) for p in el.xpath(".//p")]
+    return "\n".join(p for p in ps if len(p) >= 40)
+
+
+def _dom_article_text(html: str, reference: str = "") -> str:
+    """Second opinion on extraction. Candidates are every <article>, <main> and role=main element; the one that
+    contains most of the extractor's own text wins, so the result can only extend the same story (never another
+    story or a different region). With no reference text there is nothing to anchor on, and it returns ''."""
     from lxml import html as lh
     try:
         doc = lh.fromstring(html)
     except Exception:
         return ""
+    ref = _shingles(reference)
+    if not ref:
+        return ""
+    best, best_cov = "", 0.0
     for xp in ("//article", "//main", '//*[@role="main"]'):
-        els = doc.xpath(xp)
-        if els:
-            ps = [" ".join(p.text_content().split()) for p in els[0].xpath(".//p")]
-            t = "\n".join(p for p in ps if len(p) >= 40)
-            if t:
-                return t
-    return ""
+        for el in doc.xpath(xp):
+            t = _clean_paragraphs(el)
+            if not t:
+                continue
+            cov = len(ref & _shingles(t)) / len(ref)
+            if cov > best_cov or (cov == best_cov and len(t) > len(best)):
+                best, best_cov = t, cov
+    return best if best_cov >= 0.6 else ""
 
 
 def fetch_article(url: str) -> Source:
@@ -351,7 +383,7 @@ def fetch_article(url: str) -> Source:
     if declared_paywalled(html):
         raise DipDiveError("no_article_text", "page declares isAccessibleForFree=false (paywalled)")
     text = trafilatura.extract(raw, include_comments=False, include_tables=False, favor_recall=True) or ""
-    dom = _dom_article_text(html)
+    dom = _dom_article_text(html, text)
     if len(dom) >= MIN_ARTICLE_CHARS and len(dom) > 1.5 * len(text):
         text = dom  # extractor kept under two thirds of the article's own paragraphs
     if len(text) < MIN_ARTICLE_CHARS:

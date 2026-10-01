@@ -20,7 +20,7 @@ export function safeHref(u) {
 function inline(raw) {
   const stash = [];
   const keep = (html) => `\u0000${stash.push(html) - 1}\u0000`;
-  let s = esc(raw);
+  let s = esc(String(raw).replace(/\u0000/g, ""));
   s = s.replace(/`([^`]+)`/g, (_, c) => keep(`<code>${c}</code>`));
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_, alt) => keep(esc(`[image: ${unesc(alt)}]`)));
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, href) => {
@@ -29,7 +29,9 @@ function inline(raw) {
   });
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
-  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[+i]);
+  // Placeholders can nest (code inside link text), so resolve until none are left.
+  for (let n = 0; n < 5 && /\u0000\d+\u0000/.test(s); n++) s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[+i] ?? "");
+  return s;
 }
 
 export function renderMarkdown(src) {

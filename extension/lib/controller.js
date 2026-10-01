@@ -1,6 +1,6 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
-import { slotKey } from "./background-core.js";
+import { pruneSlots, slotKey } from "./background-core.js";
 import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
@@ -39,6 +39,7 @@ export class Controller {
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
+      codexOk: null, codexReason: "",
     };
   }
 
@@ -47,17 +48,54 @@ export class Controller {
     this.d.onState({ ...this.s });
   }
 
+  // Codex availability from the companion's /health. While Codex is logged out or its isolation is unverified,
+  // Codex buttons are disabled and Claude Dip is the effective default; null means unknown (buttons stay enabled).
+  async checkHealth() {
+    let ok = null, reason = "";
+    try {
+      if (this.d.healthOverride) {
+        ok = this.d.healthOverride === "codex-ready";
+        reason = "Codex is unavailable on the iMac. Using Claude.";
+      } else {
+        const r = await request(this.d.fetch, this.cfg, "GET", "/health", null, 5000);
+        const h = r.json || {};
+        if (r.status === 200 && typeof h.codex_ready === "boolean") {
+          ok = h.codex_ready;
+          if (!ok) reason = !h.codex_logged_in ? "Codex is not signed in on the iMac. Using Claude."
+            : "Codex isolation is not verified on the iMac. Using Claude.";
+        }
+      }
+    } catch { /* unknown: leave Codex enabled, the job itself will report a real error */ }
+    this.emit({ codexOk: ok, codexReason: reason });
+  }
+
+  effectiveMode(m) {
+    return this.s.codexOk === false && m.startsWith("codex") ? "claude-dip" : m;
+  }
+
   async init(windowId) {
     this.windowId = windowId;
-    const st = await this.d.storage.get(["base", "token", "mode", slotKey(windowId)]);
-    this.cfg = { base: st.base, token: st.token };
-    const mode = normalizeMode(st.mode);
-    this.emit({ configured: !!(st.base && st.token), mode });
+    const all = await this.d.storage.get(null);
+    this.cfg = { base: all.base, token: all.token };
+    this.emit({ configured: !!(all.base && all.token), mode: normalizeMode(all.mode) });
     if (!this.s.configured) {
       this.emit({ status: "Set the companion URL and token in the extension options." });
       return;
     }
-    await this.onSlot(st[slotKey(windowId)]);
+    await this.checkHealth();
+    this.emit({ mode: this.effectiveMode(normalizeMode(all.mode)) });
+    let mine = all[slotKey(windowId)];
+    if (!mine) {
+      // After a browser restart window ids change: take the newest slot and move it to this window.
+      const newest = Object.entries(all).filter(([k]) => k.startsWith("slot:")).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0))[0];
+      if (newest) {
+        mine = { ...newest[1], windowId };
+        await this.d.storage.set({ [slotKey(windowId)]: mine });
+        await this.d.storage.remove(newest[0]);
+      }
+    }
+    await pruneSlots(this.d.storage);
+    await this.onSlot(mine);
   }
 
   // New or changed slot. An unconsumed slot is submitted; a consumed one is resumed after a panel reopen.
@@ -71,16 +109,25 @@ export class Controller {
     this.emit({ source: { url: slot.url } });
     if (!isNew) return;
     if (slot.consumed && slot.jobId) {
-      this.emit({ mode: normalizeMode(slot.mode || this.s.mode) });
+      this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)) });
       await this.beginTracking(slot.jobId);
       return;
     }
-    await this.submit(this.s.mode, { requestId: slot.requestId, force: false, fromSlot: true });
+    // A fresh right-click uses the last mode chosen anywhere; an unacknowledged resubmit keeps the mode it
+    // was first sent with, so the same requestId never meets a different mode.
+    let mode = slot.pendingMode;
+    if (!mode) {
+      const st = await this.d.storage.get(["mode"]);
+      await this.checkHealth();
+      mode = this.effectiveMode(normalizeMode(st.mode));
+    }
+    this.emit({ mode });
+    await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true });
   }
 
   onStorageChange(changes, area) {
     if (area !== "local") return;
-    if (changes.mode && changes.mode.newValue !== this.s.mode) this.emit({ mode: normalizeMode(changes.mode.newValue) });
+    // A mode change made in another window must not alter this panel's own selection or its pressed button.
     const k = slotKey(this.windowId);
     if (changes[k] && changes[k].newValue) this.onSlot(changes[k].newValue);
     if (changes.base || changes.token) {
@@ -93,11 +140,13 @@ export class Controller {
 
   async selectMode(id) {
     id = normalizeMode(id);
+    if (this.s.codexOk === false && id.startsWith("codex")) return;
     if (!this.slot) { this.emit({ status: "Right-click a link or page first." }); return; }
     const same = id === this.s.mode;
     this.emit({ mode: id });
     await this.d.storage.set({ mode: id }); // the background worker relabels the menu on this change
-    await this.submit(id, { requestId: this.d.uuid(), force: same });
+    // Force only when this panel's own pressed button is clicked again and a job for it is on screen.
+    await this.submit(id, { requestId: this.d.uuid(), force: same && !!this.slot.jobId });
   }
 
   stopTimer() {
@@ -130,21 +179,28 @@ export class Controller {
     this.emit({ error: msg, status: "", busy: false });
   }
 
-  async submit(mode, { requestId, force, fromSlot }) {
+  async submit(mode, { requestId, force, fromSlot, retried }) {
     const gen = ++this.selGen;
     this.resetView({ status: "Submitting...", busy: true });
+    if (fromSlot && !this.slot.consumed && this.slot.pendingMode !== mode) {
+      this.slot = { ...this.slot, pendingMode: mode };
+      await this.d.storage.set({ [slotKey(this.windowId)]: this.slot });
+    }
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
         { url: this.slot.url, mode: apiMode(mode), requestId, force: !!force }, 5000);
     } catch (e) { this.failure(gen, e); return; }
     if (!this.accept(gen, r.json)) return;
+    if (r.status === 409 && !retried) {  // requestId already used for another mode: start over with a fresh id
+      return this.submit(mode, { requestId: this.d.uuid(), force, fromSlot: false, retried: true });
+    }
     if (r.status === 401) { this.emit({ error: "The token was rejected. Check the options page.", status: "", busy: false }); return; }
     if (r.status === 429 || r.status === 409 || r.status >= 400 || !r.json.job_id) {
       this.emit({ error: describeError(r.json.error_code, r.json.error_message), status: "", busy: false });
       return;
     }
-    const slot = { ...this.slot, jobId: r.json.job_id, mode, consumed: true };
+    const slot = { ...this.slot, jobId: r.json.job_id, mode, consumed: true, pendingMode: undefined };
     this.slot = slot;
     await this.d.storage.set({ [slotKey(this.windowId)]: slot });
     await this.beginTracking(r.json.job_id, gen);
@@ -214,6 +270,11 @@ export class Controller {
       r = await request(this.d.fetch, this.cfg, "POST", "/clear", {}, 5000);
     } catch (e) { this.failure(gen, e); return; }
     if (typeof r.json.clear_generation === "number") this.clearGen = r.json.clear_generation;
+    if (r.status === 200) {  // the extension must not keep a list of what was looked at either
+      const all = await this.d.storage.get(null);
+      await this.d.storage.remove(Object.keys(all).filter((k) => k.startsWith("slot:")));
+      if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
+    }
     this.resetView({ status: r.status === 200 ? "History cleared." : "Could not clear history.", busy: false });
   }
 }

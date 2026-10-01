@@ -22,7 +22,14 @@ for (const m of MODES) {
 }
 
 function render(s) {
-  for (const [id, b] of Object.entries(buttons)) b.setAttribute("aria-pressed", String(id === s.mode));
+  for (const [id, b] of Object.entries(buttons)) {
+    b.setAttribute("aria-pressed", String(id === s.mode));
+    const off = s.codexOk === false && id.startsWith("codex");
+    b.disabled = off;
+    b.title = off ? s.codexReason : MODES.find((m) => m.id === id).label;
+  }
+  $("codexnote").hidden = !(s.codexOk === false);
+  $("codexnote").textContent = s.codexOk === false ? s.codexReason : "";
   const t = $("title");
   const href = s.source && safeHref(s.source.url);
   t.textContent = s.title || (s.source ? s.source.url : "");
@@ -41,13 +48,14 @@ function render(s) {
 }
 
 const ctl = new Controller({
-  storage: { get: (k) => chrome.storage.local.get(k), set: (o) => chrome.storage.local.set(o) },
+  storage: { get: (k) => chrome.storage.local.get(k), set: (o) => chrome.storage.local.set(o), remove: (k) => chrome.storage.local.remove(k) },
   fetch: (...a) => fetch(...a),
   clipboard: { writeText: (t) => navigator.clipboard.writeText(t) },
   openTab: (url) => chrome.tabs.create({ url }),
   uuid: () => crypto.randomUUID(),
   setTimer: (f, ms) => setTimeout(f, ms),
   clearTimer: (id) => clearTimeout(id),
+  healthOverride: window.__devHealth,
   onState: render,
 });
 

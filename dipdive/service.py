@@ -216,6 +216,8 @@ class Service:
             s = _read_json(self._src_path(norm))
         except (OSError, ValueError):
             return None
+        if "hash" not in s or "fetched" not in s:
+            return None  # entry from before the hash field existed: treat as expired, refetch
         if time.time() - s["fetched"] > SOURCE_TTL or s["generation"] != self.generation:
             return None
         return s
@@ -363,6 +365,14 @@ class Service:
         cenv = dict(os.environ, CODEX_HOME=CODEX_HOME)
         from .acquire import DENO
         cl, _ = cmd([CLAUDE, "--version"]); cas, crc = cmd([CLAUDE, "auth", "status"])
+        iso_ok, iso_err = True, None
+        try:
+            from .models import verify_codex_features
+            verify_codex_features(force=True)
+        except DipDiveError as e:
+            iso_ok, iso_err = False, e.message
+        except Exception as e:
+            iso_ok, iso_err = False, f"{type(e).__name__}: {e}"
         cx, _ = cmd([CODEX, "--version"]); cxs, cxrc = cmd([CODEX, "login", "status"], env=cenv)
         try:
             cl_logged = bool(json.loads(cas).get("loggedIn"))
@@ -371,6 +381,8 @@ class Service:
         return {"yt_dlp": ytv, "deno": cmd([DENO, "--version"])[0].splitlines()[0] if os.path.exists(DENO) else "missing",
                 "claude": cl[:100], "codex": cx[:100], "claude_logged_in": cl_logged,
                 "codex_logged_in": cxrc == 0 and "not logged in" not in cxs.lower(),
+                "codex_isolation_ok": iso_ok, "codex_isolation_error": iso_err,
+                "codex_ready": iso_ok and cxrc == 0 and "not logged in" not in cxs.lower(),
                 "claude_auth_status": cas[:200], "codex_login_status": cxs[:200],
                 "clear_generation": self.generation}
 

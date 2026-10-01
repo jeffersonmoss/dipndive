@@ -4,14 +4,14 @@ import { Controller, describeError } from "../lib/controller.js";
 import { slotKey } from "../lib/background-core.js";
 
 // A fake companion plus fake chrome pieces. Timers are manual so polling is deterministic.
-function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {} } = {}) {
-  const store = { ...cfg, ...(mode ? { mode } : {}), ...(slot ? { [slotKey(1)]: slot } : {}) };
+function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health } = {}) {
+  const store = shared || { ...cfg, ...(mode ? { mode } : {}), ...(slot ? { [slotKey(1)]: slot } : {}) };
   const log = { fetches: [], tabs: [], clip: [], order: [] };
   const timers = [];
   const state = { last: null };
   const holds = []; // pending fetch resolvers for race tests
   let jobSeq = 0;
-  const server = { jobs, clearGen: 0, hold: null, fail: null, sources: {} };
+  const server = { jobs, clearGen: 0, hold: null, fail: null, sources: {}, health: health || { state: "starting" }, conflictOnce: false };
   const fetchImpl = async (url, init) => {
     const path = url.replace("http://c.test", "");
     const body = init.body ? JSON.parse(init.body) : null;
@@ -19,7 +19,9 @@ function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slo
     if (server.fail) throw server.fail;
     const respond = (status, json) => ({ status, json: async () => json });
     const go = () => {
+      if (path === "/health") return respond(200, server.health);
       if (init.method === "POST" && path === "/jobs") {
+        if (server.conflictOnce) { server.conflictOnce = false; return respond(409, { error_code: "request_id_conflict" }); }
         const id = `job${++jobSeq}`;
         server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0 };
         return respond(202, { job_id: id, clear_generation: server.clearGen });
@@ -43,8 +45,9 @@ function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slo
     return go();
   };
   const c = new Controller({
-    storage: { get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((k) => k in store).map((k) => [k, store[k]])),
-               set: async (o) => { Object.assign(store, o); } },
+    storage: { get: async (keys) => keys === null ? { ...store } : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((k) => k in store).map((k) => [k, store[k]])),
+               set: async (o) => { Object.assign(store, o); },
+               remove: async (keys) => { for (const k of (Array.isArray(keys) ? keys : [keys])) delete store[k]; } },
     fetch: fetchImpl,
     clipboard: { writeText: async (t) => { if (server.clipFail) throw new Error("denied"); log.order.push("clip"); log.clip.push(t); } },
     openTab: (u) => { log.order.push("tab"); log.tabs.push(u); },
@@ -61,7 +64,7 @@ const slot = (extra = {}) => ({ url: "https://v.test/watch", requestId: "slot-re
 test("an unconsumed slot is submitted with the slot requestId as the idempotency key, then acknowledged in the slot", async () => {
   const r = rig({ slot: slot(), mode: "claude-dip" });
   await r.c.init(1);
-  assert.deepEqual(r.log.fetches[0], { method: "POST", path: "/jobs", body: { url: "https://v.test/watch", mode: "claude-dip", requestId: "slot-req-1", force: false }, auth: "Bearer " + "t".repeat(40) });
+  assert.deepEqual(r.log.fetches.find((f) => f.method === "POST"), { method: "POST", path: "/jobs", body: { url: "https://v.test/watch", mode: "claude-dip", requestId: "slot-req-1", force: false }, auth: "Bearer " + "t".repeat(40) });
   assert.equal(r.store[slotKey(1)].jobId, "job1");
   assert.equal(r.store[slotKey(1)].consumed, true);
   await r.tick();
@@ -72,7 +75,7 @@ test("an unconsumed slot is submitted with the slot requestId as the idempotency
 test("default mode is Codex Dip", async () => {
   const r = rig({ slot: slot() });
   await r.c.init(1);
-  assert.equal(r.log.fetches[0].body.mode, "codex-dip");
+  assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "codex-dip");
 });
 
 test("pressing a different button submits that mode with a fresh requestId; pressing the pressed one forces a rerun", async () => {
@@ -117,7 +120,7 @@ test("an older companion clear generation is discarded, a newer one is adopted",
 test("Temp chat: source-only job, then copy writes the clipboard BEFORE opening the tab", async () => {
   const r = rig({ slot: slot(), mode: "temp" });
   await r.c.init(1);
-  assert.equal(r.log.fetches[0].body.mode, "source");
+  assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "source");
   await r.tick();
   assert.equal(r.state.last.tempReady, true);
   assert.equal(r.state.last.result, null, "no summary is shown for Temp chat");
@@ -208,4 +211,102 @@ test("clear history calls /clear and resets the view", async () => {
   assert.equal(r.log.fetches.at(-1).path, "/clear");
   assert.equal(r.state.last.result, null);
   assert.equal(r.c.clearGen, 1);
+});
+
+const wins = (store) => (w) => ({ ...store });
+
+test("a mode change in another window does not change this panel's pressed button or trigger force", async () => {
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot(), [slotKey(2)]: slot({ requestId: "other", windowId: 2 }) };
+  const A = rig({ shared });
+  const B = rig({ shared });
+  B.c.windowId = 2;
+  await A.c.init(1); await A.tick();
+  B.c.windowId = 2;
+  await B.c.init(2); await B.tick();
+  await A.c.selectMode("claude-dive");   // window A switches; storage.mode changes
+  B.c.onStorageChange({ mode: { newValue: "claude-dive" } }, "local");
+  assert.equal(B.state.last.mode, "claude-dip", "B keeps its own pressed button");
+  assert.match(B.state.last.result, /claude-dip/);
+  await B.c.selectMode("claude-dive");
+  const post = B.log.fetches.filter((f) => f.method === "POST").at(-1).body;
+  assert.equal(post.mode, "claude-dive");
+  assert.equal(post.force, false, "first Dive in B is not a forced rerun");
+  await B.c.selectMode("claude-dive");
+  assert.equal(B.log.fetches.filter((f) => f.method === "POST").at(-1).body.force, true, "own pressed button forces");
+});
+
+test("after a restart the newest slot is restored into this window and the old key is dropped", async () => {
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip",
+    "slot:5": slot({ url: "https://old.test/", requestId: "o", windowId: 5, ts: 10, consumed: true, jobId: "job1", mode: "claude-dip" }),
+    "slot:6": slot({ url: "https://new.test/", requestId: "n", windowId: 6, ts: 20, consumed: true, jobId: "job1", mode: "claude-dip" }) };
+  const r = rig({ shared, jobs: { job1: { state: "queued", mode: "claude-dip", url: "https://new.test/", polls: 1 } } });
+  await r.c.init(1);
+  assert.equal(shared[slotKey(1)].url, "https://new.test/");
+  assert.equal(shared[slotKey(1)].windowId, 1);
+  assert.ok(!("slot:6" in shared));
+  assert.equal(r.state.last.source.url, "https://new.test/");
+  assert.ok(!r.log.fetches.some((f) => f.method === "POST"), "restored, not resubmitted");
+});
+
+test("only the newest 20 slots are kept", async () => {
+  const shared = { base: "http://c.test", token: "t".repeat(40) };
+  for (let i = 0; i < 30; i++) shared[`slot:${100 + i}`] = slot({ requestId: `r${i}`, windowId: 100 + i, ts: i, consumed: true, jobId: "x" });
+  const r = rig({ shared, jobs: {} });
+  await r.c.init(1);
+  const keys = Object.keys(shared).filter((k) => k.startsWith("slot:"));
+  assert.ok(keys.length <= 20, String(keys.length));
+  assert.ok(!keys.includes("slot:100") && (keys.includes("slot:129") || keys.includes("slot:1")));
+});
+
+test("Clear history removes every slot key", async () => {
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot(), "slot:9": slot({ requestId: "z", windowId: 9, ts: 5 }) };
+  const r = rig({ shared });
+  await r.c.init(1); await r.tick();
+  await r.c.clearHistory();
+  assert.deepEqual(Object.keys(shared).filter((k) => k.startsWith("slot:")), []);
+});
+
+test("a 409 requestId conflict is retried once with a fresh requestId", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  r.server.conflictOnce = true;
+  await r.c.init(1);
+  const posts = r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].body.requestId, "slot-req-1");
+  assert.notEqual(posts[1].body.requestId, "slot-req-1");
+  assert.equal(r.state.last.error, null);
+});
+
+test("an unacknowledged slot resubmits with the mode it was first sent with", async () => {
+  const r = rig({ slot: slot({ pendingMode: "claude-dive" }), mode: "codex-dip" });
+  await r.c.init(1);
+  const b = r.log.fetches.find((f) => f.method === "POST").body;
+  assert.equal(b.mode, "claude-dive");
+  assert.equal(b.requestId, "slot-req-1");
+});
+
+test("Codex unavailable: Claude Dip is the effective default, Codex buttons refuse presses; ready: Codex Dip is the default", async () => {
+  const off = rig({ slot: slot(), health: { codex_ready: false, codex_logged_in: false } });
+  await off.c.init(1);
+  assert.equal(off.log.fetches.find((f) => f.method === "POST").body.mode, "claude-dip");
+  assert.equal(off.state.last.codexOk, false);
+  assert.match(off.state.last.codexReason, /not signed in/);
+  const posts = off.log.fetches.filter((f) => f.method === "POST").length;
+  await off.c.selectMode("codex-dive");
+  assert.equal(off.log.fetches.filter((f) => f.method === "POST").length, posts);
+  assert.equal(off.store.mode, undefined, "the stored preference is untouched");
+  const iso = rig({ slot: slot(), health: { codex_ready: false, codex_logged_in: true, codex_isolation_ok: false } });
+  await iso.c.init(1);
+  assert.match(iso.state.last.codexReason, /isolation is not verified/);
+  const on = rig({ slot: slot(), health: { codex_ready: true, codex_logged_in: true } });
+  await on.c.init(1);
+  assert.equal(on.log.fetches.find((f) => f.method === "POST").body.mode, "codex-dip");
+  assert.equal(on.state.last.codexOk, true);
+});
+
+test("health unknown (starting or unreachable) leaves Codex enabled", async () => {
+  const r = rig({ slot: slot() });
+  await r.c.init(1);
+  assert.equal(r.state.last.codexOk, null);
+  assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "codex-dip");
 });

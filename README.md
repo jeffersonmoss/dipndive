@@ -39,7 +39,7 @@ Codex needs its own sign-in (never copy `~/.codex/auth.json`):
 
 ## Tests
 
-`python -m unittest tests.test_regressions tests.test_server` (67 tests), `python -m tests.isolation` (plan 3.4.5) and `python -m tests.poc1` (writes tests/poc1-results.json). Temp dirs are made in the system temp dir with prefix `dipdive-` and a TEMP_README.md, and removed in `finally`.
+`python -m unittest tests.test_regressions tests.test_server` (73 tests), `python -m tests.isolation` (plan 3.4.5) and `python -m tests.poc1` (writes tests/poc1-results.json). Temp dirs are made in the system temp dir with prefix `dipdive-` and a TEMP_README.md, and removed in `finally`.
 
 ## Codex home notes
 
@@ -53,7 +53,7 @@ Live article sample (network, no model): `python -m tests.live_articles`.
 
 Source in `extension/` (Manifest V3, no build step, no CDN code, no content scripts). Load with `extension/LOAD-UNPACKED.md`.
 
-1. Permissions: `contextMenus`, `sidePanel`, `storage`, `clipboardWrite`; host permission `https://*.ts.net/*` only (narrow it to the exact tailnet host later); `http://127.0.0.1/*` and `localhost` are optional and requested from the options page on save.
+1. Permissions: `contextMenus`, `sidePanel`, `storage`, `clipboardWrite`; no always-on host access; `https://*.ts.net/*`, `http://127.0.0.1/*` and `localhost` are optional and the options page requests exactly the saved origin.
 2. Fixed extension ID `eokhjchjblklfkhcklpichdfjmmpcana` via the `key` in `manifest.json` (public key only). The PRIVATE key is `~/Library/Application Support/DipDive/extension-key.pem` (mode 0600, never in git). Keep it: it is needed to pack the extension later with the same ID.
 3. Layout: `background.js` plus `lib/background-core.js` (menu, URL precedence, per-window slots); `panel.html`, `panel.js`, `panel.css`, `lib/controller.js` (submission, polling, selection and clear generations, Temp chat); `lib/markdown.js` (bundled renderer, HTML escaped, images never rendered, http(s) links only); `lib/api.js` (5 s AbortController deadlines); `options.html` and `options.js`.
-4. Tests: `cd extension && node --test test/*.test.mjs` (27 tests: URL precedence, renderer safety, manifest and no-CDN checks, menu and click handler order with a mocked chrome, controller flows with a fake companion). Visual and flow check in a browser: `.venv/bin/python -m tests.dev_harness [port]` starts a real companion with faked model binaries plus a static and proxy server and prints a panel URL (`panel.html?base=...&token=...&url=...&mode=...`); the panel runs outside Chrome through `lib/shim.js`, which is inert inside the real extension. Screenshots: `extension/docs/panel-light.jpg`, `panel-dark.jpg`.
+4. Tests: `cd extension && node --test test/*.test.mjs` (40 tests: URL precedence, renderer safety, manifest and no-CDN checks, menu and click handler order with a mocked chrome, controller flows with a fake companion). Visual and flow check in a browser: `.venv/bin/python -m tests.dev_harness [port]` starts a real companion with faked model binaries plus a static and proxy server and prints a panel URL (`panel.html?base=...&token=...&url=...&mode=...`); the panel runs outside Chrome through `lib/shim.js`, which is inert inside the real extension. Screenshots: `extension/docs/panel-light.jpg`, `panel-dark.jpg`.

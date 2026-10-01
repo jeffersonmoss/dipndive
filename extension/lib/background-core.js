@@ -5,6 +5,16 @@ import { pickUrl } from "./urls.js";
 export const MENU_ID = "dipdive-run";
 export const slotKey = (windowId) => `slot:${windowId}`;
 
+export const MAX_SLOTS = 20;
+
+// Keep only the newest MAX_SLOTS per-window slots (window ids change after a restart, so old ones pile up).
+export async function pruneSlots(storage, keep = MAX_SLOTS) {
+  const all = await storage.get(null);
+  const slots = Object.entries(all).filter(([k]) => k.startsWith("slot:")).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+  const drop = slots.slice(keep).map(([k]) => k);
+  if (drop.length) await storage.remove(drop);
+}
+
 export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
   const swallow = () => void chrome.runtime.lastError;
 
@@ -19,6 +29,9 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
   }
 
   // Created once, at install or update. Creating the same id again throws, so startup and mode changes only update.
+  // Clicking the toolbar icon opens the side panel (also reaches the restored slot).
+  if (chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }, swallow);
+
   chrome.runtime.onInstalled.addListener(async () => {
     const title = menuLabel(await currentMode());
     chrome.contextMenus.create({ id: MENU_ID, title, contexts: ["link", "video", "page"] }, swallow);
@@ -36,7 +49,7 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
     const url = pickUrl(info);
     if (!url) return;
     const slot = { url, requestId: uuid(), windowId, ts: Date.now(), consumed: false };
-    chrome.storage.local.set({ [slotKey(windowId)]: slot });
+    chrome.storage.local.set({ [slotKey(windowId)]: slot }).then(() => pruneSlots(chrome.storage.local));
   });
   return { setLabel };
 }

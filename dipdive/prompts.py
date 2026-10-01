@@ -35,14 +35,31 @@ def system_prompt(level: str) -> str:
 
 
 _ZERO_WIDTH = re.compile("[\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]")
-_DELIM = re.compile(r"(<|&lt;|&#0*60;|&#x0*3c;)(\s*/?\s*)source", re.I)
+_LT = r"(?:<|&lt;|&#0*60;|&#x0*3c;|%3c|\\u003c|\\x3c)"
+_WS = r"(?:\s|%20|&nbsp;)*"
+_SLASH = r"(?:/|%2f|&#0*47;|&#x0*2f;)?"
+_DELIM = re.compile(rf"({_LT})({_WS}{_SLASH}{_WS})source", re.I)
+# One-to-one look-alike map (Cyrillic, Greek, Armenian letters used in "source"), applied to a skeleton copy
+# used only to find the delimiter, so ordinary Russian or Greek text is never altered.
+_CONFUSABLE = str.maketrans({"\u0455": "s", "\u0441": "c", "\u043e": "o", "\u0435": "e", "\u0433": "r", "\u0440": "p",
+                             "\u0446": "u", "\u03bf": "o", "\u03c5": "u", "\u0585": "o", "\u057d": "u", "\u0455": "s",
+                             "\u0501": "d", "\u0261": "g", "\u1d1c": "u", "\u0455": "s", "\u0280": "r", "\u1d04": "c",
+                             "\u1d07": "e", "\u0455": "s", "\u0432": "b"})
 
 
 def neutralize(text: str) -> str:
-    """Stop the source (or title or URL) from closing or opening the <source> delimiter, including
-    zero-width splits, full-width look-alikes (NFKC) and HTML-entity forms."""
+    """Stop the source (or title or URL) from closing or opening the <source> delimiter, including zero-width
+    splits, full-width look-alikes (NFKC), HTML-entity and percent-encoded forms, and Cyrillic or Greek homoglyphs."""
     text = _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text))
-    return _DELIM.sub(lambda m: "< " + m.group(2).replace(" ", "") + " source" if m.group(2).strip() else "< source", text)
+    skel = text.translate(_CONFUSABLE)
+    out, last = [], 0
+    for m in _DELIM.finditer(skel):
+        inner = re.sub(r"(?:\s|%20|&nbsp;)", "", m.group(2))
+        out.append(text[last:m.start()])
+        out.append("< " + inner + " source" if inner else "< source")
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def user_message(title: str, url: str, text: str) -> str:

@@ -13,13 +13,12 @@ $("save").addEventListener("click", async () => {
   let u;
   try { u = new URL(base); } catch { say("That is not a valid URL."); return; }
   const local = u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "localhost");
-  if (u.protocol !== "https:" && !local) { say("Use an https:// address (or http://127.0.0.1 for testing)."); return; }
+  const tailnet = u.protocol === "https:" && u.hostname.toLowerCase().endsWith(".ts.net");
+  if (!local && !tailnet) { say("Use the iMac's https://<name>.<tailnet>.ts.net address (or http://127.0.0.1 for testing)."); return; }
   if (token.length < 32) { say("The token looks too short."); return; }
-  if (local) {
-    // optional_host_permissions: asked for here, inside the click, so the user gesture is valid.
-    const ok = await chrome.permissions.request({ origins: [`${u.protocol}//${u.hostname}/*`] });
-    if (!ok) { say("Permission to reach that address was declined."); return; }
-  }
+  // Host access is optional: ask for exactly this origin, inside the click so the user gesture is valid.
+  const ok = await chrome.permissions.request({ origins: [`${u.protocol}//${u.hostname}/*`] });
+  if (!ok) { say("Permission to reach that address was declined."); return; }
   await chrome.storage.local.set({ base, token });
   say("Saved. Testing...");
   try {

@@ -9,11 +9,12 @@ function mockChrome(mode) {
   const chrome = {
     runtime: { lastError: undefined, onInstalled: { addListener: (f) => L.installed.push(f) }, onStartup: { addListener: (f) => L.startup.push(f) } },
     storage: {
-      local: { get: async () => ({ ...store }), set: (o) => { calls.push(["set", o]); Object.assign(store, o); return Promise.resolve(); } },
+      local: { get: async (k) => (k === null ? { ...store } : { ...store }), set: (o) => { calls.push(["set", o]); Object.assign(store, o); return Promise.resolve(); },
+               remove: async (keys) => { for (const k of keys) delete store[k]; } },
       onChanged: { addListener: (f) => L.changed.push(f) },
     },
     contextMenus: { create: (o, cb) => { calls.push(["create", o]); cb && cb(); }, update: (id, o, cb) => { calls.push(["update", id, o]); cb && cb(); }, onClicked: { addListener: (f) => L.clicked.push(f) } },
-    sidePanel: { open: (o, cb) => { calls.push(["open", o]); cb && cb(); } },
+    sidePanel: { open: (o, cb) => { calls.push(["open", o]); cb && cb(); }, setPanelBehavior: (o, cb) => { calls.push(["behavior", o]); cb && cb(); } },
   };
   return { chrome, calls, L, store };
 }
@@ -45,6 +46,7 @@ test("click: sidePanel.open is the first call, synchronous, then a per-window sl
   const m = mockChrome();
   let n = 0;
   registerBackground(m.chrome, () => `req-${++n}`);
+  m.calls.length = 0; // drop the registration-time setPanelBehavior call
   m.L.clicked[0]({ linkUrl: "https://a.test/x", pageUrl: "https://p.test" }, { windowId: 7 });
   assert.equal(m.calls[0][0], "open");
   assert.deepEqual(m.calls[0][1], { windowId: 7 });
@@ -61,7 +63,25 @@ test("click: sidePanel.open is the first call, synchronous, then a per-window sl
 test("click with no usable url still opens the panel but writes no slot", () => {
   const m = mockChrome();
   registerBackground(m.chrome);
+  m.calls.length = 0;
   m.L.clicked[0]({ pageUrl: "chrome://extensions" }, { windowId: 1 });
   assert.equal(m.calls.length, 1);
   assert.equal(m.calls[0][0], "open");
+});
+
+test("the toolbar icon opens the side panel", () => {
+  const m = mockChrome();
+  registerBackground(m.chrome);
+  assert.deepEqual(m.calls.find((c) => c[0] === "behavior")[1], { openPanelOnActionClick: true });
+});
+
+test("slots are capped at the newest 20 after a click", async () => {
+  const m = mockChrome();
+  for (let i = 0; i < 25; i++) m.store[`slot:${i + 100}`] = { ts: i };
+  registerBackground(m.chrome);
+  m.L.clicked[0]({ pageUrl: "https://a.test/" }, { windowId: 7 });
+  await new Promise((r) => setTimeout(r, 20));
+  const keys = Object.keys(m.store).filter((k) => k.startsWith("slot:"));
+  assert.equal(keys.length, 20);
+  assert.ok(keys.includes("slot:7") && !keys.includes("slot:100"));
 });

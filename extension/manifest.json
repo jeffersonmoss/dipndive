@@ -4,17 +4,15 @@
   "version": "0.1.0",
   "description": "Right-click a link or page for a short summary from your own companion service.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9xFjpUovFV00E2DhZRmRIGubVieh78Ji52mOnjNJ5Wy43GtfSgwd6Wyd+OHlXIWcJnm/ezmlsOyczlaRWzFDRHSFUYUA3W2/fpKd52hIPyqXP6YzCRxBEBKRc2ygWcYTxO1doiEe7qala4F0KZqgowfk+QEXIOR6CEplFIas8Q5DtzGOCzkL/xvWjchvtqy0rdN1cw9KCR/3MJg4T/HwPrypI8tXUYC+tRiyFU2B3QYEL33kwP+ad+YSZvD75chHUSEXUsPWLouhyWYqxjBP0jpVugI+btE9a9cFrAmrfwlnW3ds8X0lpWs7dhVQl2Zw1pFQj5wbnNI/41+9OXGqwIDAQAB",
-  "minimum_chrome_version": "114",
+  "minimum_chrome_version": "116",
   "permissions": [
     "contextMenus",
     "sidePanel",
     "storage",
     "clipboardWrite"
   ],
-  "host_permissions": [
-    "https://*.ts.net/*"
-  ],
   "optional_host_permissions": [
+    "https://*.ts.net/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

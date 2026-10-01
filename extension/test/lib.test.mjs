@@ -8,7 +8,9 @@ import { MODES, DEFAULT_MODE, menuLabel, apiMode } from "../lib/modes.js";
 test("url precedence: linkUrl, then known-video srcUrl, then frameUrl, then pageUrl", () => {
   const base = { pageUrl: "https://a.test/page", frameUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ", srcUrl: "blob:https://www.youtube.com/xyz" };
   assert.equal(pickUrl({ ...base, linkUrl: "https://b.test/x" }), "https://b.test/x");
-  assert.equal(pickUrl(base), base.frameUrl, "blob: srcUrl ignored");
+  assert.equal(pickUrl(base), base.frameUrl, "blob: srcUrl ignored; known video embed frame wins");
+  assert.equal(pickUrl({ pageUrl: "https://a.test/article", frameUrl: "https://disqus.com/embed/comments/?x=1" }), "https://a.test/article", "non-video frames fall through to the page");
+  assert.equal(pickUrl({ pageUrl: "https://a.test/article", frameUrl: "https://googleads.g.doubleclick.net/pagead/x" }), "https://a.test/article");
   assert.equal(pickUrl({ ...base, srcUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert.equal(pickUrl({ pageUrl: "https://a.test/page" }), "https://a.test/page");
   assert.equal(pickUrl({ pageUrl: "chrome://newtab", linkUrl: "javascript:alert(1)" }), null);
@@ -58,7 +60,9 @@ test("manifest: exact permissions, fixed key, no content scripts, no broad hosts
   assert.ok(m.key && m.key.length > 300);
   assert.equal(m.content_scripts, undefined);
   assert.ok(!JSON.stringify(m).includes("<all_urls>"));
-  assert.deepEqual(m.host_permissions, ["https://*.ts.net/*"]);
+  assert.equal(m.host_permissions, undefined, "no always-on host access");
+  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*"]);
+  assert.equal(m.minimum_chrome_version, "116");
   assert.equal(m.side_panel.default_path, "panel.html");
 });
 
@@ -73,4 +77,24 @@ test("no CDN or remote code anywhere in the extension", () => {
     assert.ok(!/@import\s+url\(["']?https?:|import\(["']https?:|from ["']https?:/i.test(t), f);
     assert.ok(!/\beval\(|new Function\(/.test(t), f);
   }
+});
+
+test("markdown: code inside link text and raw NUL characters do not leak placeholders", () => {
+  const h = renderMarkdown("[`code`](http://a.com) and \u00000\u0000 and \u00009\u0000 [x](https://b.test)");
+  assert.ok(h.includes('<a href="http://a.com/" target="_blank" rel="noopener noreferrer"><code>code</code></a>'), h);
+  assert.ok(!h.includes("\u0000") && !h.includes("undefined"), h);
+  assert.equal((h.match(/b\.test/g) || []).length, 1, "no replayed stash entries");
+});
+
+test("options page validates https on .ts.net or the localhost dev case, and requests the exact origin", () => {
+  const t = fs.readFileSync(new URL("../options.js", import.meta.url), "utf8");
+  assert.ok(t.includes('.endsWith(".ts.net")'));
+  assert.ok(t.includes("chrome.permissions.request({ origins: [`${u.protocol}//${u.hostname}/*`] })"));
+});
+
+test("dark mode keeps the Dip squares pale", () => {
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  const dark = css.slice(css.indexOf("prefers-color-scheme: dark"), css.indexOf("* { box-sizing"));
+  assert.ok(!/--claude-pale:/.test(dark) && !/--codex-pale:/.test(dark), "pale tints are not overridden in dark mode");
+  assert.ok(!/--on-pale:/.test(dark), "text on pale stays dark");
 });

@@ -8,7 +8,18 @@ export function installShim() {
   const read = (k) => { try { return JSON.parse(localStorage.getItem(PREFIX + k)); } catch { return undefined; } };
   const listeners = [];
   const local = {
+    async remove(keys) {
+      for (const k of Array.isArray(keys) ? keys : [keys]) localStorage.removeItem(PREFIX + k);
+    },
     async get(keys) {
+      if (keys === null) {
+        const out = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k.startsWith(PREFIX)) out[k.slice(PREFIX.length)] = read(k.slice(PREFIX.length));
+        }
+        return out;
+      }
       const arr = Array.isArray(keys) ? keys : typeof keys === "string" ? [keys] : Object.keys(keys || {});
       const out = {};
       for (const k of arr) { const v = read(k); if (v !== null && v !== undefined) out[k] = v; }
@@ -31,6 +42,7 @@ export function installShim() {
   };
   if (q.get("base")) localStorage.setItem(PREFIX + "base", JSON.stringify(q.get("base")));
   if (q.get("token")) localStorage.setItem(PREFIX + "token", JSON.stringify(q.get("token")));
+  if (q.get("health")) window.__devHealth = q.get("health");
   if (q.get("mode")) localStorage.setItem(PREFIX + "mode", JSON.stringify(q.get("mode")));
   if (q.get("url")) {
     const w = Number(q.get("win") || 1);

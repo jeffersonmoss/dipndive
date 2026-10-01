@@ -28,11 +28,12 @@ export function knownVideo(u) {
 }
 
 // linkUrl; then srcUrl only if http(s) and a known video (on YouTube it is usually a blob: URL);
-// then frameUrl (catches embed iframes); then pageUrl.
+// then frameUrl when it is a known video embed; then pageUrl.
 export function pickUrl(info) {
   if (info.linkUrl && isHttp(info.linkUrl)) return info.linkUrl;
   if (info.srcUrl && isHttp(info.srcUrl) && knownVideo(info.srcUrl)) return info.srcUrl;
-  if (info.frameUrl && isHttp(info.frameUrl)) return info.frameUrl;
+  // frameUrl only for known video embeds; comment widgets, ads and other iframes fall through to the page
+  if (info.frameUrl && isHttp(info.frameUrl) && knownVideo(info.frameUrl)) return info.frameUrl;
   if (info.pageUrl && isHttp(info.pageUrl)) return info.pageUrl;
   return null;
 }
