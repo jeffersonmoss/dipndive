@@ -219,13 +219,13 @@ export class Controller {
 
   // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
   // question thread built on it, and drop any job or answer still on its way.
-  clearedElsewhere(cg) {
+  clearedElsewhere(cg, status = "History was cleared in another window or on the Options page.") {
     this.clearGen = cg;
     this.selGen++;
     this.stopTimer();
     if (this.slot) this.slot = { url: this.slot.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false };
     this.resetAsk();
-    this.resetView({ status: "History was cleared in another window or on the Options page.", busy: false });
+    this.resetView({ status, busy: false });
   }
 
   // Every POST /jobs (summaries, Temp chat and questions) carries the clear generation this panel knows, so the companion
@@ -399,6 +399,7 @@ export class Controller {
     const jobId = this.s.jobId;
     if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
     const gen = this.selGen, was = this.s.saved;
+    this.savedSeq = (this.savedSeq || 0) + 1;  // a refresh that started before this change must not overwrite its result
     this.emit({ saved: !!on, savingSaved: true, savedUnknown: false });
     const still = () => gen === this.selGen && this.s.jobId === jobId;
     let r;
@@ -408,6 +409,7 @@ export class Controller {
       if (!still()) return false;
       this.emit({ status: "No answer from the companion, so it is not known yet whether the history log changed. Checking..." });
       const now = await this.refreshSaved({ force: true });
+      if (still() && typeof now === "boolean") await this.announceSaved(jobId, now);  // the reconciled state, like any change
       if (still() && now === null) {
         this.emit({ saved: !!on, savingSaved: false, savedUnknown: true,
           status: "Cannot reach the companion, so it is not known whether the history log changed. Click the box to try again." });
@@ -436,16 +438,25 @@ export class Controller {
   // Ask the companion whether the summary on screen is in the history log (GET /jobs/<id>, field history_saved): after a
   // lost answer, when the panel gets the focus, and when another window changed a box. Returns true, false, or null
   // when it could not find out (the box is then left as it is). `force` also runs while a change is marked in flight.
+  // An answer is dropped when a local change started after this request did (savedSeq), or the summary changed. When
+  // the companion's clear generation has moved on (another machine pressed Clear history), the panel resets as a cleared
+  // panel does: the old summary, its box and its thread go.
   async refreshSaved({ force = false } = {}) {
     const jobId = this.s.jobId;
     if (!jobId || this.s.mode === "temp" || !this.s.result) return null;
     if (this.s.savingSaved && !force) return null;
-    const gen = this.selGen;
+    const gen = this.selGen, seq = this.savedSeq || 0;
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 5000);
     } catch { return null; }
     if (gen !== this.selGen || this.s.jobId !== jobId) return null;
+    const cg = r.json && r.json.clear_generation;
+    if (typeof cg === "number" && this.clearGen !== null && cg > this.clearGen) {
+      this.clearedElsewhere(cg, STALE_MESSAGE);
+      return null;
+    }
+    if (!force && seq !== (this.savedSeq || 0)) return null;  // a newer local change owns the box
     if (r.status !== 200 || !r.json) return null;
     const v = typeof r.json.history_saved === "boolean" ? r.json.history_saved : null;
     const patch = { saved: v, savingSaved: false, savedUnknown: false };

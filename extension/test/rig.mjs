@@ -80,7 +80,7 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
       }
       if ((m = path.match(/^\/jobs\/(.+)$/))) {
         const j = server.jobs[m[1]];
-        if (!j) return respond(404, { error_code: "no_such_job" });
+        if (!j) return respond(404, { error_code: "no_such_job", clear_generation: server.clearGen });
         j.polls++;
         const done = j.polls >= 2;
         return respond(200, { job_id: m[1], state: done ? (j.fail ? "error" : "done") : "summarizing", title: "A Title", url: j.url, mode: j.mode,

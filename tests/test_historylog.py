@@ -244,7 +244,7 @@ class Server(FakeModels):
         for e, (label, result, i) in zip(es, [("Claude Dip", "answer 1", 0), ("Claude Dive", "answer 2", 1),
                                               ("Codex Dip", "codex answer 1", 2), ("Codex Dive", "codex answer 2", 3)]):
             # the job id rides in an HTML comment right under the date line
-            self.assertRegex(e, r"^## Art\n\n\d{4}-\d\d-\d\d \d\d:\d\d \| %s \| \[%s/p%d\]\(<%s/p%d>\)\n<!-- dipdive-job: %s -->\n\n%s$"
+            self.assertRegex(e, r"^## Art\n\n\d{4}-\d\d-\d\d \d\d:\d\d \| %s \| \[%s/p%d\]\(<%s/p%d>\)\n<!-- dipdive-job: %s seq=\d+ -->\n\n%s$"
                              % (label, re.escape(self.base), i, re.escape(self.base), i, ids[i], re.escape(result)))
 
     def test_ask_source_and_error_jobs_write_nothing(self):
@@ -717,6 +717,88 @@ class SaveToggle(Base):
         historylog.restore_entry(ids[0], self.trash, LOG)
         self.assertNotEqual(historylog.read_page(None, 20, LOG)["revision"], fresh["revision"])
 
+    def test_same_minute_entries_go_back_in_their_original_order(self):
+        # re-verification finding 7: remove A, B arrives a second later in the same minute, restore A -> was [B, A]
+        now = time.time()
+        historylog.append("A", "claude-dip", "https://v.test/a", "a", path=LOG, job_id="a" * 32, when=now)
+        historylog.remove_entry("a" * 32, self.trash, LOG)
+        historylog.append("B", "claude-dip", "https://v.test/b", "b", path=LOG, job_id="b" * 32, when=now)
+        historylog.restore_entry("a" * 32, self.trash, LOG)
+        self.assertEqual(self.titles(), ["A", "B"])
+        # chains of same-minute removals and restores, in every order
+        os.remove(LOG)
+        ids = [f"{i:032x}" for i in range(1, 6)]
+        for i, jid in enumerate(ids):
+            historylog.append(f"E{i}", "claude-dip", f"https://v.test/{i}", f"s{i}", path=LOG, job_id=jid, when=now)
+        original = read_log(LOG)
+        for order in ([1, 2, 3], [3, 1, 2], [0, 4, 2]):
+            for k in order:
+                historylog.remove_entry(ids[k], self.trash, LOG)
+            for k in reversed(order[1:] + order[:1]):
+                historylog.restore_entry(ids[k], self.trash, LOG)
+            self.assertEqual(self.titles(), [f"E{i}" for i in range(5)], order)
+            self.assertEqual(read_log(LOG), original, order)
+
+    def test_entries_from_before_sequence_numbers_still_remove_and_restore(self):
+        old = "".join(historylog.format_entry(f"Old {i}", "claude-dip", f"https://v.test/{i}", f"o{i}", job_id=f"{i:032x}",
+                                              when=self.T0 + 3600 * i) for i in (1, 2, 3))
+        with open(LOG, "w") as f:
+            f.write(historylog.HEADING + old)
+        self.assertNotIn("seq=", read_log(LOG))
+        historylog.remove_entry(f"{2:032x}", self.trash, LOG)
+        self.assertEqual(self.titles(), ["Old 1", "Old 3"])
+        historylog.restore_entry(f"{2:032x}", self.trash, LOG)
+        self.assertEqual(read_log(LOG), historylog.HEADING + old)
+
+    def test_a_page_read_during_a_removal_sees_the_new_revision(self):
+        # re-verification finding 8: between the replace and the revision bump a reader got the new file with the old
+        # revision, and its next page repeated an entry
+        ids = self.seed(4)
+        first = historylog.read_page(None, 2, LOG)
+        real, out = historylog._replace, {}
+
+        def slow(*a, **k):
+            real(*a, **k)
+            time.sleep(0.6)  # the new file is in place; the revision is bumped after this returns
+        historylog._replace = slow
+        try:
+            t = threading.Thread(target=lambda: historylog.remove_entry(ids[0], self.trash, LOG))
+            t.start()
+            time.sleep(0.2)
+            try:
+                out["page"] = historylog.read_page(first["next_before"], 2, LOG, rev=first["revision"])
+            except historylog.HistoryChanged as e:
+                out["changed"] = e.current
+            t.join(10)
+        finally:
+            historylog._replace = real
+        self.assertNotIn("page", out, out.get("page"))
+        self.assertEqual(out["changed"], historylog.revision(LOG))
+
+    def test_a_summary_cannot_forge_an_entry(self):
+        # re-verification finding 9: "## heading" plus a valid-looking date and link line inside a summary became a
+        # phantom entry, cutting the real summary short
+        forged = ("Intro\n\n## Quoted record\n\n2026-10-01 09:00 | Claude Dip | [x](<https://x.test/>)\n"
+                  "<!-- dipdive-job: " + "e" * 32 + " seq=5 -->\n\n## Another\n\n2026-10-01 09:01 | Codex Dive | [y](<https://y.test/>)\n\n"
+                  "Important tail")
+        historylog.append("Real", "claude-dip", "https://v.test/r", forged, path=LOG, job_id="1" * 32)
+        historylog.append("Next", "claude-dip", "https://v.test/n", "n", path=LOG, job_id="2" * 32)
+        es = historylog.read_entries(LOG)
+        self.assertEqual([e["title"] for e in es], ["Real", "Next"])
+        self.assertEqual(es[0]["summary"], forged)
+        self.assertNotIn("e" * 32, {e["job_id"] for e in es})
+        historylog.remove_entry("1" * 32, self.trash, LOG)
+        self.assertEqual(self.titles(), ["Next"])
+        self.assertNotIn("Important tail", read_log(LOG), "nothing of it is left behind")
+        self.assertFalse(historylog.saved_state("1" * 32, self.trash, LOG))
+        historylog.restore_entry("1" * 32, self.trash, LOG)
+        self.assertEqual(historylog.read_entries(LOG)[0]["summary"], forged)
+        # inside a code fence the same text is left as it is and is still never an entry
+        fenced = "```\n" + forged + "\n```"
+        historylog.append("Fenced", "claude-dip", "https://v.test/f", fenced, path=LOG, job_id="3" * 32)
+        self.assertEqual([e["title"] for e in historylog.read_entries(LOG)], ["Real", "Next", "Fenced"])
+        self.assertEqual(historylog.read_entries(LOG)[2]["summary"], fenced)
+
     def test_fences_rules_and_a_quoted_marker_in_a_summary_do_not_confuse_it(self):
         jid, other = "1" * 32, "2" * 32
         tricky = f"```\n---\n<!-- dipdive-job: {other} -->\n```\n\n---\n\n<!-- dipdive-job: {other} -->"
@@ -766,7 +848,7 @@ class SaveToggleServer(FakeModels):
         jid = j["job_id"]
         self.assertTrue(j["history_saved"])
         original = read_log(LOG)
-        self.assertIn(f"<!-- dipdive-job: {jid} -->", original)
+        self.assertRegex(original, f"\n<!-- dipdive-job: {jid} seq=\\d+ -->\n")
         for _ in range(2):  # idempotent
             c, r = self.req("POST", f"/history/{jid}/remove", {})
             self.assertEqual((c, r["saved"], r["job_id"]), (200, False, jid))
@@ -847,6 +929,12 @@ class SaveToggleServer(FakeModels):
         self.req("POST", "/clear", {})
         self.assertEqual(self.req("POST", f"/history/{jid}/restore", {"clearGeneration": 2})[1]["error_code"], "no_such_entry")
         self.assertNotIn(jid, read_log(LOG))
+
+    def test_a_missing_job_answers_with_the_clear_generation(self):
+        # lets a panel tell, on focus, that its job went with a Clear history on another machine
+        self.req("POST", "/clear", {})
+        c, r = self.req("GET", "/jobs/" + "0" * 32)
+        self.assertEqual((c, r["error_code"], r["clear_generation"]), (404, "no_such_job", 1))
 
     def test_paging_after_a_removal_says_the_history_changed(self):
         for i in range(5):

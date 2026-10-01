@@ -295,3 +295,49 @@ test("Options page: focus returns to Clear history after the confirmation, and E
     p.restore();
   }
 });
+
+test("a reconciled lost answer is announced to the other panels like any change", async () => {
+  // re-verification finding 10: A reconciled to false through GET, B stayed true
+  const shared = { base: "http://c.test", token: "t".repeat(40), mode: "claude-dip", [slotKey(1)]: slot() };
+  const server = { jobs: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: { state: "starting" }, conflictOnce: false, seq: 0 };
+  const bus = [];
+  const A = rig({ shared, server, bus });
+  const B = rig({ shared, server, bus });
+  await A.c.init(1); await A.tick();
+  shared[slotKey(2)] = slot({ windowId: 2, requestId: "slot-req-2", consumed: true, jobId: A.state.last.jobId, mode: "claude-dip" });
+  await B.c.init(2);
+  server.loseSaveResponse = 1;
+  assert.equal(await A.c.setSaved(false), true);
+  await new Promise((res) => setTimeout(res, 0));
+  assert.deepEqual([A.state.last.saved, B.state.last.saved, server.jobs[A.state.last.jobId].saved], [false, false, false]);
+  assert.equal(shared.savedChange.saved, false);
+});
+
+test("a focus refresh that started before a local change cannot overwrite it", async () => {
+  // re-verification finding 11a: a GET begun before the removal arrived after it and put the box back to ticked
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  r.server.hold = (path) => path === "/jobs/job1";
+  const focus = r.c.refreshSaved();             // the focus GET is on its way (it will answer "true")
+  r.server.hold = null;
+  assert.equal(await r.c.setSaved(false), true);
+  assert.equal(r.state.last.saved, false);
+  r.holds.shift()();                            // the old answer arrives now
+  assert.equal(await focus, null, "dropped");
+  assert.equal(r.state.last.saved, false);
+  assert.equal(r.server.jobs.job1.saved, false);
+});
+
+test("a focus refresh after Clear history on another machine resets the panel and adopts the generation", async () => {
+  // re-verification finding 11b: the old summary, a ticked box and generation 0 stayed while the companion was at 1
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await done(r);
+  assert.equal(r.state.last.saved, true);
+  r.server.clearGen = 1;
+  delete r.server.jobs.job1;                     // what Clear history does on the companion
+  assert.equal(await r.c.refreshSaved(), null);
+  assert.equal(r.c.clearGen, 1);
+  assert.equal(r.state.last.result, null);
+  assert.equal(r.state.last.saved, null, "no box");
+  assert.equal(r.state.last.status, "History was cleared on another machine.");
+});

@@ -37,7 +37,10 @@ _held = threading.local()
 _RULE = re.compile(r"^ {0,3}(?:-[ \t]*){3,}$")             # a thematic break or setext underline made of hyphens
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
-_JOB_MARK = re.compile(r"^<!-- dipdive-job: ([0-9a-f]{32}) -->[ \t]*$")
+# the writer's own marker under the date line: the job id and an ever-increasing sequence number (absent on entries
+# written before it existed). The writer escapes every summary line that starts like it, so a summary cannot forge one.
+_JOB_MARK = re.compile(r"^<!-- dipdive-job: ([0-9a-f]{32})(?: seq=(\d{1,30}))? -->[ \t]*$")
+_MARKISH = re.compile(r"^\\*<!-- dipdive-job")
 
 
 def log_path() -> str:
@@ -84,8 +87,8 @@ def _body(summary: str) -> str:
                 fence = None
         elif fence is None and _RULE.match(ln):
             ln = re.sub(r"-", r"\\-", ln, count=1)
-        elif fence is None and _JOB_MARK.match(ln):
-            ln = "\\" + ln  # a quoted id marker must not read as an entry's own (Markdown shows it without the backslash)
+        elif fence is None and _MARKISH.match(ln):
+            ln = "\\" + ln  # a quoted marker must not read as an entry's own (Markdown shows it without the backslash)
         out.append(ln)
     if fence is not None:
         out.append(fence)
@@ -93,7 +96,7 @@ def _body(summary: str) -> str:
 
 
 def format_entry(title: str, mode: str, url: str, summary: str, when: float = None, channel: str = None,
-                 job_id: str = None) -> str:
+                 job_id: str = None, seq: int = None) -> str:
     t = _one_line(title) or _one_line(url) or "Untitled"
     t = t.lstrip("#").strip() or t  # a leading # would nest the heading level
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(when if when is not None else time.time()))
@@ -102,7 +105,8 @@ def format_entry(title: str, mode: str, url: str, summary: str, when: float = No
     ch = _one_line(channel if isinstance(channel, str) else "")
     chline = f"Channel: {ch}\n\n" if ch else ""
     # the job id rides in an HTML comment right under the date line: invisible in rendered Markdown
-    mark = f"\n<!-- dipdive-job: {job_id} -->" if isinstance(job_id, str) and _JOB_ID.match(job_id) else ""
+    sq = f" seq={seq}" if isinstance(seq, int) and seq >= 0 else ""
+    mark = f"\n<!-- dipdive-job: {job_id}{sq} -->" if isinstance(job_id, str) and _JOB_ID.match(job_id) else ""
     return f"## {t}\n\n{chline}{stamp} | {label} | [{shown}]({_md_url(url)}){mark}\n\n{_body(summary)}\n\n---\n\n"
 
 
@@ -148,7 +152,7 @@ def revision(path: str = None) -> int:
     it); appends do not change it. Kept in the sidecar lock file. 0 when there is none yet."""
     try:
         with open(_lock_path(path or log_path()), "rb") as f:
-            raw = f.read(32).strip()
+            raw = f.read(21).strip()
         return int(raw) if raw.isdigit() else 0
     except (OSError, ValueError):
         return 0
@@ -158,20 +162,42 @@ def _bump_revision(fd):
     if fd is None:
         return
     try:
-        raw = os.pread(fd, 32, 0).strip()
+        raw = os.pread(fd, 21, 0).strip()
         n = int(raw) + 1 if raw.isdigit() else 1
         os.pwrite(fd, b"%020d\n" % n, 0)  # fixed width: one write, never a half-written number
     except OSError:
         pass
 
 
+def _next_seq(fd) -> int:
+    """The next entry's sequence number: larger than the last one handed out (kept in the sidecar after the revision) and
+    never smaller than the clock in nanoseconds, so it keeps increasing even if the sidecar is lost."""
+    last = 0
+    if fd is not None:
+        try:
+            raw = os.pread(fd, 31, 21).strip()
+            last = int(raw) if raw.isdigit() else 0
+        except OSError:
+            pass
+    n = max(time.time_ns(), last + 1)
+    if fd is not None:
+        try:
+            if os.fstat(fd).st_size < 21:
+                os.pwrite(fd, b"%020d\n" % 0, 0)
+            os.pwrite(fd, b"%030d\n" % n, 21)
+        except OSError:
+            pass
+    return n
+
+
 def append(title: str, mode: str, url: str, summary: str, path: str = None, channel: str = None, job_id: str = None,
            when: float = None) -> str:
     """Append one entry (creating the file with a heading if missing). Returns the path. Raises OSError on failure."""
     p = path or log_path()
-    entry = format_entry(title, mode, url, summary, when=when, channel=channel, job_id=job_id).encode("utf-8", "replace")
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-    with locked(p):
+    with locked(p) as lfd:
+        seq = _next_seq(lfd) if job_id else None
+        entry = format_entry(title, mode, url, summary, when=when, channel=channel, job_id=job_id, seq=seq).encode("utf-8", "replace")
         fd = os.open(p, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             try:
@@ -238,7 +264,7 @@ def _blank(b: str) -> bool:
 
 
 class _Ent:
-    __slots__ = ("start", "body", "end", "body_end", "job_id", "stamp", "ambiguous")
+    __slots__ = ("start", "body", "end", "body_end", "job_id", "seq", "stamp", "ambiguous")
 
 
 def _scan(lines: list) -> list:
@@ -272,11 +298,21 @@ def _scan(lines: list) -> list:
         m = _META.match(bares[j]) if j < n and not fenced[j] else None
         if not m:
             continue
-        e = _Ent()
-        e.start, e.stamp = i, f"{m.group(1)} {m.group(2)}"
         k = j + 1
         jm = _JOB_MARK.match(bares[k]) if k < n else None
+        if not jm:
+            # No marker (an entry from before markers existed, or a heading and date line quoted inside a summary): it
+            # starts an entry only where an entry can start, after a separator, the file heading or the start of the
+            # file. A summary cannot produce a separator line (the writer escapes them), so it cannot forge this either.
+            q = i - 1
+            while q >= 0 and _blank(bares[q]) and not fenced[q]:
+                q -= 1
+            if q >= 0 and (fenced[q] or not (_SEP.match(bares[q]) or bares[q].startswith("# "))):
+                continue
+        e = _Ent()
+        e.start, e.stamp = i, f"{m.group(1)} {m.group(2)}"
         e.job_id = jm.group(1) if jm else ""
+        e.seq = int(jm.group(2)) if jm and jm.group(2) else None
         e.body = k + 1 if jm else k
         starts.append(e)
     for x, e in enumerate(starts):
@@ -289,8 +325,9 @@ def _scan(lines: list) -> list:
                     end += 1
                 break
         e.end, e.body_end = end, body_end
-        # another entry's date line or id inside this one: a neighbour lost its heading; cutting would take it too
-        e.ambiguous = any(not fenced[q] and (_META.match(bares[q]) or _JOB_MARK.match(bares[q])) for q in range(e.body, body_end))
+        # another entry's own marker inside this one (summaries cannot contain one): a neighbour lost its heading, and
+        # cutting this entry would take the neighbour too
+        e.ambiguous = any(not fenced[q] and _JOB_MARK.match(bares[q]) for q in range(e.body, body_end))
     return starts
 
 
@@ -334,7 +371,7 @@ def _entry(lines):
             e = _ESCAPED_RULE.match(ln)
             if e:
                 ln = e.group(1) + e.group(2)  # undo the backslash that append() added
-            elif ln.startswith("\\") and _JOB_MARK.match(ln[1:]):
+            elif ln.startswith("\\") and _MARKISH.match(ln):
                 ln = ln[1:]
         body.append(ln)
     return {"title": title or url or "Untitled", "channel": channel, "date": day, "time": hm,
@@ -382,13 +419,11 @@ def read_page(before=None, limit: int = PAGE_DEFAULT, path: str = None, rev: int
     carries an older `rev` raises HistoryChanged (the reader starts again from the newest). `next_before` is the cursor
     for the next page, None at the end."""
     p = path or log_path()
-    for _ in range(3):  # a change between reading the revision and the entries: read again
+    with locked(p):  # the revision and the entries are read together: no change can fall between them
         r0 = revision(p)
         if rev is not None and before is not None and rev != r0:
             raise HistoryChanged(r0)
         es = read_entries(p)
-        if revision(p) == r0:
-            break
     total = len(es)
     top = total if before is None else max(0, min(before, total))
     lo = max(0, top - limit)
@@ -507,7 +542,7 @@ def remove_entry(job_id: str, trash_dir: str, path: str = None) -> bool:
         prev = next((o.job_id for o in reversed(ents[:x]) if o.job_id), None)
         nxt = next((o.job_id for o in ents[x + 1:] if o.job_id), None)
         os.makedirs(trash_dir, exist_ok=True)
-        _atomic_json(tp, {"entry": "".join(lines[e.start:e.end]), "prev": prev, "next": nxt, "stamp": e.stamp,
+        _atomic_json(tp, {"entry": "".join(lines[e.start:e.end]), "prev": prev, "next": nxt, "stamp": e.stamp, "seq": e.seq,
                           "removed": time.time()})
         try:
             _replace(p, "".join(lines[:e.start] + lines[e.end:]), _mode(p))
@@ -547,14 +582,24 @@ def restore_entry(job_id: str, trash_dir: str, path: str = None) -> bool:
             raise NoSuchEntry(job_id) from err
         by_id = {e.job_id: e for e in ents if e.job_id}
         pos = None
-        if kept.get("prev") in by_id:
+        seq = kept.get("seq") if type(kept.get("seq")) is int else None
+        if seq is not None:
+            # entries carry their sequence number: it goes right before the first later one (else at the bottom), which
+            # is its original place whatever happened around it, even within the same minute
+            pos = next((e.start for e in ents if e.seq is not None and e.seq > seq), None)
+            pe = by_id.get(kept.get("prev"))
+            if pe is not None and (pe.seq is None or pe.seq < seq):
+                x = ents.index(pe)
+                if x + 1 == len(ents) or (pos is not None and ents[x + 1].start >= pos):
+                    pos = pe.end  # right after its old predecessor, so text that followed that one stays where it was
+        elif kept.get("prev") in by_id:
             pos = by_id[kept["prev"]].end
         elif kept.get("next") in by_id:
             pos = by_id[kept["next"]].start
         stamp = kept.get("stamp") if isinstance(kept.get("stamp"), str) else None
-        if pos is None and stamp:
+        if pos is None and stamp and seq is None:
             pos = next((e.start for e in ents if e.stamp > stamp), None)
-        if pos is not None and stamp:
+        if pos is not None and stamp and seq is None:
             # keep the dates in order around it: step past older entries that arrived after, and back before newer ones
             ahead = [e for e in ents if e.start >= pos]
             while ahead and ahead[0].stamp < stamp:

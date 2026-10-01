@@ -133,7 +133,8 @@ def make_handler(svc: Service, token: str):
             try:
                 if m:
                     j = svc.get_job(m.group(1))
-                    return self._send(200, j) if j else self._send(404, {"error_code": "no_such_job"})
+                    # a missing job carries the clear generation too, so a panel can tell its job was cleared elsewhere
+                    return self._send(200, j) if j else self._send(404, {"error_code": "no_such_job", "clear_generation": svc.generation})
                 if u.path == "/source":
                     jid = (urllib.parse.parse_qs(u.query).get("job") or [""])[0]
                     return self._send(*svc.get_source_for_job(jid))
