@@ -47,7 +47,7 @@ test("markdown: attribute breakout in a link is escaped", () => {
 test("modes: order, default, menu label uses 'and', temp is source-only", () => {
   assert.deepEqual(MODES.map((m) => m.id), ["claude-dip", "claude-dive", "temp", "codex-dip", "codex-dive"]);
   assert.equal(DEFAULT_MODE, "codex-dip");
-  assert.equal(menuLabel("codex-dip"), "Dip'n'Dive: Codex Dip");
+  assert.equal(menuLabel("codex-dip"), "Dip'n'Dive");
   assert.ok(!menuLabel("temp").includes("&"));
   assert.equal(apiMode("temp"), "source");
   assert.equal(apiMode("claude-dive"), "claude-dive");
