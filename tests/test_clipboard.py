@@ -143,10 +143,12 @@ class ClipboardMailbox(unittest.TestCase):
         self.assertEqual(self.next("imac")[0], 204)
         self.assertEqual(self.next("thing-2")[1], {"url": "https://example.com/two"})
 
-    def test_cap_discards_oldest(self):
+    def test_cap_and_newest_only_delivery(self):
+        # Over the cap, and with a backlog, the machine receives only the newest link; nothing older follows.
         for i in range(service.CLIPBOARD_CAP + 2):
             self.enqueue(f"https://example.com/{i}")
-        self.assertEqual(self.next()[1], {"url": "https://example.com/2"})
+        self.assertEqual(self.next()[1], {"url": f"https://example.com/{service.CLIPBOARD_CAP + 1}"})
+        self.assertEqual(self.next()[0], 204)
 
     def test_pending_items_survive_service_restart(self):
         self.enqueue("https://example.com/persist", ["imac", "win"])
