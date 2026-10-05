@@ -52,7 +52,12 @@ export class Controller {
     this.pinSeq = 0;       // bumped on every pin click; an older pin still waiting for its permission is dropped
     this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
-    this.micPrefix = "";   // what was typed in the box when the microphone started; spoken words are added after it
+    this.micPrefix = "";   // editable text, including finalized words, before the current interim guess
+    this.micFinal = "";
+    this.micInterim = "";
+    this.micSuppressedInterim = "";
+    this.askAfterMicStop = false;
+    this.skipVoiceSend = false;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", busy: false, pinError: null,
@@ -575,25 +580,53 @@ export class Controller {
   // The user typed in the box (no re-render: the field already shows it).
   typed(text) {
     this.s.draft = String(text ?? "");
+    if (this.s.mic.state === MIC.LISTENING || this.s.mic.state === MIC.STOPPING) {
+      if (this.micInterim && this.s.draft.endsWith(this.micInterim)) {
+        this.micPrefix = this.s.draft.slice(0, -this.micInterim.length).trimEnd();
+      } else {
+        this.micPrefix = this.s.draft;
+        this.micSuppressedInterim = this.micInterim;
+      }
+      this.micFinal = this.voice.finalText;
+    }
   }
 
-  // Spoken words go after whatever was typed in the box when the microphone started.
-  withPrefix(text) {
-    return [this.micPrefix, text].filter(Boolean).join(" ");
+  // Chrome reports the whole transcript on every result. Keep only the new finalized suffix.
+  composeVoice(finalText, interimText) {
+    const finals = String(finalText || "").trim();
+    const old = this.micFinal;
+    const delta = finals.startsWith(old) ? finals.slice(old.length).trim() : finals;
+    if (delta) this.micPrefix = [this.micPrefix, delta].filter(Boolean).join(" ");
+    this.micFinal = finals;
+    const incomingInterim = String(interimText || "").trim();
+    if (this.micSuppressedInterim && incomingInterim !== this.micSuppressedInterim) this.micSuppressedInterim = "";
+    this.micInterim = incomingInterim === this.micSuppressedInterim ? "" : incomingInterim;
+    return [this.micPrefix, this.micInterim].filter(Boolean).join(" ");
   }
 
   onMic(m) {
     const live = m.state === MIC.LISTENING || m.state === MIC.STOPPING;
     const patch = { mic: m };
-    const shown = this.withPrefix(m.text);
-    if (live && shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }
+    if (live) {
+      const shown = this.composeVoice(m.finalText, m.interimText);
+      if (shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }
+    }
     this.emit(patch);
+    if (m.state === MIC.IDLE && this.askAfterMicStop) {
+      this.askAfterMicStop = false;
+      this.skipVoiceSend = true;
+      queueMicrotask(() => {
+        this.skipVoiceSend = false;
+        this.askQuestion();
+      });
+    }
   }
 
   // Recognized text lands in the box; it is sent automatically unless recognition failed part way or was held back.
   onVoiceText(text, { send }) {
-    const full = this.withPrefix(text);
+    const full = this.s.draft;
     this.emit({ draft: full, draftSeq: this.s.draftSeq + 1 });
+    if (this.skipVoiceSend) { this.skipVoiceSend = false; return; }
     return send ? this.askQuestion(full) : undefined;
   }
 
@@ -604,8 +637,24 @@ export class Controller {
       return;
     }
     this.emit({ askError: null });
-    if (this.s.mic.state === MIC.IDLE) this.micPrefix = cleanQuestion(this.s.draft);
+    if (this.s.mic.state === MIC.IDLE) {
+      this.micPrefix = cleanQuestion(this.s.draft);
+      this.micFinal = "";
+      this.micInterim = "";
+      this.micSuppressedInterim = "";
+    }
     await this.voice.toggle();
+  }
+
+  cancelQuestion() {
+    this.askAfterMicStop = false;
+    this.skipVoiceSend = false;
+    this.voice.cancel();
+    this.micPrefix = "";
+    this.micFinal = "";
+    this.micInterim = "";
+    this.micSuppressedInterim = "";
+    this.emit({ draft: "", draftSeq: this.s.draftSeq + 1, askError: null });
   }
 
   // The panel was hidden (another side panel took its place): stop listening, keep the words, send nothing.
@@ -656,6 +705,13 @@ export class Controller {
 
   // Ask about the current source. `text` defaults to the box. Returns true once the question was sent.
   async askQuestion(text) {
+    if (text === undefined && (this.s.mic.state === MIC.LISTENING || this.s.mic.state === MIC.STOPPING)) {
+      if (!this.askAfterMicStop) {
+        this.askAfterMicStop = true;
+        this.voice.stop();
+      }
+      return true;
+    }
     const q = cleanQuestion(text === undefined ? this.s.draft : text);
     if (!this.s.configured) { this.emit({ askError: "Set the companion URL and token in the extension options." }); return false; }
     if (!q) { this.emit({ askError: "Type or say a question first." }); return false; }

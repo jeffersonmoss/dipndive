@@ -420,6 +420,8 @@ test("answers are rendered by the safe renderer and questions are plain text in 
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /qe\.textContent = q;/, "the question goes in as text");
   assert.match(js, /ae\.innerHTML = html/);
+  assert.match(js, /addEventListener\("keydown", \(e\) => \{\s*if \(e\.key === "Escape"\)/);
+  assert.match(js, /box\.readOnly = false/);
   assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
 });
 
@@ -553,6 +555,62 @@ test("mic: words typed in the box stay, and the spoken words are added after the
   speech.last.finish([R("in the second half", true)]);
   await flush();
   assert.equal(asks(r)[0].body.question, "what about the chocolate in the second half");
+});
+
+test("mic: Ask stops listening, includes the final result, and sends exactly once", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("audiostart");
+  rec.result([R("what is the", true), R(" chocolate")]);
+  assert.equal(r.state.last.mic.state, MIC.LISTENING);
+  await r.c.askQuestion();
+  assert.equal(r.state.last.mic.state, MIC.STOPPING);
+  assert.deepEqual(rec.calls.slice(-1), ["stop"]);
+  rec.finish([R("what is the", true), R(" chocolate", true)]);
+  await flush();
+  assert.equal(asks(r).length, 1);
+  assert.equal(asks(r)[0].body.question, "what is the chocolate");
+});
+
+test("mic: edits survive later final and interim results without duplicating the interim", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("audiostart");
+  rec.result([R("what about the chocolate", true), R("in the second")]);
+  r.c.typed("what about cocoa in the second");
+  rec.result([R("what about the chocolate", true), R("in the second half")]);
+  assert.equal(r.state.last.draft, "what about cocoa in the second half");
+  rec.result([R("what about the chocolate in the second half", true)]);
+  assert.equal(r.state.last.draft, "what about cocoa in the second half");
+  await r.c.toggleMic();
+  rec.finish([R("what about the chocolate in the second half", true)]);
+  await flush();
+  assert.equal(asks(r)[0].body.question, "what about cocoa in the second half");
+});
+
+test("Escape cancels listening and typing without sending, while keeping earlier turns", async () => {
+  const { r, speech } = await micReady();
+  await r.c.askQuestion("earlier question"); await r.tick();
+  const thread = r.state.last.thread;
+  r.c.typed("typed draft");
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("audiostart");
+  rec.result([R("heard words")]);
+  r.c.cancelQuestion();
+  assert.equal(r.state.last.draft, "");
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  rec.finish([R("heard words", true)]);
+  await flush();
+  assert.equal(asks(r).length, 1);
+  assert.deepEqual(r.state.last.thread, thread);
+  r.c.typed("another typed draft");
+  r.c.cancelQuestion();
+  assert.equal(r.state.last.draft, "");
+  assert.equal(asks(r).length, 1);
+  assert.deepEqual(r.state.last.thread, thread);
 });
 
 test("mic: nothing heard leaves the typed words in the box", async () => {

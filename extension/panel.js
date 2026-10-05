@@ -160,10 +160,10 @@ function renderAsk(s) {
   $("miclabel").textContent = MIC_LABEL[m.state] || "Speak";
   const box = $("askinput");
   if (s.draftSeq !== shownDraftSeq) { shownDraftSeq = s.draftSeq; box.value = s.draft; }
-  box.readOnly = live;
-  if (live) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
+  box.readOnly = false;
+  if (live && document.activeElement !== box) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
   box.placeholder = m.state === MIC.LISTENING ? "Listening..." : "Ask a question";
-  $("askgo").disabled = live || !!s.asking;
+  $("askgo").disabled = !!s.asking;
   const line = m.state === MIC.LISTENING ? "Listening. Click Stop when you are done." : m.message;
   $("micmsg").hidden = !line;
   $("micmsg").textContent = line;
@@ -197,8 +197,11 @@ const ctl = new Controller({
 
 for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () => ctl.selectMode(id));
 pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click
-$("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion($("askinput").value); });
+$("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion(); });
 $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
+$("askinput").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); ctl.cancelQuestion(); }
+});
 $("mic").addEventListener("click", () => ctl.toggleMic());
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).

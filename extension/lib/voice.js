@@ -32,6 +32,8 @@ export class VoiceInput {
     this.SR = deps.SpeechRecognition || null;
     this.state = MIC.IDLE;
     this.text = "";          // live text: final results so far plus the current interim guess
+    this.finalText = "";
+    this.interimText = "";
     this.message = "";       // one actionable line, "" when there is nothing to say
     this.kind = "";          // "error" | "info" | ""
     this.needPermission = false;
@@ -48,7 +50,7 @@ export class VoiceInput {
   }
 
   snapshot() {
-    return { state: this.state, text: this.text, message: this.message, kind: this.kind,
+    return { state: this.state, text: this.text, finalText: this.finalText, interimText: this.interimText, message: this.message, kind: this.kind,
              needPermission: this.needPermission, available: this.available };
   }
 
@@ -110,6 +112,8 @@ export class VoiceInput {
     this.deliberateAbort = false;
     this.hold = false;
     this._set({ state: MIC.STARTING, text: "", message: "", kind: "", needPermission: false });
+    this.finalText = "";
+    this.interimText = "";
     if (!this.SR) { this._set({ state: MIC.IDLE, message: MIC_MESSAGES.unavailable, kind: "info" }); return; }
     // Chrome cannot show a permission prompt inside a side panel, so a missing grant must go through the setup tab.
     const p = await this._permission();
@@ -156,7 +160,9 @@ export class VoiceInput {
       const t = String((r[0] && r[0].transcript) || "").trim();
       if (t) (r.isFinal ? finals : interim).push(t);
     }
-    this._set({ text: [...finals, ...interim].join(" ").trim() });
+    this.finalText = finals.join(" ").trim();
+    this.interimText = interim.join(" ").trim();
+    this._set({ text: [this.finalText, this.interimText].filter(Boolean).join(" ") });
   }
 
   _onError(sid, e) {
