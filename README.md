@@ -43,7 +43,7 @@ Codex needs its own sign-in (never copy `~/.codex/auth.json`):
 4. trafilatura 2.2.0
 5. deno 2.9.4 (stable, Homebrew, /opt/homebrew/bin/deno)
 6. Claude Code 2.1.285, model claude-haiku-4-5-20251001
-7. Codex CLI 0.159.2 (ChatGPT.app bundle), model gpt-5.6-luna
+7. Codex CLI 0.159.2 (ChatGPT.app bundle), model gpt-6-luna
 
 ## Tests
 
