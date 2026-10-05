@@ -421,7 +421,8 @@ test("answers are rendered by the safe renderer and questions are plain text in 
   assert.match(js, /qe\.textContent = q;/, "the question goes in as text");
   assert.match(js, /ae\.innerHTML = html/);
   assert.match(js, /addEventListener\("keydown", \(e\) => \{\s*if \(e\.key === "Escape"\)/);
-  assert.match(js, /box\.readOnly = false/);
+  assert.match(js, /box\.readOnly = live/);
+  assert.match(js, /preserveSelection/);
   assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
 });
 
@@ -437,7 +438,7 @@ async function micReady({ permission = "granted", ...opts } = {}) {
 }
 const R = (t, final = false) => ({ t, final });
 
-test("mic: click to listen, words appear live in the box, click again and the question is sent automatically", async () => {
+test("mic: click starts, live words appear, and click again pauses without sending", async () => {
   const { r, speech } = await micReady();
   assert.equal(r.state.last.mic.state, MIC.IDLE);
   await r.c.toggleMic();
@@ -455,11 +456,14 @@ test("mic: click to listen, words appear live in the box, click again and the qu
   assert.equal(r.state.last.mic.state, MIC.STOPPING);
   rec.finish([R("okay what is the deal with the chocolate", true)]);
   await flush();
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+  assert.equal(r.state.last.draft, "okay what is the deal with the chocolate");
+  await r.c.askQuestion();
   assert.equal(asks(r).length, 1);
   assert.equal(asks(r)[0].body.question, "okay what is the deal with the chocolate");
-  assert.equal(r.state.last.mic.state, MIC.IDLE);
   assert.equal(r.state.last.asking.q, "okay what is the deal with the chocolate");
-  assert.equal(r.state.last.draft, "", "the box empties as the question goes out");
+  assert.equal(r.state.last.draft, "");
   await r.tick();
   assert.equal(r.state.last.thread.length, 1);
 });
@@ -472,6 +476,8 @@ test("mic: a spoken follow-up carries the earlier turns", async () => {
   await r.c.toggleMic();
   speech.last.finish([R("and why is that", true)]);
   await flush();
+  assert.equal(asks(r).length, 1, "pausing never sends the spoken follow-up");
+  await r.c.askQuestion();
   assert.deepEqual(asks(r)[1].body.history.map((t) => t.q), ["typed first"]);
 });
 
@@ -502,6 +508,7 @@ test("mic: a recognition error keeps the partial words in the box and does not s
 
 test("mic: permission missing at start offers Enable microphone; the setup button opens the extension page in a tab", async () => {
   const { r, speech, permissions } = await micReady({ permission: "prompt" });
+  await r.c.refreshMic();
   assert.equal(r.state.last.mic.needPermission, true, "offered up front, before any click");
   assert.match(r.state.last.mic.message, /Enable microphone/);
   await r.c.toggleMic();
@@ -543,18 +550,30 @@ test("mic: not-allowed with the permission granted says the computer is blocking
   assert.match(r.state.last.mic.message, /Your computer is blocking the microphone/);
 });
 
-test("mic: words typed in the box stay, and the spoken words are added after them", async () => {
+test("mic: paused edits survive resume and later final results append once", async () => {
   const { r, speech } = await micReady();
   r.c.typed("what about the chocolate");
   await r.c.toggleMic();
-  speech.last.fire("audiostart");
+  const first = speech.last;
+  first.fire("audiostart");
   assert.equal(r.state.last.draft, "what about the chocolate", "starting to listen does not wipe the box");
-  speech.last.result([R("in the second half")]);
+  first.result([R("in the second half")]);
   assert.equal(r.state.last.draft, "what about the chocolate in the second half");
   await r.c.toggleMic();
-  speech.last.finish([R("in the second half", true)]);
+  first.finish([R("in the second half", true)]);
   await flush();
-  assert.equal(asks(r)[0].body.question, "what about the chocolate in the second half");
+  assert.equal(asks(r).length, 0);
+  r.c.typed("what about cocoa");
+  await r.c.toggleMic();
+  const resumed = speech.last;
+  resumed.fire("audiostart");
+  resumed.result([R("the second half")]);
+  assert.equal(r.state.last.draft, "what about cocoa the second half");
+  await r.c.toggleMic();
+  resumed.finish([R("the second half", true)]);
+  assert.equal(r.state.last.draft, "what about cocoa the second half");
+  await r.c.askQuestion();
+  assert.equal(asks(r)[0].body.question, "what about cocoa the second half");
 });
 
 test("mic: Ask stops listening, includes the final result, and sends exactly once", async () => {
@@ -573,21 +592,47 @@ test("mic: Ask stops listening, includes the final result, and sends exactly onc
   assert.equal(asks(r)[0].body.question, "what is the chocolate");
 });
 
-test("mic: edits survive later final and interim results without duplicating the interim", async () => {
+test("mic: Ask during STARTING cancels recognition and sends the existing draft once", async () => {
   const { r, speech } = await micReady();
+  r.c.typed("typed before audio");
+  const starting = r.c.toggleMic();
+  assert.equal(r.state.last.mic.state, MIC.STARTING);
+  await r.c.askQuestion();
+  await starting;
+  assert.equal(asks(r).length, 1);
+  assert.equal(asks(r)[0].body.question, "typed before audio");
+  assert.equal(speech.recs.length, 0, "the pending permission check cannot resurrect a recognizer");
+  await flush();
+  assert.equal(asks(r).length, 1);
+  assert.equal(r.state.last.draft, "");
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+});
+
+test("mic: Ask after the recognizer starts but before audio cancels it and ignores late events", async () => {
+  const { r, speech } = await micReady();
+  r.c.typed("send before audio");
   await r.c.toggleMic();
   const rec = speech.last;
-  rec.fire("audiostart");
-  rec.result([R("what about the chocolate", true), R("in the second")]);
-  r.c.typed("what about cocoa in the second");
-  rec.result([R("what about the chocolate", true), R("in the second half")]);
-  assert.equal(r.state.last.draft, "what about cocoa in the second half");
-  rec.result([R("what about the chocolate in the second half", true)]);
-  assert.equal(r.state.last.draft, "what about cocoa in the second half");
-  await r.c.toggleMic();
-  rec.finish([R("what about the chocolate in the second half", true)]);
+  assert.equal(r.state.last.mic.state, MIC.STARTING);
+  await r.c.askQuestion();
+  assert.ok(rec.calls.includes("abort"));
+  rec.fire("audiostart"); rec.result([R("ghost words", true)]); rec.fire("end");
   await flush();
-  assert.equal(asks(r)[0].body.question, "what about cocoa in the second half");
+  assert.equal(asks(r).length, 1);
+  assert.equal(asks(r)[0].body.question, "send before audio");
+  assert.equal(r.state.last.draft, "");
+  assert.equal(r.state.last.mic.state, MIC.IDLE);
+});
+
+test("mic: the question box is read-only while recording", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  speech.last.fire("audiostart");
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(js, /box\.readOnly = live/);
+  assert.equal(r.state.last.mic.state, MIC.LISTENING);
+  r.c.cancelQuestion();
+  assert.equal(r.state.last.draft, "");
 });
 
 test("Escape cancels listening and typing without sending, while keeping earlier turns", async () => {
@@ -611,6 +656,59 @@ test("Escape cancels listening and typing without sending, while keeping earlier
   assert.equal(r.state.last.draft, "");
   assert.equal(asks(r).length, 1);
   assert.deepEqual(r.state.last.thread, thread);
+});
+
+test("Escape clears the question and mic message in idle, STARTING and STOPPING states", async () => {
+  const idle = await micReady();
+  idle.r.c.typed("discard this");
+  idle.r.c.voice._set({ message: "Stopped after a long pause. Click Ask to send what was heard, or click the mic to add more." });
+  idle.r.c.cancelQuestion();
+  assert.equal(idle.r.state.last.draft, "");
+  assert.equal(idle.r.state.last.mic.message, "");
+
+  const starting = await micReady();
+  const startPromise = starting.r.c.toggleMic();
+  assert.equal(starting.r.state.last.mic.state, MIC.STARTING);
+  starting.r.c.cancelQuestion();
+  await startPromise;
+  assert.equal(starting.speech.recs.length, 0, "Escape cancels before the recognizer is created");
+  assert.equal(starting.r.state.last.mic.state, MIC.IDLE);
+  assert.equal(starting.r.state.last.draft, "");
+  assert.equal(starting.r.state.last.mic.message, "");
+
+  const stopping = await micReady();
+  await stopping.r.c.toggleMic();
+  const rec = stopping.speech.last;
+  rec.fire("audiostart"); rec.result([R("discard during stop")]);
+  stopping.r.c.toggleMic();
+  assert.equal(stopping.r.state.last.mic.state, MIC.STOPPING);
+  stopping.r.c.cancelQuestion();
+  rec.finish([R("discard during stop", true)]);
+  await flush();
+  assert.equal(stopping.r.state.last.draft, "");
+  assert.equal(stopping.r.state.last.mic.message, "");
+  assert.equal(asks(stopping.r).length, 0);
+});
+
+test("resetAsk cancels a pending stop-and-send without sending", async () => {
+  const { r, speech } = await micReady();
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("audiostart"); rec.result([R("pending question")]);
+  r.c.askQuestion();
+  assert.equal(r.state.last.mic.state, MIC.STOPPING);
+  r.c.resetAsk();
+  rec.finish([R("pending question final", true)]);
+  await flush();
+  assert.equal(asks(r).length, 0);
+  assert.equal(r.state.last.draft, "");
+  assert.equal(r.state.last.thread.length, 0);
+});
+
+test("Enter submits through the same Ask form handler", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(js, /\$\("askform"\)\.addEventListener\("submit"/);
+  assert.match(fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8"), /<form id="askform"/);
 });
 
 test("mic: nothing heard leaves the typed words in the box", async () => {
@@ -645,6 +743,7 @@ test("mic: a pause that Chrome ends keeps the words in the box unsent; Ask sends
   await r.c.toggleMic();
   speech.last.finish([R("deal with the chocolate", true)]);
   await flush();
+  await r.c.askQuestion();
   assert.equal(asks(r)[0].body.question, "so what is the deal with the chocolate");
 });
 
@@ -701,6 +800,7 @@ test("mic: clear history while listening stops the recording too", async () => {
 test("mic: no SpeechRecognition in the browser leaves the button unavailable with one line", async () => {
   const r = rig({ slot: slot(), mode: "claude-dip" });
   await r.c.init(1);
+  await r.c.refreshMic();
   assert.equal(r.state.last.mic.available, false);
   assert.match(r.state.last.mic.message, /not available in this browser/);
 });

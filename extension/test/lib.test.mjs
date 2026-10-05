@@ -190,12 +190,13 @@ test("the question controls are docked below the scrolling page, with every mess
   assert.ok(!/#mic\[data-state="(listening|starting|stopping)"\][^{]*\{[^}]*transform/.test(css), "and does not move while recording");
 });
 
-test("mic button accessibility: its name is its visible label, no changing aria-label, and the recording colour has AA contrast in both themes", () => {
+test("mic button accessibility: its label says Start or Pause recording and the recording colour has AA contrast", () => {
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  assert.ok(!/<button id="mic"[^>]*aria-(label|pressed)/.test(h));
-  assert.ok(!/mic\.setAttribute\("aria-/.test(js), "the label changes with the state, so no aria-pressed or aria-label rides along");
+  assert.match(h, /id="mic"[^>]*aria-label="Start recording"/);
+  assert.match(js, /const micLabel = m\.state === MIC\.IDLE \? "Start recording" : "Pause recording"/);
+  assert.match(js, /mic\.setAttribute\("aria-label", micLabel\)/);
   assert.ok(!/#mic\[aria-pressed/.test(css));
   const lum = (hex) => {
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));

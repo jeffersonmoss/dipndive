@@ -2,7 +2,7 @@
 // DOM-free (everything is injected) so it can be tested with a mocked SpeechRecognition.
 //
 // States: idle -> starting -> listening -> stopping -> idle. Click once to start, click again to stop; the recognized
-// text goes to onFinal(text, {send}) and the controller sends it. Errors become one actionable line (message).
+// text stays in the question box until the user explicitly asks. Errors become one actionable line (message).
 import { SYSTEM_BLOCK_HELP } from "./micerrors.js";
 
 export const MIC = Object.freeze({ IDLE: "idle", STARTING: "starting", LISTENING: "listening", STOPPING: "stopping" });
@@ -26,7 +26,7 @@ export const MIC_MESSAGES = Object.freeze({
 
 export class VoiceInput {
   // deps: SpeechRecognition (constructor or null), permissions ({query} or null), onChange(snapshot),
-  //       onFinal(text, {send}), setTimer(fn, ms), clearTimer(id)
+  //       setTimer(fn, ms), clearTimer(id)
   constructor(deps) {
     this.d = { lang: "en-US", startTimeoutMs: 10000, stopTimeoutMs: 3000, ...deps };
     this.SR = deps.SpeechRecognition || null;
@@ -44,8 +44,7 @@ export class VoiceInput {
     this.status = null;      // PermissionStatus, kept and watched for changes made in the Enable microphone tab
     this.permAtStart = null; // what the permission said when this recording began
     this.deliberateAbort = false;
-    this.hold = false;       // deliver the words but do not send them (the panel was hidden, or Chrome ended a long pause)
-    this.heldMessage = "";   // what to say when words were delivered but held back
+    this.pauseMessage = "";
     if (!this.SR) { this.message = MIC_MESSAGES.unavailable; this.kind = "info"; }
   }
 
@@ -110,7 +109,7 @@ export class VoiceInput {
   async start() {
     const sid = ++this.sid;
     this.deliberateAbort = false;
-    this.hold = false;
+    this.pauseMessage = "";
     this._set({ state: MIC.STARTING, text: "", message: "", kind: "", needPermission: false });
     this.finalText = "";
     this.interimText = "";
@@ -194,7 +193,8 @@ export class VoiceInput {
   }
 
   stop() {
-    if (this.state !== MIC.LISTENING) return;
+    if (this.state !== MIC.LISTENING && this.state !== MIC.STARTING) return;
+    if (this.state === MIC.STARTING) return this.cancel();
     const sid = this.sid;
     this._set({ state: MIC.STOPPING });
     try { this.rec.stop(); } catch { this._finish(sid); return; }
@@ -203,19 +203,17 @@ export class VoiceInput {
   }
 
   cancel() {
-    if (this.state === MIC.IDLE) return;
     this.sid++;   // anything the old recognizer still says is ignored
     this._abort();
     this._detach();
     this.deliberateAbort = false;  // its events are ignored by the session token now; the next recording starts clean
-    this.hold = false;
     this._set({ state: MIC.IDLE, text: "", message: "", kind: "" });
   }
 
   // The panel was hidden while listening (Chrome keeps a hidden side panel alive, and a recording would go on with no
   // Stop button in sight): stop now, keep the words in the box, send nothing.
   pause() {
-    if (this.state === MIC.LISTENING) { this.hold = true; this.heldMessage = MIC_MESSAGES.hidden; this.stop(); }
+    if (this.state === MIC.LISTENING) { this.pauseMessage = MIC_MESSAGES.hidden; this.stop(); }
     else if (this.state === MIC.STARTING) this.cancel();
   }
 
@@ -230,31 +228,23 @@ export class VoiceInput {
     this.rec = null;
   }
 
-  // Recognizer ended: after stop() (deliver and send), or on its own. Chrome ends a session by itself after about 15
-  // seconds of silence, and the person never clicked Stop, so those words are kept in the box and not sent: a long
-  // pause in the middle of a question must not send half of it.
+  // Recognizer ended after a pause, an explicit stop, or Chrome's own silence timeout. Text remains in the snapshot.
   _finish(sid) {
     if (sid !== this.sid || this.state === MIC.IDLE) return;
-    if (!this.text) { this._end(sid, { message: MIC_MESSAGES.nothing, kind: "error" }); return; }
-    const byChrome = this.state === MIC.LISTENING && !this.hold;
-    if (byChrome) { this.hold = true; this.heldMessage = MIC_MESSAGES.paused; }
-    this._end(sid, { message: "", kind: "" });
+    const byChrome = this.state === MIC.LISTENING;
+    if (!this.text && !this.err) this.pauseMessage = MIC_MESSAGES.nothing;
+    else if (byChrome && !this.err) this.pauseMessage = MIC_MESSAGES.paused;
+    this._end(sid, { message: this.pauseMessage || (this.err ? this.message : ""), kind: this.err ? this.kind : (this.pauseMessage ? "info" : "") });
   }
 
   _end(sid, { message, kind, needPermission = false }) {
     if (sid !== this.sid) return;
-    const text = this.text.trim();
     const failed = this.err !== null && this.err !== undefined;
-    const hold = this.hold;
-    const heldMessage = this.heldMessage;
+    const text = this.text;
     this._detach();
     this.sid++;  // late events from this recognizer are ignored from here on
     this.err = null;
     this.deliberateAbort = false;
-    this.hold = false;
-    const quiet = text && !failed && !hold;
-    this._set({ state: MIC.IDLE, text: "", message: quiet ? "" : (text && !failed ? heldMessage : message),
-                kind: quiet ? "" : (text && !failed ? "info" : kind), needPermission });
-    if (text) this.d.onFinal(text, { send: !failed && !hold });
+    this._set({ state: MIC.IDLE, message: message || "", kind: kind || "", needPermission });
   }
 }

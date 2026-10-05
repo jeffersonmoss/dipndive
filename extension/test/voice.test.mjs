@@ -13,7 +13,6 @@ function voice({ permission = "granted", noSpeech = false, noPermissions = false
     SpeechRecognition: noSpeech ? null : speech.SR,
     permissions: noPermissions ? null : permissions,
     onChange: (m) => log.changes.push(m),
-    onFinal: (text, o) => log.finals.push([text, o.send]),
     setTimer: (f, ms) => { timers.push({ f, ms }); return timers.length; },
     clearTimer: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
   });
@@ -50,7 +49,7 @@ test("interim text shows live; finals and the current guess are joined", async (
   assert.equal(x.log.finals.length, 0, "nothing is sent while still listening");
 });
 
-test("second click stops; the final text is delivered once, to be sent, and the mic returns to idle", async () => {
+test("second click pauses without sending and keeps final text in the idle snapshot", async () => {
   const x = voice();
   await x.v.toggle();
   const rec = x.speech.last;
@@ -60,15 +59,15 @@ test("second click stops; the final text is delivered once, to be sent, and the 
   assert.equal(x.v.state, MIC.STOPPING);
   assert.deepEqual(rec.calls, ["start", "stop"]);
   rec.finish([R("what about the chocolate", true)]);
-  assert.deepEqual(x.log.finals, [["what about the chocolate", true]]);
+  assert.equal(x.log.finals.length, 0);
   assert.equal(x.v.state, MIC.IDLE);
-  assert.equal(x.v.text, "");
+  assert.equal(x.v.text, "what about the chocolate");
   assert.equal(x.v.message, "");
   rec.fire("end");  // a duplicate end from Chrome changes nothing
-  assert.equal(x.log.finals.length, 1);
+  assert.equal(x.log.finals.length, 0);
 });
 
-test("a guess that never became final is still delivered when recognition ends", async () => {
+test("a guess that never became final stays in the box when recognition ends", async () => {
   const x = voice();
   await x.v.toggle();
   const rec = x.speech.last;
@@ -76,7 +75,8 @@ test("a guess that never became final is still delivered when recognition ends",
   rec.result([R("one two", true), R("three")]);
   await x.v.toggle();
   rec.fire("end");
-  assert.deepEqual(x.log.finals, [["one two three", true]]);
+  assert.equal(x.v.text, "one two three");
+  assert.equal(x.log.finals.length, 0);
 });
 
 test("clicks while stopping are ignored", async () => {
@@ -98,7 +98,7 @@ test("silence: no text and no error gives one line and nothing is sent", async (
   x.speech.last.fire("end");
   assert.equal(x.v.state, MIC.IDLE);
   assert.equal(x.v.message, MIC_MESSAGES.nothing);
-  assert.equal(x.v.kind, "error");
+  assert.equal(x.v.kind, "info");
   assert.equal(x.log.finals.length, 0);
 });
 
@@ -109,7 +109,8 @@ test("Chrome ending the session by itself (a long pause) keeps what was heard bu
   rec.fire("audiostart");
   rec.result([R("took a long pause", true)]);
   rec.fire("end");  // the person never clicked Stop
-  assert.deepEqual(x.log.finals, [["took a long pause", false]]);
+  assert.equal(x.v.text, "took a long pause");
+  assert.equal(x.log.finals.length, 0);
   assert.equal(x.v.state, MIC.IDLE);
   assert.equal(x.v.message, MIC_MESSAGES.paused);
   assert.equal(x.v.kind, "info");
@@ -121,7 +122,8 @@ test("Chrome ending the session by itself (a long pause) keeps what was heard bu
   x.speech.last.result([R("more", true)]);
   await x.v.toggle();
   x.speech.last.fire("end");
-  assert.deepEqual(x.log.finals.at(-1), ["more", true], "a recording stopped by a click is sent");
+  assert.equal(x.v.text, "more");
+  assert.equal(x.log.finals.length, 0);
 });
 
 test("errors become one actionable line each; permission errors ask for Enable microphone", async () => {
@@ -153,7 +155,8 @@ test("an error part way keeps the partial text for the box but does not send it"
   rec.fire("audiostart");
   rec.result([R("half a question")]);
   rec.fire("error", { error: "network" });
-  assert.deepEqual(x.log.finals, [["half a question", false]]);
+  assert.equal(x.v.text, "half a question");
+  assert.equal(x.log.finals.length, 0);
   assert.match(x.v.message, /Google's speech service/);
 });
 
@@ -281,7 +284,8 @@ test("cancelling must not make a later Chrome 'aborted' error look deliberate", 
   rec.result([R("what is the deal with")]);
   rec.fire("error", { error: "aborted" });  // another page or extension took the recognizer
   rec.fire("end");
-  assert.deepEqual(x.log.finals, [["what is the deal with", false]], "kept in the box, not sent");
+  assert.equal(x.v.text, "what is the deal with", "kept in the box, not sent");
+  assert.equal(x.log.finals.length, 0);
   assert.match(x.v.message, /stopped \(aborted\)/);
 });
 
@@ -308,7 +312,8 @@ test("pause (panel hidden) stops listening, keeps the words in the box and sends
   x.v.pause();
   assert.deepEqual(rec.calls, ["start", "stop"]);
   rec.finish([R("half of a question", true)]);
-  assert.deepEqual(x.log.finals, [["half of a question", false]]);
+  assert.equal(x.v.text, "half of a question");
+  assert.equal(x.log.finals.length, 0);
   assert.equal(x.v.state, MIC.IDLE);
   assert.equal(x.v.message, MIC_MESSAGES.hidden);
   // hidden before audio began: cancelled quietly
@@ -339,7 +344,8 @@ test("if end never arrives after stop, the text is taken after the stop timeout"
   await x.v.toggle();
   assert.equal(x.log.finals.length, 0);
   await x.fire(3000);
-  assert.deepEqual(x.log.finals, [["slow to finish", true]]);
+  assert.equal(x.v.text, "slow to finish");
+  assert.equal(x.log.finals.length, 0);
   assert.ok(rec.calls.includes("abort"));
   assert.equal(x.v.state, MIC.IDLE);
 });

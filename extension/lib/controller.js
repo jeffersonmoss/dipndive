@@ -54,12 +54,8 @@ export class Controller {
     this.pinSeq = 0;       // bumped on every pin click; an older pin still waiting for its permission is dropped
     this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
-    this.micPrefix = "";   // editable text, including finalized words, before the current interim guess
-    this.micFinal = "";
-    this.micInterim = "";
-    this.micSuppressedInterim = "";
-    this.askAfterMicStop = false;
-    this.skipVoiceSend = false;
+    this.micBaseText = "";
+    this.pendingMicAsk = false;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
       result: null, error: null, status: "", busy: false, pinError: null,
@@ -79,7 +75,6 @@ export class Controller {
       setTimer: deps.setVoiceTimer || deps.setTimer,
       clearTimer: deps.clearVoiceTimer || deps.clearTimer,
       onChange: (m) => this.onMic(m),
-      onFinal: (text, o) => this.onVoiceText(text, o),
     });
     this.s.mic = this.voice.snapshot();
   }
@@ -609,61 +604,39 @@ export class Controller {
   resetAsk() {
     this.askGen++;
     this.stopAskTimer();
-    this.voice.cancel();
+    this.pendingMicAsk = false;
+    this.micBaseText = "";
+    if (this.voice.state !== MIC.IDLE || (this.voice.available && !this.voice.needPermission)) this.voice.cancel();
     this.emit({ thread: [], asking: null, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
   }
 
   // The user typed in the box (no re-render: the field already shows it).
   typed(text) {
     this.s.draft = String(text ?? "");
-    if (this.s.mic.state === MIC.LISTENING || this.s.mic.state === MIC.STOPPING) {
-      if (this.micInterim && this.s.draft.endsWith(this.micInterim)) {
-        this.micPrefix = this.s.draft.slice(0, -this.micInterim.length).trimEnd();
-      } else {
-        this.micPrefix = this.s.draft;
-        this.micSuppressedInterim = this.micInterim;
-      }
-      this.micFinal = this.voice.finalText;
-    }
   }
 
-  // Chrome reports the whole transcript on every result. Keep only the new finalized suffix.
-  composeVoice(finalText, interimText) {
-    const finals = String(finalText || "").trim();
-    const old = this.micFinal;
-    const delta = finals.startsWith(old) ? finals.slice(old.length).trim() : finals;
-    if (delta) this.micPrefix = [this.micPrefix, delta].filter(Boolean).join(" ");
-    this.micFinal = finals;
-    const incomingInterim = String(interimText || "").trim();
-    if (this.micSuppressedInterim && incomingInterim !== this.micSuppressedInterim) this.micSuppressedInterim = "";
-    this.micInterim = incomingInterim === this.micSuppressedInterim ? "" : incomingInterim;
-    return [this.micPrefix, this.micInterim].filter(Boolean).join(" ");
+  appendVoiceText(base, spoken) {
+    const left = String(base || "").trimEnd();
+    const right = String(spoken || "").trim();
+    return [left, right].filter(Boolean).join(" ");
   }
 
   onMic(m) {
-    const live = m.state === MIC.LISTENING || m.state === MIC.STOPPING;
+    const live = m.state !== MIC.IDLE;
     const patch = { mic: m };
     if (live) {
-      const shown = this.composeVoice(m.finalText, m.interimText);
+      const shown = this.appendVoiceText(this.micBaseText, m.text);
       if (shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }
     }
-    this.emit(patch);
-    if (m.state === MIC.IDLE && this.askAfterMicStop) {
-      this.askAfterMicStop = false;
-      this.skipVoiceSend = true;
-      queueMicrotask(() => {
-        this.skipVoiceSend = false;
-        this.askQuestion();
-      });
+    const sendAfterStop = m.state === MIC.IDLE && this.pendingMicAsk;
+    if (sendAfterStop) {
+      const shown = this.appendVoiceText(this.micBaseText, m.text);
+      if (shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }
+      this.pendingMicAsk = false;
+      this.micBaseText = "";
     }
-  }
-
-  // Recognized text lands in the box; it is sent automatically unless recognition failed part way or was held back.
-  onVoiceText(text, { send }) {
-    const full = this.s.draft;
-    this.emit({ draft: full, draftSeq: this.s.draftSeq + 1 });
-    if (this.skipVoiceSend) { this.skipVoiceSend = false; return; }
-    return send ? this.askQuestion(full) : undefined;
+    this.emit(patch);
+    if (sendAfterStop) this.askQuestion(this.s.draft);
   }
 
   async toggleMic() {
@@ -673,23 +646,14 @@ export class Controller {
       return;
     }
     this.emit({ askError: null });
-    if (this.s.mic.state === MIC.IDLE) {
-      this.micPrefix = cleanQuestion(this.s.draft);
-      this.micFinal = "";
-      this.micInterim = "";
-      this.micSuppressedInterim = "";
-    }
+    if (this.s.mic.state === MIC.IDLE) this.micBaseText = this.s.draft;
     await this.voice.toggle();
   }
 
   cancelQuestion() {
-    this.askAfterMicStop = false;
-    this.skipVoiceSend = false;
+    this.pendingMicAsk = false;
     this.voice.cancel();
-    this.micPrefix = "";
-    this.micFinal = "";
-    this.micInterim = "";
-    this.micSuppressedInterim = "";
+    this.micBaseText = "";
     this.emit({ draft: "", draftSeq: this.s.draftSeq + 1, askError: null });
   }
 
@@ -741,11 +705,12 @@ export class Controller {
 
   // Ask about the current source. `text` defaults to the box. Returns true once the question was sent.
   async askQuestion(text) {
-    if (text === undefined && (this.s.mic.state === MIC.LISTENING || this.s.mic.state === MIC.STOPPING)) {
-      if (!this.askAfterMicStop) {
-        this.askAfterMicStop = true;
-        this.voice.stop();
-      }
+    if (this.s.mic.state === MIC.STARTING) {
+      this.voice.cancel(); // no audio has started; invalidate every future event before sending the current draft
+    } else if (this.s.mic.state === MIC.LISTENING || this.s.mic.state === MIC.STOPPING) {
+      if (this.pendingMicAsk) return true;
+      this.pendingMicAsk = true;
+      if (this.s.mic.state === MIC.LISTENING) this.voice.stop();
       return true;
     }
     const q = cleanQuestion(text === undefined ? this.s.draft : text);
@@ -762,6 +727,7 @@ export class Controller {
     // sent while a Dip or Dive is still running.
     const summary = capSummary(this.s.result);
     this.emit({ asking: { q, label: "Thinking..." }, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
+    this.micBaseText = "";
     const mode = this.s.mode;
     if (!String(mode).startsWith("claude")) {
       await this.checkHealth();  // Codex may have signed out since the panel opened

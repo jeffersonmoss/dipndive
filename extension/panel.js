@@ -99,7 +99,6 @@ function renderSave(s) {
 
 // ---------- question box ----------
 // Short labels so the button keeps its size; the visible text is also its accessible name.
-const MIC_LABEL = { idle: "Speak", starting: "Wait...", listening: "Stop", stopping: "Send..." };
 let shownDraftSeq = -1;
 let shownTurns = 0;       // answered turns already in the DOM
 let scrolledFor = "";     // what the last scroll was for, so polling does not keep scrolling
@@ -159,14 +158,26 @@ function renderAsk(s) {
   const mic = $("mic");
   mic.dataset.state = m.state;
   mic.disabled = !m.available || !!s.asking || m.state === MIC.STOPPING;
-  $("miclabel").textContent = MIC_LABEL[m.state] || "Speak";
+  const micLabel = m.state === MIC.IDLE ? "Start recording" : "Pause recording";
+  mic.setAttribute("aria-label", micLabel);
+  mic.title = micLabel;
+  $("miclabel").textContent = micLabel;
   const box = $("askinput");
-  if (s.draftSeq !== shownDraftSeq) { shownDraftSeq = s.draftSeq; box.value = s.draft; }
-  box.readOnly = false;
+  box.readOnly = live;
+  if (s.draftSeq !== shownDraftSeq) {
+    shownDraftSeq = s.draftSeq;
+    if (box.value !== s.draft) {
+      const preserveSelection = document.activeElement === box && !box.readOnly;
+      const start = preserveSelection ? box.selectionStart : null;
+      const end = preserveSelection ? box.selectionEnd : null;
+      box.value = s.draft;
+      if (preserveSelection) box.setSelectionRange(Math.min(start, box.value.length), Math.min(end, box.value.length));
+    }
+  }
   if (live && document.activeElement !== box) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
-  box.placeholder = m.state === MIC.LISTENING ? "Listening..." : "Ask a question";
+  box.placeholder = live ? "Listening..." : "Ask a question";
   $("askgo").disabled = !!s.asking;
-  const line = m.state === MIC.LISTENING ? "Listening. Click Stop when you are done." : m.message;
+  const line = m.state === MIC.LISTENING ? "Listening. Click Pause recording when you are done." : m.message;
   $("micmsg").hidden = !line;
   $("micmsg").textContent = line;
   $("micmsg").classList.toggle("err", m.kind === "error" && m.state === MIC.IDLE);
