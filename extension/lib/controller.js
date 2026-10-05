@@ -49,12 +49,13 @@ export class Controller {
     this.clearGen = null;  // highest companion clear generation seen
     this.timer = null;
     this.askTimer = null;
+    this.pinSeq = 0;       // bumped on every pin click; an older pin still waiting for its permission is dropped
     this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
     this.micPrefix = "";   // what was typed in the box when the microphone started; spoken words are added after it
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
-      result: null, error: null, status: "", busy: false,
+      result: null, error: null, status: "", busy: false, pinError: null,
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
       // history log, null when it has none (no summary, a log failure); savingSaved while a change is on its way
@@ -193,26 +194,32 @@ export class Controller {
   // The pin button: summarize the page in the active tab of this panel's window with the selected mode, as if the person had
   // right-clicked the page and chosen Dip'n'Dive. It is an action, not a mode: it changes no setting and no pressed button.
   // Reading a tab's address from a side panel needs the optional "tabs" permission (a side-panel click grants no activeTab).
-  // `tabs.requestAccess()` is called first, before any other await, because Chrome only shows its prompt for a call made
-  // inside the click; when the permission is already held it answers true at once without asking. Returns true once a
-  // summary was started.
+  // `tabs.requestAccess()` is the very first await, because Chrome only shows its prompt for a call made inside the click;
+  // when the permission is already held it answers true at once without asking.
+  // The prompt can stay open for a long time, so the click carries an operation token: a newer pin, any newer submission or
+  // mode-driven rerun (selGen), and any change of the clear generation make it stale, and a stale pin is dropped after every
+  // await without touching the panel. Its messages go to their own line (pinError) and never touch busy or status, which
+  // belong to a job that may be running. Returns true once a summary was started.
   async summarizePage() {
-    if (!this.s.configured) { this.emit({ error: "Set the companion URL and token in the extension options." }); return false; }
+    const op = ++this.pinSeq, gen = this.selGen, cg = this.clearGen;
+    const stale = () => op !== this.pinSeq || gen !== this.selGen || (typeof cg === "number" && this.clearGen !== cg);
+    const say = (pinError) => { this.emit({ pinError }); return false; };
+    if (!this.s.configured) return say("Set the companion URL and token in the extension options.");
     const tabs = this.d.tabs;
-    if (!tabs) { this.emit({ error: "This button needs the Chrome extension." }); return false; }
+    if (!tabs) return say("This button needs the Chrome extension.");
     let granted = false;
-    try { granted = await tabs.requestAccess(); } catch { /* treated as not granted */ }
-    if (!granted) {
-      this.emit({ error: "To summarize the open page, Dip'n'Dive needs to read its address. Click the pin again and choose Allow, or paste a link above.", busy: false, status: "" });
-      return false;
-    }
+    const asked = tabs.requestAccess();  // synchronous: the request is made inside the click
+    this.emit({ pinError: null });
+    try { granted = await asked; } catch { /* treated as not granted */ }
+    if (stale()) return false;
+    if (!granted) return say("To summarize the open page, Dip'n'Dive needs to read its address. Click the pin again and choose Allow, or paste a link above.");
     let tab = null;
     try { tab = await tabs.activeTab(this.windowId); } catch { /* no tab */ }
-    if (!tab) { this.emit({ error: "No page is open in this window." }); return false; }
+    if (stale()) return false;
+    if (!tab) return say("No page is open in this window.");
     const url = pickUrl({ pageUrl: tab.url });  // the right-click's own check: only http and https pages
-    if (!url) { this.emit({ error: "This page cannot be summarized. Open a web page (an http or https address) and try again." }); return false; }
-    this.emit({ error: null });
-    await this.submitUrl(url);
+    if (!url) return say("This page cannot be summarized. Open a web page (an http or https address) and try again.");
+    await this.submitUrl(url);  // writes the slot and submits; resetView clears pinError
     return true;
   }
 
@@ -242,10 +249,11 @@ export class Controller {
   async selectMode(id) {
     id = normalizeMode(id);
     if (this.s.codexOk === false && id.startsWith("codex")) return;
-    if (!this.slot) { this.emit({ status: "Right-click a link or page first." }); return; }
     const same = id === this.s.mode;
     this.emit({ mode: id });
     await this.d.storage.set({ mode: id }); // the background worker relabels the menu on this change
+    // With no source yet the choice is only kept (the pressed look moves, a right-click or the pin uses it); nothing is submitted.
+    if (!this.slot) return;
     // Force only when this panel's own pressed button is clicked again and a job for it is on screen.
     await this.submit(id, { requestId: this.d.uuid(), force: same && !!this.slot.jobId });
   }
@@ -257,7 +265,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null,
+    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, pinError: null,
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 

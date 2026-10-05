@@ -62,8 +62,8 @@ test("the permission is asked first, before the tab is read, and on every click 
   assert.deepEqual(r.log.order, ["ask"], "refused: the tab was never read");
   assert.deepEqual(posts(r), []);
   assert.equal(slotKey(1) in r.store, false, "no slot written");
-  assert.match(r.state.last.error, /needs to read its address/);
-  assert.match(r.state.last.error, /choose Allow/);
+  assert.match(r.state.last.pinError, /needs to read its address/);
+  assert.match(r.state.last.pinError, /choose Allow/);
   assert.equal(r.state.last.busy, false);
 });
 
@@ -75,7 +75,7 @@ test("a refusal is not remembered: the next click asks again and, once allowed, 
   allow = true;
   assert.equal(await r.c.summarizePage(), true);
   assert.equal(r.log.tabAsks, 2);
-  assert.equal(r.state.last.error, null, "the message is cleared by the next try");
+  assert.equal(r.state.last.pinError, null, "the message is cleared by the next try");
   assert.equal(posts(r).length, 1);
 });
 
@@ -84,7 +84,7 @@ test("a permission request that throws counts as refused", async () => {
   await r.c.init(1);
   assert.equal(await r.c.summarizePage(), false);
   assert.deepEqual(posts(r), []);
-  assert.match(r.state.last.error, /needs to read its address/);
+  assert.match(r.state.last.pinError, /needs to read its address/);
 });
 
 test("a page that is not http or https gets one short message and nothing is sent or changed", async () => {
@@ -94,7 +94,7 @@ test("a page that is not http or https gets one short message and nothing is sen
     const before = { ...r.store[slotKey(1)] };
     const n = r.log.fetches.length;
     assert.equal(await r.c.summarizePage(), false, String(url));
-    assert.equal(r.state.last.error, "This page cannot be summarized. Open a web page (an http or https address) and try again.", String(url));
+    assert.equal(r.state.last.pinError, "This page cannot be summarized. Open a web page (an http or https address) and try again.", String(url));
     assert.equal(r.log.fetches.length, n, `no request for ${url}`);
     assert.deepEqual(r.store[slotKey(1)], before, `slot untouched for ${url}`);
     assert.equal(r.state.last.result, "Summary for claude-dip", "the summary on screen stays");
@@ -105,7 +105,7 @@ test("no tab in the window gets its own message", async () => {
   const r = rig({ mode: "claude-dip", tab: null });
   await r.c.init(1);
   assert.equal(await r.c.summarizePage(), false);
-  assert.equal(r.state.last.error, "No page is open in this window.");
+  assert.equal(r.state.last.pinError, "No page is open in this window.");
   assert.deepEqual(posts(r), []);
 });
 
@@ -144,7 +144,7 @@ test("not set up: the same message as the URL field, and the permission is not e
   const r = rig({ cfg: {}, tab: { url: "https://v.test/x" } });
   await r.c.init(1);
   assert.equal(await r.c.summarizePage(), false);
-  assert.match(r.state.last.error, /Set the companion URL and token/);
+  assert.match(r.state.last.pinError, /Set the companion URL and token/);
   assert.equal(r.log.tabAsks, 0);
 });
 
@@ -165,7 +165,7 @@ test("wiring: the panel asks for the optional tabs permission inside the click a
   const c = read("lib/controller.js");
   const body = c.slice(c.indexOf("async summarizePage()"), c.indexOf("onStorageChange(changes, area)"));
   assert.ok(body.indexOf("tabs.requestAccess()") < body.indexOf("tabs.activeTab("), "permission first");
-  const beforeRequest = body.slice(0, body.indexOf("await tabs.requestAccess()"));
+  const beforeRequest = body.slice(0, body.indexOf("tabs.requestAccess()"));
   assert.ok(!/\bawait\b/.test(beforeRequest), "nothing is awaited before the permission request");
 });
 
@@ -175,4 +175,160 @@ test("manifest: tabs is optional only (asking later does not disable installed c
   assert.ok(!(m.permissions || []).includes("tabs"));
   assert.equal(m.host_permissions, undefined);
   assert.ok(!(m.optional_host_permissions || []).some((h) => /youtube|\*:\/\/\*|<all_urls>|https:\/\/\*\/\*/.test(h)));
+});
+
+// ---- review fixes: a pending pin, a fresh panel's mode, and a pin message next to a running job ----
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+const nextTick = () => new Promise((res) => setTimeout(res, 0));
+
+test("a pin still waiting for its permission does not override a newer typed link", async () => {
+  const d = deferred();
+  const r = rig({ mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
+  await r.c.init(1);
+  const pin = r.c.summarizePage();
+  assert.deepEqual(r.log.order, ["ask"], "the permission request is still the first thing");
+  assert.equal(await r.c.submitTyped("https://typed.test/newer"), true);
+  d.resolve(true);
+  assert.equal(await pin, false, "the old pin is dropped");
+  assert.deepEqual(posts(r).map((p) => p.body.url), ["https://typed.test/newer"]);
+  assert.equal(r.state.last.source.url, "https://typed.test/newer");
+  assert.equal(r.store[slotKey(1)].url, "https://typed.test/newer");
+  assert.deepEqual(r.log.order, ["ask"], "the tab was never read for the stale pin");
+});
+
+test("a pin still waiting does not override a newer mode button press (a mode-driven rerun)", async () => {
+  const d = deferred();
+  const r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
+  await r.c.init(1);
+  const pin = r.c.summarizePage();
+  await r.c.selectMode("claude-dive");
+  d.resolve(true);
+  assert.equal(await pin, false);
+  assert.deepEqual(posts(r).map((p) => [p.body.url, p.body.mode]), [["https://v.test/watch", "claude-dip"], ["https://v.test/watch", "claude-dive"]]);
+  assert.equal(r.state.last.source.url, "https://v.test/watch");
+});
+
+test("a pin still waiting does not survive Clear history (another window's, this panel's own, or a stale refusal)", async () => {
+  // another window cleared: the storage event the panel hears
+  let d = deferred();
+  let r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
+  await r.c.init(1); await r.tick();
+  const n = posts(r).length;
+  let pin = r.c.summarizePage();
+  r.c.onStorageChange({ clearGen: { newValue: r.c.clearGen + 1 } }, "local");
+  d.resolve(true);
+  assert.equal(await pin, false);
+  assert.equal(posts(r).length, n, "nothing was recreated after the clear");
+  assert.equal(r.state.last.result, null);
+  // this panel's own Clear history
+  d = deferred();
+  r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
+  await r.c.init(1); await r.tick();
+  const m = posts(r).length;
+  pin = r.c.summarizePage();
+  await r.c.clearHistory();
+  d.resolve(true);
+  assert.equal(await pin, false);
+  assert.equal(posts(r).length, m);
+  // the clear generation moving on without an event reaching the panel (heard from a companion answer)
+  d = deferred();
+  r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
+  await r.c.init(1); await r.tick();
+  const k = posts(r).length;
+  pin = r.c.summarizePage();
+  r.c.clearGen = 7;
+  d.resolve(true);
+  assert.equal(await pin, false);
+  assert.equal(posts(r).length, k);
+});
+
+test("two pins in a row: only the newest one goes on, and a refusal of the older one says nothing", async () => {
+  const first = deferred(), second = deferred();
+  const queue = [first, second];
+  const r = rig({ mode: "claude-dip", tab: { url: "https://v.test/p" }, tabsGrant: () => queue.shift().promise });
+  await r.c.init(1);
+  const a = r.c.summarizePage();
+  const b = r.c.summarizePage();
+  first.resolve(false);   // the older prompt is refused
+  assert.equal(await a, false);
+  assert.equal(r.state.last.pinError, null, "a dropped pin shows no message");
+  second.resolve(true);
+  assert.equal(await b, true);
+  assert.equal(posts(r).length, 1);
+});
+
+test("a polling job does not make a pin stale: the pin that waited during a running job still goes on", async () => {
+  const d = deferred();
+  const r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/other" }, tabsGrant: () => d.promise });
+  await r.c.init(1);
+  const pin = r.c.summarizePage();
+  await r.tick();       // the running job's poll goes on meanwhile
+  d.resolve(true);
+  assert.equal(await pin, true);
+  assert.equal(posts(r).at(-1).body.url, "https://v.test/other");
+});
+
+test("choosing a mode on a fresh panel with no source is kept, moves the pressed mode, sends nothing, and the pin then uses it", async () => {
+  const r = rig({ tab: { url: "https://v.test/fresh" } });
+  await r.c.init(1);
+  assert.equal(r.state.last.mode, "codex-dip");
+  await r.c.selectMode("claude-dive");
+  assert.equal(r.state.last.mode, "claude-dive", "the pressed look moves");
+  assert.equal(r.store.mode, "claude-dive", "and the choice is stored, so a right-click uses it too");
+  assert.deepEqual(posts(r), [], "no source, nothing submitted");
+  assert.equal(r.state.last.busy, false);
+  await r.c.summarizePage();
+  assert.equal(posts(r).length, 1);
+  assert.equal(posts(r)[0].body.mode, "claude-dive");
+  assert.equal(posts(r)[0].body.url, "https://v.test/fresh");
+  // a disabled Codex button is still refused when Codex is unavailable
+  const off = rig({ health: { codex_ready: false, codex_logged_in: false } });
+  await off.c.init(1);
+  await off.c.selectMode("codex-dive");
+  assert.equal(off.store.mode, undefined);
+});
+
+test("a refused permission or a pin error leaves a running job's busy flag and status alone, on the pin's own line", async () => {
+  for (const [name, opts, line] of [
+    ["denied", { tabsGrant: false }, /needs to read its address/],
+    ["browser page", { tab: { url: "chrome://newtab/" } }, /cannot be summarized/],
+    ["no tab", { tab: null }, /No page is open/],
+  ]) {
+    const r = rig({ slot: slot(), mode: "claude-dip", ...opts });
+    await r.c.init(1);                          // the job is running: busy, a status line
+    const before = { busy: r.state.last.busy, status: r.state.last.status, error: r.state.last.error, jobId: r.state.last.jobId };
+    assert.equal(before.busy, true, name);
+    assert.ok(before.status, name);
+    assert.equal(await r.c.summarizePage(), false, name);
+    assert.match(r.state.last.pinError, line, name);
+    assert.equal(r.state.last.busy, before.busy, `${name}: still busy`);
+    assert.equal(r.state.last.status, before.status, `${name}: status untouched`);
+    assert.equal(r.state.last.error, before.error, `${name}: the job's own error line untouched`);
+    assert.equal(r.state.last.jobId, before.jobId);
+    await r.tick();                             // the job goes on and finishes
+    assert.equal(r.state.last.result, "Summary for claude-dip", name);
+    assert.equal(r.state.last.busy, false, name);
+  }
+});
+
+test("a pin message is cleared by the next submission of any kind, and a job's error does not use the pin's line", async () => {
+  const r = rig({ mode: "claude-dip", tab: { url: "chrome://newtab/" } });
+  await r.c.init(1);
+  await r.c.summarizePage();
+  assert.ok(r.state.last.pinError);
+  assert.equal(await r.c.submitTyped("https://typed.test/x"), true);
+  assert.equal(r.state.last.pinError, null);
+  const j = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/x" } });
+  j.server.postStatus = 429; j.server.postError = "queue_full";
+  await j.c.init(1);
+  assert.ok(j.state.last.error);
+  assert.equal(j.state.last.pinError, null);
+});
+
+test("wiring: the pin's message has its own line in the panel, apart from the job's error line", () => {
+  const h = read("panel.html"), js = read("panel.js");
+  assert.match(h, /<div id="pinmsg" class="error" role="alert" hidden><\/div>/);
+  assert.match(js, /\$\("pinmsg"\)\.hidden = !s\.pinError;/);
+  assert.match(js, /\$\("pinmsg"\)\.textContent = s\.pinError \|\| "";/);
+  assert.ok(h.indexOf('id="buttons"') < h.indexOf('id="pinmsg"') && h.indexOf('id="pinmsg"') < h.indexOf('id="error"'));
 });

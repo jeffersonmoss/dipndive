@@ -74,6 +74,8 @@ function render(s) {
   const shown = s.result || "";
   if (shown !== shownResult) { shownResult = shown; $("result").innerHTML = shown ? renderMarkdown(shown) : ""; }
   renderAsk(s);
+  $("pinmsg").hidden = !s.pinError;  // the pin's own line: it never replaces the status or error of a job
+  $("pinmsg").textContent = s.pinError || "";
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
