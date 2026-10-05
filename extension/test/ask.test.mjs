@@ -420,12 +420,46 @@ test("answers are rendered by the safe renderer and questions are plain text in 
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /qe\.textContent = q;/, "the question goes in as text");
   assert.match(js, /ae\.innerHTML = html/);
-  assert.match(js, /document\.addEventListener\("keydown", \(e\) => \{\s*if \(e\.key === "Escape" && !ctl\.s\.asking/);
+  assert.match(js, /document\.addEventListener\("keydown", \(e\) => \{\s*const askInput = \$\("askinput"\), mic = \$\("mic"\), active = document\.activeElement;/);
+  assert.match(js, /e\.target === askInput \|\| e\.target === mic \|\| !otherTextField/);
   assert.match(js, /\$\("mic"\)\.addEventListener\("keydown", \(e\) => \{ if \(e\.key === "Enter"\) e\.preventDefault\(\); \}\)/);
-  assert.match(js, /await ctl\.toggleMic\(\); \$\("askinput"\)\.focus\(\)/);
+  assert.match(js, /\$\("mic"\)\.addEventListener\("click", async \(\) => \{ \$\("askinput"\)\.focus\(\); await ctl\.toggleMic\(\); \}\)/);
   assert.match(js, /box\.readOnly = live/);
   assert.match(js, /preserveSelection/);
   assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
+});
+
+test("Escape does not cancel the question draft while another text field has focus", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  const body = js.match(/document\.addEventListener\("keydown", \(e\) => \{([\s\S]*?)\n\}\);/)[1];
+  const askInput = {}, mic = {};
+  const urlInput = { matches: (selector) => selector.includes("input[type='url']") };
+  const other = { matches: () => false };
+  const els = { askinput: askInput, mic, askform: { hidden: false } };
+  const calls = [];
+  const handler = new Function("e", "$", "ctl", "document", body);
+  const ctl = { s: { asking: false }, cancelQuestion: () => calls.push("cancel") };
+  const event = (target, activeElement = target) => ({ key: "Escape", target, prevented: false, preventDefault() { this.prevented = true; } });
+
+  let e = event(urlInput);
+  handler(e, (id) => els[id], ctl, { activeElement: urlInput });
+  assert.equal(e.prevented, false, "Escape in the URL field is left alone");
+  assert.deepEqual(calls, []);
+
+  e = event(other, other);
+  handler(e, (id) => els[id], ctl, { activeElement: other });
+  assert.equal(e.prevented, true, "Escape outside text fields cancels the draft");
+  assert.deepEqual(calls, ["cancel"]);
+
+  e = event(mic, mic);
+  handler(e, (id) => els[id], ctl, { activeElement: mic });
+  assert.equal(e.prevented, true, "Escape on the mic cancels the draft");
+  assert.deepEqual(calls, ["cancel", "cancel"]);
+
+  e = event(askInput, urlInput);
+  handler(e, (id) => els[id], ctl, { activeElement: urlInput });
+  assert.equal(e.prevented, true, "Escape on the question box cancels the draft");
+  assert.deepEqual(calls, ["cancel", "cancel", "cancel"]);
 });
 
 // ---------- the microphone through the controller ----------

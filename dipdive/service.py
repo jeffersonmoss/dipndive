@@ -167,7 +167,7 @@ class Service:
         return {"queued": list(machines)}
 
     def take_clipboard(self, machine):
-        """Remove and return the oldest unexpired URL for one machine."""
+        """Remove and return the newest unexpired URL for one machine."""
         now = time.time()
         with self.lock:
             original = self._read_clipboard_queues()
@@ -175,15 +175,9 @@ class Service:
             queue_for_machine = [item for item in queues[machine]
                                  if isinstance(item, dict) and isinstance(item.get("url"), str)
                                  and isinstance(item.get("expires"), (int, float)) and item["expires"] > now]
-            # A helper that was offline should receive the latest useful link, not replay an old backlog.
-            fresh = []
-            for item in queue_for_machine:
-                created = item.get("created", item["expires"] - CLIPBOARD_TTL)
-                if isinstance(created, (int, float)) and created >= now - 120:
-                    fresh.append(item)
-            queue_for_machine = fresh
-            result = queue_for_machine.pop(0) if queue_for_machine else None
-            queues[machine] = queue_for_machine
+            # Keep the full expiry window, but a returning helper only needs the latest link.
+            result = queue_for_machine[-1] if queue_for_machine else None
+            queues[machine] = []
             if queues != original:
                 _atomic_write(self.clipboard_path, queues)
             return {"url": result["url"]} if result else None

@@ -114,19 +114,27 @@ class ClipboardMailbox(unittest.TestCase):
         self.assertEqual(self.next()[1], {"url": "https://example.com/second"})
         self.assertEqual(self.next()[0], 204)
 
-    def test_stale_backlog_is_skipped_and_empty_poll_does_not_write_queue(self):
+    def test_item_survives_200_seconds_and_empty_poll_does_not_write_queue(self):
         path = self.svc.clipboard_path
         self.assertIsNone(self.svc.take_clipboard("thing-1"))
         self.assertFalse(os.path.exists(path))
-        self.enqueue("https://example.com/old")
-        self.enqueue("https://example.com/new")
+        self.enqueue("https://example.com/after-200-seconds")
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         with open(path) as f:
             queues = json.load(f)
-        queues["thing-1"][0]["created"] = time.time() - 121
+        queues["thing-1"][0]["created"] = time.time() - 200
         with open(path, "w") as f:
             json.dump(queues, f)
-        self.assertEqual(self.next()[1], {"url": "https://example.com/new"})
+        self.assertEqual(self.next()[1], {"url": "https://example.com/after-200-seconds"})
+        self.assertEqual(self.next()[0], 204)
+
+    def test_poll_delivers_newest_and_discards_older_pending_items(self):
+        for item in ("A", "B", "C"):
+            self.enqueue(f"https://example.com/{item}")
+        self.assertEqual(self.next()[1], {"url": "https://example.com/C"})
+        with open(self.svc.clipboard_path) as f:
+            queues = json.load(f)
+        self.assertEqual(queues["thing-1"], [])
         self.assertEqual(self.next()[0], 204)
 
     def test_per_machine_isolation(self):

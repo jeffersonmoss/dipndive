@@ -213,10 +213,14 @@ pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.re
 $("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion(); });
 $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !ctl.s.asking && !$("askform").hidden) { e.preventDefault(); ctl.cancelQuestion(); }
+  const askInput = $("askinput"), mic = $("mic"), active = document.activeElement;
+  const otherTextField = active && active !== askInput && active !== mic
+    && active.matches("input[type='text'], input[type='url'], input[type='search'], textarea, [contenteditable='true']");
+  if (e.key === "Escape" && (e.target === askInput || e.target === mic || !otherTextField)
+      && !ctl.s.asking && !$("askform").hidden) { e.preventDefault(); ctl.cancelQuestion(); }
 });
 $("mic").addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
-$("mic").addEventListener("click", async () => { await ctl.toggleMic(); $("askinput").focus(); });
+$("mic").addEventListener("click", async () => { $("askinput").focus(); await ctl.toggleMic(); });
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
 window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log
