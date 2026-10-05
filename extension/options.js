@@ -9,6 +9,9 @@ const say = (t) => { $("msg").textContent = t; };
 const st = await chrome.storage.local.get(["base", "token"]);
 $("base").value = st.base || "";
 $("token").value = st.token || "";
+const computer = await chrome.storage.local.get("computerName");
+$("computer").value = ["thing-1", "thing-2", "imac", "win"].includes(computer.computerName) ? computer.computerName : "";
+$("computer").addEventListener("change", () => chrome.storage.local.set({ computerName: $("computer").value }));
 
 $("save").addEventListener("click", async () => {
   let base = $("base").value.trim().replace(/\/+$/, "");

@@ -9,6 +9,8 @@ import { DEFAULT_MODE, MODE_IDS, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
+export const CLIPBOARD_MACHINES = ["thing-2", "thing-1", "imac", "win"];
+const validClipboardSet = (xs) => Array.isArray(xs) ? CLIPBOARD_MACHINES.filter((x) => xs.includes(x)) : [...CLIPBOARD_MACHINES];
 
 // The companion refuses a POST /jobs that carries an older clear generation than its own (409, no job made): another
 // machine pressed Clear history since this panel last heard from the companion.
@@ -69,6 +71,7 @@ export class Controller {
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
       mic: null,
+      clipboardMachines: [...CLIPBOARD_MACHINES], clipboardStatus: "",
     };
     this.voice = new VoiceInput({
       SpeechRecognition: deps.speech || null,
@@ -118,6 +121,7 @@ export class Controller {
     // An old install can have the removed "temp" mode stored: forget it, so every window and the menu fall back to the default.
     if (all.mode !== undefined && !MODE_IDS.includes(all.mode)) await this.d.storage.remove("mode");
     this.emit({ configured: !!(all.base && all.token), mode: normalizeMode(all.mode) });
+    this.emit({ clipboardMachines: validClipboardSet(all.clipboardMachines), computerName: ["thing-1", "thing-2", "imac", "win"].includes(all.computerName) ? all.computerName : "" });
     if (!this.s.configured) {
       this.emit({ status: "Set the companion URL and token in the extension options." });
       return;
@@ -249,6 +253,38 @@ export class Controller {
         this.emit({ configured: !!(st.base && st.token) });
       });
     }
+    if (changes.clipboardMachines) this.emit({ clipboardMachines: validClipboardSet(changes.clipboardMachines.newValue) });
+    if (changes.computerName) this.emit({ computerName: ["thing-1", "thing-2", "imac", "win"].includes(changes.computerName.newValue) ? changes.computerName.newValue : "" });
+  }
+
+  async setClipboardMachines(machines) {
+    const selected = validClipboardSet(machines);
+    await this.d.storage.set({ clipboardMachines: selected });
+    this.emit({ clipboardMachines: selected });
+  }
+
+  async sendToClipboard(writeLocal) {
+    const url = this.s.source && this.s.source.url;
+    const selected = validClipboardSet(this.s.clipboardMachines);
+    if (!url || !selected.length) return false;
+    const local = this.s.computerName;
+    const localSelected = !!local && selected.includes(local);
+    const remote = selected.filter((m) => !localSelected || m !== local);
+    const failures = [];
+    if (localSelected) {
+      try { await writeLocal(url); } catch { failures.push(local); }
+    }
+    if (remote.length) {
+      try {
+        const r = await request(this.d.fetch, this.cfg, "POST", "/clipboard", { url, machines: remote }, 5000);
+        if (r.status >= 400) failures.push(...remote);
+      } catch { failures.push(...remote); }
+    }
+    const sent = selected.filter((m) => !failures.includes(m));
+    const label = (m) => ({ "thing-1": "Thing 1", "thing-2": "Thing 2", imac: "iMac", win: "Win" })[m];
+    const status = [sent.length ? `Sent to ${sent.map(label).join(", ")}` : "", failures.length ? `Failed to queue for ${failures.map(label).join(", ")}` : ""].filter(Boolean).join(". ");
+    this.emit({ clipboardStatus: status || "No machines selected." });
+    return failures.length === 0;
   }
 
   async selectMode(id) {

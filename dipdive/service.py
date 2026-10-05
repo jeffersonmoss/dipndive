@@ -24,6 +24,9 @@ MAX_FETCH, MAX_MODEL, QUEUE_CAP, WORKERS = 2, 2, 20, 6
 SOURCE_TTL, PRUNE_AFTER = 7 * 86400, 30 * 86400
 SUPPORT = joblog.SUPPORT
 LAUNCHD_LOGS = ("launchd.out.log", "launchd.err.log")
+CLIPBOARD_MACHINES = ("thing-1", "thing-2", "imac", "win")
+CLIPBOARD_TTL = 15 * 60
+CLIPBOARD_CAP = 20
 
 
 def _sha(*parts) -> str:
@@ -50,11 +53,22 @@ def _read_json(path):
 
 def _atomic_write(path: str, obj):
     tmp = f"{path}.{uuid.uuid4().hex[:6]}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(obj, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(obj, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 class Service:
@@ -73,6 +87,7 @@ class Service:
         self.fetch_sem = threading.Semaphore(MAX_FETCH)
         self.model_sem = threading.Semaphore(MAX_MODEL)
         self.state_path = os.path.join(self.dir, "state.json")
+        self.clipboard_path = os.path.join(self.dir, "clipboard-queue.json")
         self.generation = 0
         try:
             self.generation = int(_read_json(self.state_path).get("clear_generation", 0))
@@ -132,6 +147,48 @@ class Service:
             self._save(j)
 
     # ---------- API ----------
+    def queue_clipboard(self, url, machines):
+        """Persist one expiring source URL for each machine, dropping oldest items over the cap."""
+        now = time.time()
+        with self.lock:
+            queues = self._read_clipboard_queues()
+            for machine in CLIPBOARD_MACHINES:
+                queues[machine] = [item for item in queues[machine]
+                                   if isinstance(item, dict) and isinstance(item.get("url"), str)
+                                   and isinstance(item.get("expires"), (int, float)) and item["expires"] > now]
+            for machine in machines:
+                queues[machine].append({"url": url, "expires": now + CLIPBOARD_TTL})
+                queues[machine] = queues[machine][-CLIPBOARD_CAP:]
+            _atomic_write(self.clipboard_path, queues)
+        return {"queued": list(machines)}
+
+    def take_clipboard(self, machine):
+        """Remove and return the oldest unexpired URL for one machine."""
+        now = time.time()
+        with self.lock:
+            queues = self._read_clipboard_queues()
+            queue_for_machine = [item for item in queues[machine]
+                                 if isinstance(item, dict) and isinstance(item.get("url"), str)
+                                 and isinstance(item.get("expires"), (int, float)) and item["expires"] > now]
+            result = queue_for_machine.pop(0) if queue_for_machine else None
+            queues[machine] = queue_for_machine
+            _atomic_write(self.clipboard_path, queues)
+            return {"url": result["url"]} if result else None
+
+    def _read_clipboard_queues(self):
+        empty = {machine: [] for machine in CLIPBOARD_MACHINES}
+        try:
+            with open(self.clipboard_path) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return empty
+        if not isinstance(saved, dict):
+            return empty
+        for machine in CLIPBOARD_MACHINES:
+            items = saved.get(machine, [])
+            empty[machine] = items if isinstance(items, list) else []
+        return empty
+
     def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None, clear_generation=None):
         """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question, the
         capped history and the summary shown are part of every key (raises ask.AskError on bad input).

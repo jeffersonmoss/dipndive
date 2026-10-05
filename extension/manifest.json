@@ -8,7 +8,8 @@
   "permissions": [
     "contextMenus",
     "sidePanel",
-    "storage"
+    "storage",
+    "clipboardWrite"
   ],
   "optional_permissions": [
     "tabs"

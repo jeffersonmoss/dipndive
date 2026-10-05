@@ -5,6 +5,7 @@ import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
+import { renderClipboardRow } from "./lib/clipboard-view.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
@@ -80,6 +81,7 @@ function render(s) {
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
   renderSave(s);
+  renderClipboardRow({ button: $("clipbutton"), status: $("clipstatus"), inputs: document.querySelectorAll("[data-machine]") }, s);
   document.body.classList.toggle("busy", !!s.busy);
 }
 
@@ -212,6 +214,11 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.p
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
 $("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checked));
+for (const input of document.querySelectorAll("[data-machine]")) input.addEventListener("change", () => {
+  ctl.setClipboardMachines([...document.querySelectorAll("[data-machine]:checked")].map((el) => el.dataset.machine));
+});
+// Keep this call on the button click path so navigator.clipboard.writeText has the user gesture.
+$("clipbutton").addEventListener("click", () => ctl.sendToClipboard((url) => navigator.clipboard.writeText(url)));
 
 // ---------- History: its own tab (history.html), reused when one is already open ----------
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;

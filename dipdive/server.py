@@ -6,12 +6,13 @@ import re
 import stat
 import sys
 import threading
+import unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import historylog, joblog
 from .ask import AskError
-from .service import LAUNCHD_LOGS, MODES, Service
+from .service import CLIPBOARD_MACHINES, LAUNCHD_LOGS, MODES, Service
 from .tmp import sweep_stale
 
 TOKEN_PATH = os.path.join(joblog.SUPPORT, "token")
@@ -140,6 +141,19 @@ def make_handler(svc: Service, token: str):
                     return self._send(*svc.get_source_for_job(jid))
                 if u.path == "/health":
                     return self._send(200, svc.health())
+                if u.path == "/clipboard/next":
+                    q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+                    names = q.get("machine", [])
+                    if len(names) != 1 or names[0] not in CLIPBOARD_MACHINES:
+                        return self._send(400, {"error_code": "bad_request", "error_message": "machine is not supported"})
+                    item = svc.take_clipboard(names[0])
+                    if item is None:
+                        self.send_response(204)
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    return self._send(200, item)
                 if u.path == "/history":
                     return self._history(u.query)
             except Exception as e:
@@ -199,6 +213,23 @@ def make_handler(svc: Service, token: str):
                         return self._send(*svc.submit(url, mode, rid, force, question, history, summary, cgen))
                     except AskError as e:
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
+                if u.path == "/clipboard":
+                    url, machines = d.get("url"), d.get("machines")
+                    valid_url = False
+                    if isinstance(url, str) and 1 <= len(url) <= 2048:
+                        try:
+                            parsed = urllib.parse.urlsplit(url)
+                            port = parsed.port
+                            valid_url = (parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+                                         and not any(ch.isspace() or unicodedata.category(ch) == "Cc" for ch in url))
+                        except ValueError:
+                            valid_url = False
+                    if (not valid_url or not isinstance(machines, list) or not machines
+                            or any(not isinstance(m, str) or m not in CLIPBOARD_MACHINES for m in machines)
+                            or len(set(machines)) != len(machines)):
+                        return self._send(400, {"error_code": "bad_request",
+                                                "error_message": "need an http(s) url up to 2048 characters and supported machines"})
+                    return self._send(202, svc.queue_clipboard(url, machines))
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
                 m = SAVE_PATH.match(u.path)

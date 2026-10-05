@@ -96,10 +96,10 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
 test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.equal(m.manifest_version, 3);
-  assert.deepEqual([...m.permissions].sort(), ["contextMenus", "sidePanel", "storage"]);
+  assert.deepEqual([...m.permissions].sort(), ["clipboardWrite", "contextMenus", "sidePanel", "storage"]);
   // the pin button reads the active tab's address through "tabs", asked for once, in a click, never at install
   assert.deepEqual(m.optional_permissions, ["tabs"]);
-  assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab") && !m.permissions.includes("clipboardWrite"));
+  assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab"));
   assert.ok(m.key && m.key.length > 300);
   assert.equal(m.content_scripts, undefined);
   assert.ok(!JSON.stringify(m).includes("<all_urls>"));
@@ -150,14 +150,14 @@ test("typed links: trimmed, bare hosts get https, junk and non-http refused", ()
   for (const bad of ["", "   ", "hello world", "javascript:alert(1)", "file:///etc/passwd", "ftp://x.test/a", "chrome://extensions", "justoneword"]) assert.equal(normalizeTyped(bad), null, bad);
 });
 
-test("panel has the URL field (placeholder, Go button, form submit) and the manifest adds no clipboard permission", () => {
+test("panel has the URL field (placeholder, Go button, form submit) and clipboard writing is an explicit permission", () => {
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   assert.match(h, /<form id="urlform"/);
   assert.match(h, /id="urlinput"[^>]*placeholder="Paste a link"/);
   assert.match(h, /<button id="go" type="submit">Go<\/button>/);
   assert.ok(h.indexOf('id="urlform"') < h.indexOf('id="buttons"'), "field is above the buttons");
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
-  assert.ok(!m.permissions.some((p) => /^clipboard/.test(p)));
+  assert.ok(m.permissions.includes("clipboardWrite"));
 });
 
 test("panel has the question box below the result, a mic button next to it, and the Enable microphone button", () => {
