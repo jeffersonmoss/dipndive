@@ -3,8 +3,8 @@
   --bg: #f6f5f2; --fg: #1c1b19; --muted: #6b675f; --card: #ffffff; --line: #d9d5cc;
   --claude: #D97757; --claude-edge: #A9502F; --claude-pale: #F6D6C9; --claude-pale-edge: #D9A895; --on-claude: #ffffff;
   --codex: #2B6CF6; --codex-edge: #1A47B0; --codex-pale: #CFE0FF; --codex-pale-edge: #9DB8F0; --on-codex: #ffffff;
-  --temp: #ffffff; --temp-edge: #b9b5ab; --on-pale: #2a2724;
-  --err-bg: #fde8e6; --err-fg: #8c1d13; --warn-bg: #fff3d6; --warn-fg: #6a4a00; --link: #1a55c4;
+  --light-btn: #ffffff; --light-btn-edge: #b9b5ab; --on-pale: #2a2724;
+  --err-bg: #fde8e6; --err-fg: #8c1d13; --link: #1a55c4;
   --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff; --q-bg: #ebe8e1;
   --mode-bg: #000000; --mode-border: #000000; --mode-ledge: #48453f;
 }
@@ -13,8 +13,8 @@
     --bg: #1d1c1a; --fg: #ecebe7; --muted: #9b968c; --card: #262522; --line: #3b3935;
     /* Dip squares stay pale (pale orange, pale blue, dark text) in dark mode too; only the edges deepen */
     --claude-pale-edge: #9a6a58; --codex-pale-edge: #6e8ac0;
-    --temp: #e9e8e4; --temp-edge: #8b877d;
-    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --warn-bg: #4a3a12; --warn-fg: #ffd98a; --link: #8ab4ff;
+    --light-btn: #e9e8e4; --light-btn-edge: #8b877d;
+    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --link: #8ab4ff;
     --rec: #c62a1c; --rec-edge: #8f150c; --q-bg: #34322e;
     --mode-border: #34322e; --mode-ledge: #5a5750;
   }
@@ -37,9 +37,10 @@ body {
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
 #buttons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-/* Five black squares (the 7900f77 size) with the provider's logo: Claude's starburst, the Codex app logo, full strength for
-   Dive and faded toward black (partly transparent) for Dip, and a round dotted speech bubble for Temp chat. Unpressed they stand on a ledge; pressed they
-   sink, lose the ledge, take inset shading and a rim and glow in the provider's colour (--rim), in both themes. */
+/* Five black squares (the 7900f77 size): four modes with the provider's logo (Claude's starburst, the Codex app logo, full
+   strength for Dive and faded toward black, partly transparent, for Dip) and the pin action in the center. Unpressed they stand
+   on a ledge; a pressed mode sinks, loses the ledge, takes inset shading and a rim and glow in the provider's colour (--rim),
+   in both themes. The pin (button.action) is not a mode: it never takes the pressed look. */
 button.mode {
   aspect-ratio: 1; min-height: 56px; border-radius: 12px; border: 2px solid var(--mode-border); cursor: pointer; padding: 0;
   display: flex; align-items: center; justify-content: center; background: var(--mode-bg); color: #ffffff;
@@ -48,7 +49,7 @@ button.mode {
 button.mode img, button.mode svg { width: 34px; height: 34px; display: block; pointer-events: none; }
 button.claude-dive, button.claude-dip { --rim: #D97757; --glow: rgba(217, 119, 87, .55); }
 button.codex-dive, button.codex-dip   { --rim: #5B8CFF; --glow: rgba(91, 140, 255, .55); }
-button.temp                           { --rim: #e9e6df; --glow: rgba(233, 230, 223, .4); }
+button.action                         { --rim: #e9e6df; }
 button.mode:hover:not(:disabled):not([aria-pressed="true"]) { border-color: var(--rim); }
 /* physically pressed: sunk by its ledge, inset shading, and a rim and glow in the provider's colour */
 button.mode[aria-pressed="true"] {
@@ -58,12 +59,8 @@ button.mode[aria-pressed="true"] {
   box-shadow: inset 0 4px 10px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .06), 0 0 9px 1px var(--glow);
 }
 button.mode:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; filter: grayscale(.6); }
-button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
-#copy {
-  width: 100%; padding: 16px; font-family: inherit; font-weight: 600; font-size: 15px; line-height: 1.2; border-radius: 12px; cursor: pointer;
-  background: var(--temp); color: #2a2724; border: 2px solid var(--temp-edge); box-shadow: 0 4px 0 var(--temp-edge);
-}
-#copy:active { transform: translateY(3px); box-shadow: inset 0 3px 8px rgba(0,0,0,.4); }
+button.mode:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+button.action:active { border-color: var(--rim); }
 #result { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; overflow-wrap: anywhere; }
 #result:empty { display: none; }
 #result a { color: var(--link); }
@@ -98,8 +95,8 @@ button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link);
   /* a solid white button with a black microphone, in both themes. Fixed size and no transform in any state: it must not
      move or resize between the click that starts a recording and the click that stops it. Its name is the hidden label
      (Speak, Wait..., Stop, Send...). */
-  width: 44px; height: 36px; border-radius: 10px; border: 2px solid var(--temp-edge); background: #ffffff; color: #111111;
-  box-shadow: 0 2px 0 var(--temp-edge);
+  width: 44px; height: 36px; border-radius: 10px; border: 2px solid var(--light-btn-edge); background: #ffffff; color: #111111;
+  box-shadow: 0 2px 0 var(--light-btn-edge);
 }
 /* listening: red with a white microphone and a pulsing ring, in the same place and size */
 #mic[data-state="listening"], #mic[data-state="starting"] { background: var(--rec); color: var(--on-rec); border-color: var(--rec-edge); box-shadow: inset 0 2px 6px rgba(0,0,0,.45); animation: rec 1.2s ease-in-out infinite; }
@@ -112,12 +109,10 @@ button.mode:focus-visible, #copy:focus-visible { outline: 3px solid var(--link);
 #askgo:active:not(:disabled) { transform: translateY(1px); }
 .micmsg { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .micmsg.err { color: var(--err-fg); background: var(--err-bg); padding: 6px 10px; border-radius: 8px; font-size: 13px; }
-#micsetup { align-self: flex-start; padding: 8px 14px; font-family: inherit; font-weight: 600; font-size: 13px; line-height: 1.2; border-radius: 10px; cursor: pointer; background: var(--temp); color: #2a2724; border: 2px solid var(--temp-edge); box-shadow: 0 3px 0 var(--temp-edge); }
+#micsetup { align-self: flex-start; padding: 8px 14px; font-family: inherit; font-weight: 600; font-size: 13px; line-height: 1.2; border-radius: 10px; cursor: pointer; background: var(--light-btn); color: #2a2724; border: 2px solid var(--light-btn-edge); box-shadow: 0 3px 0 var(--light-btn-edge); }
 .reason { font-size: 12px; color: var(--muted); margin-top: -4px; }
-.error, .warn, .note { padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+.error { padding: 10px 12px; border-radius: 8px; font-size: 13px; }
 .error { background: var(--err-bg); color: var(--err-fg); }
-.warn { background: var(--warn-bg); color: var(--warn-fg); }
-.note { background: var(--card); border: 1px solid var(--line); }
 /* the status line also carries the save box and the Settings gear, so they add no row */
 footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: auto; }
 footer #status { flex: 1 1 auto; min-width: 0; }

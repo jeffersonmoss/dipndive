@@ -8,6 +8,9 @@ export const slotKey = (windowId) => `slot:${windowId}`;
 
 export const MAX_SLOTS = 20;
 
+// The per-window slot a right-click, the URL field and the pin button all write; the panel of that window submits it.
+export const makeSlot = (url, windowId, requestId, ts = Date.now()) => ({ url, requestId, windowId, ts, consumed: false });
+
 // Keep only the newest MAX_SLOTS per-window slots (window ids change after a restart, so old ones pile up).
 export async function pruneSlots(storage, keep = MAX_SLOTS) {
   const all = await storage.get(null);
@@ -49,7 +52,7 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
     chrome.sidePanel.open({ windowId }, swallow);
     const url = pickUrl(info);
     if (!url) return;
-    const slot = { url, requestId: uuid(), windowId, ts: Date.now(), consumed: false };
+    const slot = makeSlot(url, windowId, uuid());
     chrome.storage.local.set({ [slotKey(windowId)]: slot }).then(() => pruneSlots(chrome.storage.local));
   });
   // The panels' History button asks the service worker to open or reuse the History tab. One worker, one in-flight

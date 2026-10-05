@@ -78,16 +78,13 @@ test("capHistory matches the Python cap on the shared fixtures", () => {
   assert.equal(cleanQuestion("  a \n b\t c "), "a b c");
 });
 
-test("provider follows the pressed button; Temp chat asks Codex unless Codex is unavailable", async () => {
+test("provider follows the pressed button; a Codex button asks Claude when Codex is unavailable", async () => {
   assert.equal(askProvider("claude-dip", true), "claude");
   assert.equal(askProvider("claude-dive", false), "claude");
   assert.equal(askProvider("codex-dip", true), "codex");
   assert.equal(askProvider("codex-dive", null), "codex");
   assert.equal(askProvider("codex-dive", false), "claude");
-  assert.equal(askProvider("temp", true), "codex");
-  assert.equal(askProvider("temp", null), "codex");
-  assert.equal(askProvider("temp", false), "claude");
-  const cases = [["claude-dive", "claude-ask"], ["codex-dip", "codex-ask"], ["codex-dive", "codex-ask"], ["temp", "codex-ask"]];
+  const cases = [["claude-dive", "claude-ask"], ["codex-dip", "codex-ask"], ["codex-dive", "codex-ask"]];
   for (const [mode, want] of cases) {
     const r = rig({ slot: slot(), mode, health: { codex_ready: true, codex_logged_in: true } });
     await r.c.init(1);
@@ -95,11 +92,10 @@ test("provider follows the pressed button; Temp chat asks Codex unless Codex is 
     await r.c.askQuestion("who said it?");
     assert.equal(asks(r)[0].body.mode, want, mode);
   }
-  const off = rig({ slot: slot(), mode: "temp", health: { codex_ready: false, codex_logged_in: false } });
+  const off = rig({ slot: slot(), mode: "codex-dive", health: { codex_ready: false, codex_logged_in: false } });
   await off.c.init(1);
-  await off.c.selectMode("temp");
   await off.c.askQuestion("who said it?");
-  assert.equal(asks(off)[0].body.mode, "claude-ask", "Temp chat with Codex unavailable asks Claude");
+  assert.equal(asks(off)[0].body.mode, "claude-ask", "with Codex unavailable the question goes to Claude");
 });
 
 test("Codex health is looked at again when asking, so a sign-out after the panel opened is noticed", async () => {
@@ -297,15 +293,11 @@ test("the Dip or Dive text on screen is sent with a question, for follow-ups suc
   assert.equal(asks(d)[0].body.summary, "Summary for claude-dive");
 });
 
-test("no summary is sent while a Dip is still running, in Temp chat, or after Clear history", async () => {
+test("no summary is sent while a Dip is still running or after Clear history", async () => {
   const running = rig({ slot: slot(), mode: "claude-dip" });
   await running.c.init(1);  // job not finished
   await running.c.askQuestion("instead of a summary");
   assert.equal("summary" in asks(running)[0].body, false);
-  const temp = rig({ slot: slot(), mode: "temp" });
-  await temp.c.init(1); await temp.tick();
-  await temp.c.askQuestion("in temp chat");
-  assert.equal("summary" in asks(temp)[0].body, false);
   const r = await ready();
   await r.c.clearHistory();
   await r.c.askQuestion("after clear");

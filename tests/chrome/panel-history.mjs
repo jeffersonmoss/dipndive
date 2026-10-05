@@ -32,8 +32,8 @@ try {
     check("status line has Save this Dip to history and Settings", JSON.stringify(foot) === JSON.stringify(["Save this Dip to history", "Settings"]), foot);
     check("no Clear history and no in-panel history view", await q(`!document.getElementById("clear") && !document.getElementById("historyview") && !document.body.textContent.includes("Clear history")`));
     check("the gear is at least 28 px square", await q(`(() => { const r = document.getElementById("options").getBoundingClientRect(); return r.width >= 28 && r.height >= 28; })()`));
-    const names = await q(`[...document.querySelectorAll("#buttons button")].map((b) => [b.textContent.trim(), b.title, !!b.querySelector("img, svg")])`);
-    check("mode buttons: a logo each, named and titled Claude Dive ... Codex Dive", JSON.stringify(names) === JSON.stringify(["Claude Dive", "Claude Dip", "Temp chat", "Codex Dip", "Codex Dive"].map((n) => [n, n, true])), names);
+    const names = await q(`[...document.querySelectorAll("#buttons button")].map((b) => [b.getAttribute("aria-label") || b.textContent.trim(), b.title, !!b.querySelector("img, svg")])`);
+    check("the four mode buttons and the pin: a picture each, named and titled Claude Dive, Claude Dip, Summarize this page, Codex Dip, Codex Dive", JSON.stringify(names) === JSON.stringify(["Claude Dive", "Claude Dip", "Summarize this page", "Codex Dip", "Codex Dive"].map((n) => [n, n, true])), names);
     check("every mode logo loaded", await q(`[...document.querySelectorAll("#buttons img")].every((i) => i.complete && i.naturalWidth > 0)`));
 
     // 2. the History button opens the History tab (the dev shim records the URL it would open)
@@ -48,8 +48,6 @@ try {
     await q(`document.getElementById("savehist").click()`);
     check("ticked again: restored", await until(() => q(`document.getElementById("savehist").checked && document.getElementById("status").textContent === "Saved to history."`), 10000));
     check("the entry is back", (await logged()) === before);
-    await q(`document.querySelector('button.mode[data-mode="temp"]').click()`);
-    check("Temp chat: no save box", await until(() => q(`document.getElementById("saveline").hidden && !document.getElementById("copy").hidden`), 15000));
 
     // 4. the History tab: every entry (more than one page), newest first, then a live search
     const hp = await b.open(`${info.front}/ext/history.html?${new URLSearchParams({ base: `${info.front}/c`, token: info.token })}`);

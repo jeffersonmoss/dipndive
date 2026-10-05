@@ -38,9 +38,9 @@ test("the first request of a panel that has heard nothing carries no generation;
   assert.equal(r.c.clearGen, 0);
   await r.c.askQuestion("a question");   // an ask
   await r.c.selectMode("claude-dive");   // a summary
-  await r.c.selectMode("temp");          // Temp chat (source mode)
+  await r.c.summarizePage();             // the pin button
   const later = posts(r).slice(1);
-  assert.deepEqual(later.map((p) => p.body.mode), ["claude-ask", "claude-dive", "source"]);
+  assert.deepEqual(later.map((p) => p.body.mode), ["claude-ask", "claude-dive", "claude-dive"]);
   for (const p of later) assert.equal(p.body.clearGeneration, 0, p.body.mode);
 });
 
@@ -126,19 +126,23 @@ test("a question asked after another machine cleared is refused: thread and summ
   assert.equal(r.state.last.askError, null);
 });
 
-test("Temp chat is refused the same way", async () => {
-  const r = rig({ slot: slot(), mode: "temp" });
+test("the pin button is refused the same way: nothing shown, nothing sent again, the slot is not left to be resubmitted", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
   r.server.staleCheck = true;
   await r.c.init(1); await r.tick();
-  assert.equal(r.state.last.tempReady, true);
+  assert.equal(r.state.last.result, "Summary for claude-dip");
   clearedOnAnotherMachine(r.server);
-  await r.c.selectMode("claude-dip");   // refused (the panel did not know)
+  await r.c.summarizePage();            // refused (the panel did not know)
   assert.equal(r.state.last.error, STALE_MESSAGE);
-  clearedOnAnotherMachine(r.server);
-  await r.c.selectMode("temp");         // refused again, in source mode
-  assert.equal(posts(r).at(-1).body.mode, "source");
-  assert.equal(r.state.last.error, STALE_MESSAGE);
-  assert.equal(r.state.last.tempReady, false);
+  assert.equal(r.state.last.result, null);
+  assert.equal(posts(r).at(-1).body.mode, "claude-dip");
+  const n = posts(r).length;
+  await r.tick();
+  assert.equal(posts(r).length, n, "no automatic resubmission");
+  await r.c.summarizePage();            // pressing again works with the adopted generation
+  assert.equal(r.state.last.error, null);
+  await r.tick();
+  assert.equal(r.state.last.result, "Summary for claude-dip");
 });
 
 test("a right-click that is refused is not submitted later by a reopened panel", async () => {

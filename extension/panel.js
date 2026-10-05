@@ -9,17 +9,18 @@ import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 installShim();
 const $ = (id) => document.getElementById(id);
 
-// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, the same logo partly transparent over the black button (darker) for Dip; Temp chat is a dotted
-// speech bubble. Decorative: the button's name is its hidden label.
+// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, the same logo partly transparent over the black button (darker) for Dip. Decorative: the
+// button's name is its hidden label.
 const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/modes/${name}-72.png 2x" width="34" height="34" alt="">`;
 const MODE_ICON = {
   "claude-dive": logo("claude-dive"), "claude-dip": logo("claude-dip"), "codex-dip": logo("codex-dip"), "codex-dive": logo("codex-dive"),
-  temp: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.1 3"/></svg>',
 };
+// The center button is an action, not a mode: a white map pin (a round head tapering to a point, with a small round hole), solid.
+const PIN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#ffffff" fill-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7ZM12 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>';
 
-// Buttons are built once; state changes only flip aria-pressed and classes.
+// Buttons are built once; state changes only flip aria-pressed and classes. The pin sits in the center slot.
 const buttons = {};
-for (const m of MODES) {
+const addButton = (m) => {
   const b = document.createElement("button");
   b.type = "button";
   b.className = `mode ${m.id}`;
@@ -29,7 +30,17 @@ for (const m of MODES) {
   b.title = m.label;
   $("buttons").appendChild(b);
   buttons[m.id] = b;
-}
+};
+MODES.slice(0, 2).forEach(addButton);
+const pin = document.createElement("button");
+pin.type = "button";
+pin.id = "pin";
+pin.className = "mode action";   // same black square, never pressed or selected: no aria-pressed
+pin.setAttribute("aria-label", "Summarize this page");
+pin.title = "Summarize this page";
+pin.innerHTML = PIN_ICON;
+$("buttons").appendChild(pin);
+MODES.slice(2).forEach(addButton);
 
 let urlDirty = false;
 $("urlinput").addEventListener("input", () => { urlDirty = true; });
@@ -60,13 +71,9 @@ function render(s) {
   $("hint").hidden = !!s.source || !!s.error;
   // Re-set only when the text changed: an emit happens on every interim speech result, and rebuilding the summary three
   // times a second would drop a text selection and make a screen reader re-read it.
-  const shown = s.mode === "temp" ? "" : s.result || "";
+  const shown = s.result || "";
   if (shown !== shownResult) { shownResult = shown; $("result").innerHTML = shown ? renderMarkdown(shown) : ""; }
-  $("copy").hidden = !(s.mode === "temp" && s.tempReady);
-  $("warn").hidden = !(s.mode === "temp" && s.tempWarn);
   renderAsk(s);
-  $("note").hidden = !s.tempNote;
-  $("note").textContent = s.tempNote;
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
@@ -75,9 +82,9 @@ function render(s) {
 }
 
 // ---------- "Save this Dip to history" ----------
-// Shown only next to a finished Dip or Dive that has an entry in the companion's history log; never in Temp chat.
+// Shown only next to a finished Dip or Dive that has an entry in the companion's history log.
 function renderSave(s) {
-  const show = s.configured && s.mode !== "temp" && !!s.result && typeof s.saved === "boolean";  // also while unknown
+  const show = s.configured && !!s.result && typeof s.saved === "boolean";  // also while unknown
   $("saveline").hidden = !show;
   if (!show) return;
   $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
@@ -170,7 +177,11 @@ const micSetupUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.get
 const ctl = new Controller({
   storage: { get: (k) => chrome.storage.local.get(k), set: (o) => chrome.storage.local.set(o), remove: (k) => chrome.storage.local.remove(k) },
   fetch: (...a) => fetch(...a),
-  clipboard: { writeText: (t) => navigator.clipboard.writeText(t) },
+  // The pin button: the optional "tabs" permission (asked inside the click) and the active tab of this panel's window.
+  tabs: {
+    requestAccess: () => chrome.permissions.request({ permissions: ["tabs"] }),
+    activeTab: async (windowId) => (await chrome.tabs.query({ active: true, windowId }))[0] || null,
+  },
   openTab: (url) => chrome.tabs.create({ url }),
   uuid: () => crypto.randomUUID(),
   setTimer: (f, ms) => setTimeout(f, ms),
@@ -183,7 +194,7 @@ const ctl = new Controller({
 });
 
 for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () => ctl.selectMode(id));
-$("copy").addEventListener("click", () => ctl.copyAndOpen());
+pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click
 $("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion($("askinput").value); });
 $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 $("mic").addEventListener("click", () => ctl.toggleMic());

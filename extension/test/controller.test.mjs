@@ -60,38 +60,29 @@ test("an older companion clear generation is discarded, a newer one is adopted",
   assert.equal(r.c.clearGen, 6);
 });
 
-test("Temp chat: source-only job, then copy writes the clipboard BEFORE opening the tab", async () => {
+test("an old install's stored mode \"temp\" falls back to the default mode, forgets the key, and the job is a normal Dip", async () => {
   const r = rig({ slot: slot(), mode: "temp" });
   await r.c.init(1);
-  assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "source");
+  assert.equal(r.state.last.mode, "codex-dip");
+  assert.equal("mode" in r.store, false, "the removed mode is not kept in storage");
+  assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, "codex-dip");
   await r.tick();
-  assert.equal(r.state.last.tempReady, true);
-  assert.equal(r.state.last.result, null, "no summary is shown for Temp chat");
-  assert.equal(await r.c.copyAndOpen(), true);
-  assert.deepEqual(r.log.order, ["clip", "tab"]);
-  assert.match(r.log.clip[0], /^You are summarizing a source/);
-  assert.ok(r.log.clip[0].includes("<source>\nsource body\n</source>"));
-  assert.ok(r.log.clip[0].includes("wait for my follow-up questions"));
-  assert.equal(r.log.tabs[0], "https://chatgpt.com/?temporary-chat=true");
-  assert.match(r.state.last.tempNote, /Copied\. Press Cmd\/Ctrl\+V then Enter\./);
+  assert.equal(r.state.last.result, "Summary for codex-dip");
 });
 
-test("Temp chat: a failed clipboard write opens no tab and leaves the button for another try", async () => {
-  const r = rig({ slot: slot(), mode: "temp" });
-  await r.c.init(1); await r.tick();
-  r.server.clipFail = true;
-  assert.equal(await r.c.copyAndOpen(), false);
-  assert.deepEqual(r.log.tabs, []);
-  assert.equal(r.state.last.tempReady, true);
-  r.server.clipFail = false;
-  assert.equal(await r.c.copyAndOpen(), true);
-});
-
-test("Temp chat warns above 100,000 characters", async () => {
-  const r = rig({ slot: slot(), mode: "temp" });
-  r.server.sourceText = "x".repeat(100001);
-  await r.c.init(1); await r.tick();
-  assert.equal(r.state.last.tempWarn, true);
+test("a stored slot of the removed temp mode is not resumed or resubmitted: the page is shown and a mode is chosen", async () => {
+  for (const extra of [{ consumed: true, jobId: "old-source-job", mode: "temp" }, { pendingMode: "temp" }]) {
+    const r = rig({ slot: slot(extra), mode: "claude-dip" });
+    await r.c.init(1);
+    assert.deepEqual(r.log.fetches.filter((f) => f.path.startsWith("/jobs")), [], "no job is created or polled by itself");
+    assert.equal(r.state.last.source.url, "https://v.test/watch");
+    assert.equal(r.state.last.mode, "claude-dip");
+    assert.match(r.state.last.status, /Choose a mode/);
+    await r.c.selectMode("claude-dive");
+    const post = r.log.fetches.find((f) => f.method === "POST" && f.path === "/jobs");
+    assert.equal(post.body.mode, "claude-dive");
+    assert.equal(post.body.force, false);
+  }
 });
 
 test("unreachable companion gives a clear error naming the iMac, no endless polling", async () => {

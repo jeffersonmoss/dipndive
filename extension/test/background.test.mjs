@@ -27,7 +27,7 @@ test("menu is created once in onInstalled with the current mode label; startup a
   assert.equal(creates.length, 1);
   assert.deepEqual(creates[0][1], { id: MENU_ID, title: "Dip'n'Dive", contexts: ["link", "video", "page"] });
   m.L.startup[0]();
-  m.L.changed[0]({ mode: { newValue: "temp" } }, "local");
+  m.L.changed[0]({ mode: { newValue: "claude-dive" } }, "local");
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(m.calls.filter((c) => c[0] === "create").length, 1);
   assert.ok(m.calls.some((c) => c[0] === "update" && c[2].title === "Dip'n'Dive"));

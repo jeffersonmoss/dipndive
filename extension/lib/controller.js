@@ -1,11 +1,11 @@
 // Side panel logic, DOM-free so it can be unit-tested (plan 3.1.5 to 3.1.9, 3.1.11).
 import { ApiError, request } from "./api.js";
 import { clearCompanion } from "./clear.js";
-import { pruneSlots, slotKey } from "./background-core.js";
-import { normalizeTyped, sourceKey } from "./urls.js";
+import { makeSlot, pruneSlots, slotKey } from "./background-core.js";
+import { normalizeTyped, pickUrl, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
 import { MIC, VoiceInput } from "./voice.js";
-import { DEFAULT_MODE, TEMP_CHAT_URL, TEMP_PREFIX, TEMP_WARN_CHARS, apiMode, normalizeMode } from "./modes.js";
+import { DEFAULT_MODE, MODE_IDS, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
@@ -39,8 +39,8 @@ export function describeError(code, message) {
 
 export class Controller {
   constructor(deps) {
-    // deps: storage {get,set}, fetch, clipboard {writeText}, openTab(url), uuid(), onState(state),
-    //       setTimer(fn, ms) -> id, clearTimer(id)
+    // deps: storage {get,set}, fetch, openTab(url), uuid(), onState(state), setTimer(fn, ms) -> id, clearTimer(id),
+    //       tabs {requestAccess(), activeTab(windowId)} for the pin button (see summarizePage)
     this.d = deps;
     this.windowId = null;
     this.cfg = null;
@@ -51,14 +51,13 @@ export class Controller {
     this.askTimer = null;
     this.askGen = 0;       // bumped on every new source, clear and send; older answers are discarded
     this.slot = null;
-    this.tempText = null;
     this.micPrefix = "";   // what was typed in the box when the microphone started; spoken words are added after it
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
-      result: null, error: null, status: "", tempReady: false, tempChars: 0, tempWarn: false, tempNote: "", busy: false,
+      result: null, error: null, status: "", busy: false,
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
-      // history log, null when it has none (no summary, Temp chat, a log failure); savingSaved while a change is on its way
+      // history log, null when it has none (no summary, a log failure); savingSaved while a change is on its way
       saved: null, savingSaved: false, savedUnknown: false,  // (savedRev, the newest log revision seen, is kept on this)
       // question box: earlier turns for this source, the turn in flight, the box text (draftSeq changes when the
       // controller, not the user, writes it), and the microphone state
@@ -110,6 +109,8 @@ export class Controller {
     this.windowId = windowId;
     const all = await this.d.storage.get(null);
     this.cfg = { base: all.base, token: all.token };
+    // An old install can have the removed "temp" mode stored: forget it, so every window and the menu fall back to the default.
+    if (all.mode !== undefined && !MODE_IDS.includes(all.mode)) await this.d.storage.remove("mode");
     this.emit({ configured: !!(all.base && all.token), mode: normalizeMode(all.mode) });
     if (!this.s.configured) {
       this.emit({ status: "Set the companion URL and token in the extension options." });
@@ -145,6 +146,14 @@ export class Controller {
     if (!isNew) return;
     // The question thread belongs to one source: another source starts a fresh one.
     if (!prev || sourceKey(prev.url) !== sourceKey(slot.url)) this.resetAsk();
+    // Slots written by an old install can carry the removed "temp" mode (its job was a source-only fetch, with no summary).
+    // That job is not resumed and nothing is submitted by itself: the page is shown and the person picks a mode.
+    const legacy = (m) => !!m && !MODE_IDS.includes(m);
+    if (legacy(slot.mode) || legacy(slot.pendingMode)) {
+      this.slot = { url: slot.url, requestId: slot.requestId, windowId: slot.windowId, ts: slot.ts, consumed: false };
+      this.emit({ status: "Choose a mode to summarize this page." });
+      return;
+    }
     if (slot.consumed && slot.jobId) {
       this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)) });
       await this.beginTracking(slot.jobId);
@@ -162,17 +171,48 @@ export class Controller {
     await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true });
   }
 
-  // The URL field: same path as a right-click. A fresh slot (new requestId) is written to this window's key and
-  // submitted by onSlot with this panel's own selected mode.
+  // Writes a fresh slot for `url` to this window's key and submits it through onSlot with this panel's own selected mode.
+  // Same slot as a right-click makes (makeSlot), so the same requestId, per-window slot, history and clear generation apply.
+  async submitUrl(url) {
+    const slot = { ...makeSlot(url, this.windowId, this.d.uuid()), pendingMode: this.s.mode };
+    await this.d.storage.set({ [slotKey(this.windowId)]: slot });
+    await pruneSlots(this.d.storage);
+    await this.onSlot(slot);
+  }
+
+  // The URL field: same path as a right-click.
   async submitTyped(text) {
     if (!this.s.configured) { this.emit({ error: "Set the companion URL and token in the extension options." }); return false; }
     const url = normalizeTyped(text);
     if (!url) { this.emit({ error: "That does not look like a web link. Paste an http or https address." }); return false; }
     this.emit({ error: null });
-    const slot = { url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: false, pendingMode: this.s.mode };
-    await this.d.storage.set({ [slotKey(this.windowId)]: slot });
-    await pruneSlots(this.d.storage);
-    await this.onSlot(slot);
+    await this.submitUrl(url);
+    return true;
+  }
+
+  // The pin button: summarize the page in the active tab of this panel's window with the selected mode, as if the person had
+  // right-clicked the page and chosen Dip'n'Dive. It is an action, not a mode: it changes no setting and no pressed button.
+  // Reading a tab's address from a side panel needs the optional "tabs" permission (a side-panel click grants no activeTab).
+  // `tabs.requestAccess()` is called first, before any other await, because Chrome only shows its prompt for a call made
+  // inside the click; when the permission is already held it answers true at once without asking. Returns true once a
+  // summary was started.
+  async summarizePage() {
+    if (!this.s.configured) { this.emit({ error: "Set the companion URL and token in the extension options." }); return false; }
+    const tabs = this.d.tabs;
+    if (!tabs) { this.emit({ error: "This button needs the Chrome extension." }); return false; }
+    let granted = false;
+    try { granted = await tabs.requestAccess(); } catch { /* treated as not granted */ }
+    if (!granted) {
+      this.emit({ error: "To summarize the open page, Dip'n'Dive needs to read its address. Click the pin again and choose Allow, or paste a link above.", busy: false, status: "" });
+      return false;
+    }
+    let tab = null;
+    try { tab = await tabs.activeTab(this.windowId); } catch { /* no tab */ }
+    if (!tab) { this.emit({ error: "No page is open in this window." }); return false; }
+    const url = pickUrl({ pageUrl: tab.url });  // the right-click's own check: only http and https pages
+    if (!url) { this.emit({ error: "This page cannot be summarized. Open a web page (an http or https address) and try again." }); return false; }
+    this.emit({ error: null });
+    await this.submitUrl(url);
     return true;
   }
 
@@ -216,10 +256,9 @@ export class Controller {
 
   resetView(extra = {}) {
     this.stopTimer();
-    this.tempText = null;
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, tempReady: false,
-                tempChars: 0, tempWarn: false, tempNote: "", saved: null, savingSaved: false, savedUnknown: false, ...extra });
+    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null,
+                saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
   // Another window cleared the companion's history (generation `cg`): forget what this panel was showing and the
@@ -233,7 +272,7 @@ export class Controller {
     this.resetView({ status, busy: false });
   }
 
-  // Every POST /jobs (summaries, Temp chat and questions) carries the clear generation this panel knows, so the companion
+  // Every POST /jobs (summaries and questions) carries the clear generation this panel knows, so the companion
   // can refuse work that was built on history another machine has since cleared. Unknown (nothing heard yet): omitted.
   genField() {
     return typeof this.clearGen === "number" ? { clearGeneration: this.clearGen } : {};
@@ -302,7 +341,7 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url: this.slot.url, mode: apiMode(mode), requestId, force: !!force, ...this.genField() }, 5000);
+        { url: this.slot.url, mode, requestId, force: !!force, ...this.genField() }, 5000);
     } catch (e) { this.failure(gen, e); return; }
     if (gen !== this.selGen) return;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json); return; }
@@ -338,7 +377,6 @@ export class Controller {
     const j = r.json;
     this.emit({ title: j.title || this.s.title, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
-      if (this.s.mode === "temp") { await this.loadTemp(jobId, gen); return; }
       this.emit({ result: j.result_markdown, status: "Done.", busy: false,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
       this.noteRev(j.history_rev);
@@ -349,35 +387,6 @@ export class Controller {
       this.emit({ status: label });
       this.timer = this.d.setTimer(() => this.poll(jobId, gen), POLL_MS);
     }
-  }
-
-  async loadTemp(jobId, gen) {
-    let r;
-    try {
-      r = await request(this.d.fetch, this.cfg, "GET", `/source?job=${encodeURIComponent(jobId)}`, null, 5000);
-    } catch (e) { this.failure(gen, e); return; }
-    if (!this.accept(gen, r.json)) return;
-    if (r.status !== 200) { this.emit({ error: describeError(r.json.error_code, r.json.error_message), status: "", busy: false }); return; }
-    const title = r.json.title || this.s.title || "";
-    // Built now, so the click handler has nothing to do but write it.
-    this.tempText = `${TEMP_PREFIX}\n\nTitle: ${title}\nURL: ${r.json.url || this.slot.url}\n\n<source>\n${r.json.text}\n</source>\n`;
-    const chars = r.json.text.length;
-    this.emit({ tempReady: true, tempChars: chars, tempWarn: chars > TEMP_WARN_CHARS, status: "Source ready.", busy: false, title });
-  }
-
-  // Click handler for "Copy and open ChatGPT": write first, open the tab only after the write succeeded
-  // (opening the tab first would unfocus the panel and fail the write).
-  async copyAndOpen() {
-    if (!this.tempText) return false;
-    try {
-      await this.d.clipboard.writeText(this.tempText);
-    } catch (e) {
-      this.emit({ tempNote: "Copy failed. Click the button again." });
-      return false;
-    }
-    this.d.openTab(TEMP_CHAT_URL);
-    this.emit({ tempNote: "Copied. Press Cmd/Ctrl+V then Enter." });
-    return true;
   }
 
   // Clear history from this panel. The panel itself no longer shows the control (it lives on the Options page, behind a
@@ -403,7 +412,7 @@ export class Controller {
   // Returns true when the box ended up as clicked.
   async setSaved(on) {
     const jobId = this.s.jobId;
-    if (!jobId || this.s.mode === "temp" || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
+    if (!jobId || typeof this.s.saved !== "boolean" || this.s.savingSaved) return false;
     const gen = this.selGen, was = this.s.saved;
     this.savedSeq = (this.savedSeq || 0) + 1;  // a refresh that started before this change must not overwrite its result
     this.incoming = null;                      // revisions heard from other windows while this change is on its way (noteIncoming)
@@ -512,7 +521,7 @@ export class Controller {
   // `atLeast`: with force, an answer whose revision is below it (or has none) is not trusted and not applied.
   async refreshSaved({ force = false, atLeast = null } = {}) {
     const jobId = this.s.jobId;
-    if (!jobId || this.s.mode === "temp" || !this.s.result) return null;
+    if (!jobId || !this.s.result) return null;
     const busy = this.s.savingSaved && !force;  // a change of this panel is on its way: look, keep the revision, apply nothing
     const gen = this.selGen, seq = this.savedSeq || 0;
     let r;
@@ -649,9 +658,9 @@ export class Controller {
     this.stopAskTimer();
     const url = this.slot.url;
     const history = capHistory(this.s.thread);
-    // What the person was just shown, so "tell me more about the second one" has something to point at. Temp chat has
-    // no summary of its own, and nothing is sent while a Dip or Dive is still running.
-    const summary = this.s.mode === "temp" ? "" : capSummary(this.s.result);
+    // What the person was just shown, so "tell me more about the second one" has something to point at. Nothing is
+    // sent while a Dip or Dive is still running.
+    const summary = capSummary(this.s.result);
     this.emit({ asking: { q, label: "Thinking..." }, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
     const mode = this.s.mode;
     if (!String(mode).startsWith("claude")) {

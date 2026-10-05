@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pickUrl, knownVideo, normalizeTyped } from "../lib/urls.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { MODES, DEFAULT_MODE, menuLabel, apiMode } from "../lib/modes.js";
+import { MODES, DEFAULT_MODE, menuLabel, normalizeMode } from "../lib/modes.js";
 
 test("url precedence: linkUrl, then known-video srcUrl, then frameUrl, then pageUrl", () => {
   const base = { pageUrl: "https://a.test/page", frameUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ", srcUrl: "blob:https://www.youtube.com/xyz" };
@@ -44,38 +44,62 @@ test("markdown: attribute breakout in a link is escaped", () => {
   assert.ok(!/onmouseover="/.test(h.replace(/&quot;/g, "")) || !/ onmouseover=/.test(h));
 });
 
-test("modes: order, default, menu label uses 'and', temp is source-only", () => {
-  assert.deepEqual(MODES.map((m) => m.id), ["claude-dive", "claude-dip", "temp", "codex-dip", "codex-dive"]);
-  assert.deepEqual(MODES.map((m) => m.label), ["Claude Dive", "Claude Dip", "Temp chat", "Codex Dip", "Codex Dive"],
-    "left to right: the shallowest immersion in the center, deeper toward both edges");
+test("modes: four modes, default, menu label uses 'and'; the removed temp mode normalizes to the default", () => {
+  assert.deepEqual(MODES.map((m) => m.id), ["claude-dive", "claude-dip", "codex-dip", "codex-dive"]);
+  assert.deepEqual(MODES.map((m) => m.label), ["Claude Dive", "Claude Dip", "Codex Dip", "Codex Dive"]);
   assert.equal(DEFAULT_MODE, "codex-dip");
   assert.equal(menuLabel("codex-dip"), "Dip'n'Dive");
-  assert.ok(!menuLabel("temp").includes("&"));
-  assert.equal(apiMode("temp"), "source");
-  assert.equal(apiMode("claude-dive"), "claude-dive");
+  assert.equal(normalizeMode("temp"), "codex-dip");
+  assert.equal(normalizeMode(undefined), "codex-dip");
+  assert.equal(normalizeMode("claude-dive"), "claude-dive");
 });
 
-test("the five buttons are built in MODES order and nothing reorders them, so the Tab order is the visual order", () => {
+test("the buttons are built in order, the pin in the center slot, and nothing reorders them, so the Tab order is the visual order", () => {
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  // one loop over MODES creates each button and appends it, in that order
-  assert.match(js, /for \(const m of MODES\) \{\n[\s\S]*?document\.createElement\("button"\)[\s\S]*?\$\("buttons"\)\.appendChild\(b\);[\s\S]*?\n\}/);
+  // two modes, then the pin, then the other two, each appended to #buttons in that order
+  const i = js.indexOf("MODES.slice(0, 2).forEach(addButton);"), j = js.indexOf('$("buttons").appendChild(pin);'), k = js.indexOf("MODES.slice(2).forEach(addButton);");
+  assert.ok(i > 0 && j > i && k > j, "Claude pair, pin, Codex pair");
+  assert.match(js, /const addButton = \(m\) => \{[\s\S]*?document\.createElement\("button"\)[\s\S]*?\$\("buttons"\)\.appendChild\(b\);[\s\S]*?\n\};/);
   assert.ok(!/tabindex/i.test(h) && !/tabindex/i.test(js), "no tabindex anywhere: focus follows document order");
   assert.ok(!/<button[^>]*class="mode/.test(h), "the buttons are not also written by hand in the markup");
   assert.match(css, /#buttons \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
   // no style that places a button anywhere but its natural cell
-  const rules = [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => /#buttons|button\.(mode|claude-|codex-|temp)/.test(m[1])).map((m) => m[2]).join(";");
+  const rules = [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => /#buttons|button\.(mode|claude-|codex-|action)/.test(m[1])).map((m) => m[2]).join(";");
   assert.ok(rules.length > 500, "the button rules were found");
   for (const re of [/(?<![-\w])order\s*:/, /grid-(column|row|area)/, /row-reverse|column-reverse/, /(?<![-\w])direction\s*:/, /grid-auto-flow\s*:[^;]*dense/]) {
     assert.ok(!re.test(rules), `a rule reorders the buttons: ${re}`);
   }
 });
 
+test("the pin: an inline white SVG drop pin with a round hole, label and tooltip \"Summarize this page\", an action (never aria-pressed)", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
+  const svg = js.match(/const PIN_ICON = '(<svg[^']*<\/svg>)'/)[1];
+  assert.match(svg, /fill="#ffffff"/);
+  assert.match(svg, /fill-rule="evenodd"/);
+  assert.ok(!/stroke|<image|<img|href=/.test(svg), "solid, inline, nothing external");
+  // one outer outline (a round head, a pointed foot) and one small round hole (an arc pair of radius 2.5), cut out by evenodd
+  assert.equal((svg.match(/M/g) || []).length, 2, "two subpaths: the pin and its hole");
+  assert.match(svg, /a2\.5 2\.5 0 1 1 0-5 2\.5 2\.5 0 0 1 0 5Z/);
+  assert.match(js, /pin\.setAttribute\("aria-label", "Summarize this page"\)/);
+  assert.match(js, /pin\.title = "Summarize this page"/);
+  assert.ok(!/pin\.setAttribute\("aria-pressed"/.test(js), "the pin is never marked pressed");
+  assert.match(js, /pin\.className = "mode action"/);
+  assert.match(js, /pin\.addEventListener\("click", \(\) => \{ ctl\.summarizePage\(\); \}\)/);
+  // the pressed look belongs to [aria-pressed="true"], which the pin never has; it is the same black square as the modes
+  assert.ok(!/button\.action[^{]*\{[^}]*(translateY\(3px\)|inset 0 4px)/.test(css));
+  assert.match(css, /button\.mode \{[^}]*background: var\(--mode-bg\)/);
+});
+
 test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.equal(m.manifest_version, 3);
-  assert.deepEqual([...m.permissions].sort(), ["clipboardWrite", "contextMenus", "sidePanel", "storage"]);
+  assert.deepEqual([...m.permissions].sort(), ["contextMenus", "sidePanel", "storage"]);
+  // the pin button reads the active tab's address through "tabs", asked for once, in a click, never at install
+  assert.deepEqual(m.optional_permissions, ["tabs"]);
+  assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab") && !m.permissions.includes("clipboardWrite"));
   assert.ok(m.key && m.key.length > 300);
   assert.equal(m.content_scripts, undefined);
   assert.ok(!JSON.stringify(m).includes("<all_urls>"));
@@ -126,14 +150,14 @@ test("typed links: trimmed, bare hosts get https, junk and non-http refused", ()
   for (const bad of ["", "   ", "hello world", "javascript:alert(1)", "file:///etc/passwd", "ftp://x.test/a", "chrome://extensions", "justoneword"]) assert.equal(normalizeTyped(bad), null, bad);
 });
 
-test("panel has the URL field (placeholder, Go button, form submit) and the manifest adds no clipboardRead", () => {
+test("panel has the URL field (placeholder, Go button, form submit) and the manifest adds no clipboard permission", () => {
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   assert.match(h, /<form id="urlform"/);
   assert.match(h, /id="urlinput"[^>]*placeholder="Paste a link"/);
   assert.match(h, /<button id="go" type="submit">Go<\/button>/);
-  assert.ok(h.indexOf('id="urlform"') < h.indexOf('id="buttons"'), "field is above the five buttons");
+  assert.ok(h.indexOf('id="urlform"') < h.indexOf('id="buttons"'), "field is above the buttons");
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
-  assert.ok(!m.permissions.includes("clipboardRead"));
+  assert.ok(!m.permissions.some((p) => /^clipboard/.test(p)));
 });
 
 test("panel has the question box below the result, a mic button next to it, and the Enable microphone button", () => {

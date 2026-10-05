@@ -39,6 +39,9 @@ export class Browser {
       `Needed until: ${needed}\nCostly to recreate: no.\n`);
     const flags = ["--user-data-dir=" + path.join(this.dir, "profile"), "--remote-debugging-pipe", "--enable-unsafe-extension-debugging",
       "--no-first-run", "--no-default-browser-check", "--disable-sync", "--password-store=basic", "--use-mock-keychain",
+      // DIPDIVE_CHROME_NO_SANDBOX=1 for a shell that is itself inside a macOS sandbox (Chrome's own seatbelt cannot nest and
+      // it exits at start); the profile is a throwaway one and only local test pages and the extension are loaded.
+      ...(process.env.DIPDIVE_CHROME_NO_SANDBOX ? ["--no-sandbox"] : []),
       ...(headless ? ["--headless=new"] : []), ...args, "about:blank"];
     this.proc = spawn(CHROME, flags, { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
     fs.writeFileSync(path.join(this.dir, "pid"), String(this.proc.pid));

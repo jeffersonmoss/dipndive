@@ -37,11 +37,15 @@ export function installShim() {
   window.chrome = {
     storage: { local, onChanged: { addListener: (l) => listeners.push(l) } },
     windows: { getCurrent: async () => ({ id: Number(q.get("win") || 1) }) },
-    tabs: { create: ({ url }) => { window.__lastTab = url; } },
+    // The pin button's two calls. ?tab=<address> is the "active tab" (window.__devTab can change it later; an empty one means
+    // no tab), ?perm=denied answers the tabs permission request with false. window.__permAsks counts the requests.
+    tabs: { create: ({ url }) => { window.__lastTab = url; }, query: async () => (window.__devTab ? [{ id: 1, url: window.__devTab }] : []) },
+    permissions: { request: async () => { window.__permAsks = (window.__permAsks || 0) + 1; return q.get("perm") !== "denied"; } },
     __dev: true,
   };
   if (q.get("base")) localStorage.setItem(PREFIX + "base", JSON.stringify(q.get("base")));
   if (q.get("token")) localStorage.setItem(PREFIX + "token", JSON.stringify(q.get("token")));
+  window.__devTab = q.get("tab") || "";
   if (q.get("health")) window.__devHealth = q.get("health");
   if (q.get("mode")) localStorage.setItem(PREFIX + "mode", JSON.stringify(q.get("mode")));
   // ?mic=granted|prompt|denied|none and optional &say=words: a scripted SpeechRecognition and a fake permission state,

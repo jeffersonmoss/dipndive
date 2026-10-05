@@ -8,8 +8,10 @@
   "permissions": [
     "contextMenus",
     "sidePanel",
-    "storage",
-    "clipboardWrite"
+    "storage"
+  ],
+  "optional_permissions": [
+    "tabs"
   ],
   "optional_host_permissions": [
     "https://*.ts.net/*",

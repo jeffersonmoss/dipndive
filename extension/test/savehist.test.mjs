@@ -35,11 +35,7 @@ test("the box shows what the companion says after the panel is reopened", async 
   assert.equal(r.state.last.saved, false);
 });
 
-test("no box state for Temp chat, an unfinished job, or a summary without a log entry; and no request", async () => {
-  const t = rig({ slot: slot(), mode: "temp" });
-  await done(t);
-  assert.equal(t.state.last.saved, null);
-  assert.equal(await t.c.setSaved(false), false);
+test("no box state for an unfinished job or a summary without a log entry; and no request", async () => {
   const busy = rig({ slot: slot(), mode: "claude-dip" });
   await busy.c.init(1);
   assert.equal(busy.state.last.result, null);
@@ -51,7 +47,7 @@ test("no box state for Temp chat, an unfinished job, or a summary without a log 
   assert.equal(nolog.state.last.result, "Summary for claude-dip");
   assert.equal(nolog.state.last.saved, null);
   assert.equal(await nolog.c.setSaved(false), false);
-  for (const r of [t, busy, nolog]) assert.deepEqual(saves(r), []);
+  for (const r of [busy, nolog]) assert.deepEqual(saves(r), []);
 });
 
 test("a refusal or an unreachable companion puts the box back; a gone entry hides it", async () => {
@@ -178,7 +174,7 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /\$\("savehist"\)\.addEventListener\("change", \(\) => ctl\.setSaved\(\$\("savehist"\)\.checked\)\)/);
   assert.match(js, /Save this \$\{s\.mode\.endsWith\("-dive"\) \? "Dive" : "Dip"\} to history/);
-  assert.match(js, /const show = s\.configured && s\.mode !== "temp" && !!s\.result && typeof s\.saved === "boolean";/);
+  assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
   const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
   assert.match(opts, /<button id="clear"[^>]*>Clear history<\/button>/);
   assert.match(opts, /<div id="clearconfirm"[^>]*hidden>/);
@@ -205,7 +201,7 @@ test("colours: the mode, History and Ask buttons are black and Speak is white, i
   assert.match(pressed, /transform: translateY\(3px\)/);
   assert.match(pressed, /border-color: var\(--rim\)/);
   assert.match(pressed, /var\(--glow\)/);
-  for (const m of ["claude-dive, button\\.claude-dip", "codex-dive, button\\.codex-dip", "temp"]) assert.match(css, new RegExp(`button\\.${m} +\\{ --rim: #[0-9A-Fa-f]{6}; --glow:`));
+  for (const m of ["claude-dive, button\\.claude-dip", "codex-dive, button\\.codex-dip"]) assert.match(css, new RegExp(`button\\.${m} +\\{ --rim: #[0-9A-Fa-f]{6}; --glow:`));
   for (const [sheet, sel] of [[css, "\\.iconbtn"], [page, "\\.hentry"], [page, "#search"], [page, "header#top"]]) {
     const rule = sheet.match(new RegExp(`${sel} \\{([^}]*)\\}`))[1];
     assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(rule), `${sel} uses tokens: ${rule}`);
@@ -271,9 +267,7 @@ test("every logo stands out from its black button: Dive by at least 3:1, the dar
     assert.ok(solid > 100 && faded === solid, `${n}-dip is the Dive logo at about half opacity (${faded} of ${solid} solid pixels)`);
   }
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
-  assert.match(js, /temp: '<svg[^']*stroke="#ffffff"[^']*stroke-dasharray/, "Temp chat: a white dotted speech bubble (21:1 on black)");
-  assert.match(js, /temp: '<svg[^']*<path d="M7\.9 20A9 9 0 1 0 4 16\.1L2 22Z"/, "round (a circle with a small tail, like ChatGPT's temporary chat), not a rectangle");
-  assert.ok(!/temp: '[^']*h13a2\.5/.test(js), "the old rectangular bubble is gone");
+  assert.ok(!/temp/i.test(js.replace(/template/gi, "")), "no Temp chat leftovers in the panel");
   assert.match(js, /<span class="sr-only">\$\{m\.label\}<\/span>/, "each button keeps its name");
 });
 

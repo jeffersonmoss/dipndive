@@ -56,8 +56,8 @@ export function capHistory(turns, lim = ASK_LIMITS) {
   return out.reverse();
 }
 
-// The ask follows the pressed button: Claude buttons ask Claude, Codex buttons ask Codex. Temp chat has no model of
-// its own, so it asks Codex unless /health says Codex is unavailable (codexOk === false), then Claude.
+// The ask follows the pressed button: Claude buttons ask Claude, Codex buttons ask Codex. When /health says Codex is
+// unavailable (codexOk === false), a Codex button asks Claude instead.
 export function askProvider(mode, codexOk) {
   if (String(mode).startsWith("claude")) return "claude";
   return codexOk === false ? "claude" : "codex";

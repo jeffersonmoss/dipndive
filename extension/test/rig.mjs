@@ -35,9 +35,9 @@ export function makePermissions(state = "granted") {
 
 // Two panels can share one fake companion (`server`) and one storage (`shared`); with a `bus` array every storage write is
 // delivered to every controller on it (the writer included), the way chrome.storage.onChanged reaches every window.
-export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions, server: sharedServer, bus } = {}) {
+export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions, server: sharedServer, bus, tab, tabsGrant } = {}) {
   const store = shared || { ...cfg, ...(mode ? { mode } : {}), ...(slot ? { [slotKey(1)]: slot } : {}) };
-  const log = { fetches: [], tabs: [], clip: [], order: [] };
+  const log = { fetches: [], tabs: [], order: [], tabAsks: 0, tabQueries: [] };
   const timers = [];
   const vtimers = [];
   const state = { last: null };
@@ -115,7 +115,13 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
                  for (const x of bus || []) x.onStorageChange(ch, "local");
                } },
     fetch: fetchImpl,
-    clipboard: { writeText: async (t) => { if (server.clipFail) throw new Error("denied"); log.order.push("clip"); log.clip.push(t); } },
+    // The pin button's two calls. `tabsGrant` false: the person refuses the permission prompt (it is asked on every click until
+    // granted, like Chrome); `tab`: the active tab ({ url } like chrome.tabs.query's first result), null for no tab. A tab's url
+    // is only visible once the permission is held, as in Chrome.
+    tabs: {
+      requestAccess: async () => { log.order.push("ask"); log.tabAsks++; if (tabsGrant === false) return false; if (typeof tabsGrant === "function") return tabsGrant(); return true; },
+      activeTab: async (w) => { log.order.push("query"); log.tabQueries.push(w); return tab === undefined ? { id: 1, url: "https://v.test/page" } : tab; },
+    },
     openTab: (u) => { log.order.push("tab"); log.tabs.push(u); },
     uuid: (() => { let n = 0; return () => `uuid-${++n}`; })(),
     setTimer: (f) => { timers.push(f); return timers.length; },
