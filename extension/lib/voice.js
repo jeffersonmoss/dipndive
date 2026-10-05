@@ -1,7 +1,7 @@
-// Speech input for the question box: a click-to-start, click-to-stop state machine around webkitSpeechRecognition.
+// Speech input for the question box: click to start and pause a webkitSpeechRecognition session.
 // DOM-free (everything is injected) so it can be tested with a mocked SpeechRecognition.
 //
-// States: idle -> starting -> listening -> stopping -> idle. Click once to start, click again to stop; the recognized
+// States: idle -> starting -> listening -> stopping -> idle. Click once to start, click again to pause; the recognized
 // text stays in the question box until the user explicitly asks. Errors become one actionable line (message).
 import { SYSTEM_BLOCK_HELP } from "./micerrors.js";
 
@@ -128,7 +128,7 @@ export class VoiceInput {
       rec = new this.SR();
       rec.lang = this.d.lang;
       rec.interimResults = true;
-      rec.continuous = true;   // keep listening through pauses; the second click ends the recording
+      rec.continuous = true;   // keep listening through pauses; the second click pauses the recording
       rec.maxAlternatives = 1;
     } catch { this._fail(sid, "start-failed"); return; }
     this.rec = rec;

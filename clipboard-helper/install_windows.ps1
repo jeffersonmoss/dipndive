@@ -10,7 +10,10 @@ $ConfigPath = Join-Path $ConfigDirectory 'clipboard-helper.json'
 $HelperPath = Join-Path $PSScriptRoot 'windows_clipboard_helper.ps1'
 $TaskName = 'DipDive Clipboard Helper'
 
-if ($BaseUrl -notmatch '^https?://[^\s]+$' -or $BaseUrl -match '[\x00-\x20\x7f]') { throw 'BaseUrl must be an http or https URL without whitespace.' }
+if ($BaseUrl -notmatch '^https?://[^\s]+$' -or $BaseUrl -match '[\p{Cc}\p{Cf}]|\\') { throw 'BaseUrl must be a valid secure URL.' }
+$BaseUri = [Uri]$BaseUrl
+if (($BaseUri.Scheme -ne 'https' -and -not ($BaseUri.IsLoopback -or $BaseUri.Host.EndsWith('.ts.net', [StringComparison]::OrdinalIgnoreCase))) -or
+    $BaseUri.Query -or $BaseUri.Fragment) { throw 'BaseUrl must use https, except loopback or *.ts.net.' }
 if ($TokenFile) {
     $Token = (Get-Content -LiteralPath $TokenFile -Raw).Trim()
 } else {
@@ -35,11 +38,13 @@ Set-Acl -LiteralPath $ConfigPath -AclObject $Acl
 $Token = $null
 $Json = $null
 
-$PowerShell = Join-Path $PSHOME 'powershell.exe'
+$PowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $HelperPath + '" -ConfigPath "' + $ConfigPath + '"'
 $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Arguments
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $Identity
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
 Write-Output ('Installed Dip''n''Dive clipboard helper for ' + $Machine + '.')

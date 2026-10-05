@@ -420,7 +420,9 @@ test("answers are rendered by the safe renderer and questions are plain text in 
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /qe\.textContent = q;/, "the question goes in as text");
   assert.match(js, /ae\.innerHTML = html/);
-  assert.match(js, /addEventListener\("keydown", \(e\) => \{\s*if \(e\.key === "Escape"\)/);
+  assert.match(js, /document\.addEventListener\("keydown", \(e\) => \{\s*if \(e\.key === "Escape" && !ctl\.s\.asking/);
+  assert.match(js, /\$\("mic"\)\.addEventListener\("keydown", \(e\) => \{ if \(e\.key === "Enter"\) e\.preventDefault\(\); \}\)/);
+  assert.match(js, /await ctl\.toggleMic\(\); \$\("askinput"\)\.focus\(\)/);
   assert.match(js, /box\.readOnly = live/);
   assert.match(js, /preserveSelection/);
   assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
@@ -658,13 +660,19 @@ test("Escape cancels listening and typing without sending, while keeping earlier
   assert.deepEqual(r.state.last.thread, thread);
 });
 
-test("Escape clears the question and mic message in idle, STARTING and STOPPING states", async () => {
+test("Escape preserves idle microphone guidance and cancels STARTING and STOPPING states", async () => {
   const idle = await micReady();
   idle.r.c.typed("discard this");
-  idle.r.c.voice._set({ message: "Stopped after a long pause. Click Ask to send what was heard, or click the mic to add more." });
+  idle.r.c.voice._set({ message: "Microphone is off. Click Enable microphone, allow it in the new tab, then come back here.", needPermission: true });
   idle.r.c.cancelQuestion();
   assert.equal(idle.r.state.last.draft, "");
-  assert.equal(idle.r.state.last.mic.message, "");
+  assert.equal(idle.r.state.last.mic.message, "Microphone is off. Click Enable microphone, allow it in the new tab, then come back here.");
+  assert.equal(idle.r.state.last.mic.needPermission, true);
+
+  const unavailable = rig({ slot: slot(), mode: "claude-dip" });
+  await unavailable.c.init(1);
+  unavailable.c.cancelQuestion();
+  assert.match(unavailable.state.last.mic.message, /not available in this browser/);
 
   const starting = await micReady();
   const startPromise = starting.r.c.toggleMic();

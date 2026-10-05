@@ -212,10 +212,11 @@ for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () =>
 pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click
 $("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion(); });
 $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
-$("askinput").addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { e.preventDefault(); ctl.cancelQuestion(); }
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !ctl.s.asking && !$("askform").hidden) { e.preventDefault(); ctl.cancelQuestion(); }
 });
-$("mic").addEventListener("click", () => ctl.toggleMic());
+$("mic").addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+$("mic").addEventListener("click", async () => { await ctl.toggleMic(); $("askinput").focus(); });
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
 window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log

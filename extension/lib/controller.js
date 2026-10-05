@@ -67,7 +67,7 @@ export class Controller {
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
       mic: null,
-      clipboardMachines: [...CLIPBOARD_MACHINES], clipboardStatus: "",
+      clipboardMachines: [...CLIPBOARD_MACHINES], clipboardStatus: "", clipboardSending: false,
     };
     this.voice = new VoiceInput({
       SpeechRecognition: deps.speech || null,
@@ -147,7 +147,7 @@ export class Controller {
     const isNew = !this.slot || this.slot.requestId !== slot.requestId;
     const prev = this.slot;
     this.slot = slot;
-    this.emit({ source: { url: slot.url } });
+    this.emit({ source: { url: slot.url }, ...(isNew ? { clipboardStatus: "" } : {}) });
     if (!isNew) return;
     // The question thread belongs to one source: another source starts a fresh one.
     if (!prev || sourceKey(prev.url) !== sourceKey(slot.url)) this.resetAsk();
@@ -261,25 +261,33 @@ export class Controller {
   async sendToClipboard(writeLocal) {
     const url = this.s.source && this.s.source.url;
     const selected = validClipboardSet(this.s.clipboardMachines);
-    if (!url || !selected.length) return false;
+    if (!url || this.s.clipboardSending) return false;
+    if (url.length > 2048) { this.emit({ clipboardStatus: "This URL is too long to send (maximum 2048 characters)." }); return false; }
+    if (!selected.length) { this.emit({ clipboardStatus: "Pick at least one computer." }); return false; }
+    this.emit({ clipboardSending: true, clipboardStatus: "Sending..." });
     const local = this.s.computerName;
     const localSelected = !!local && selected.includes(local);
-    const remote = selected.filter((m) => !localSelected || m !== local);
+    let queued = selected.filter((m) => !localSelected || m !== local);
     const failures = [];
+    let localSent = false;
     if (localSelected) {
-      try { await writeLocal(url); } catch { failures.push(local); }
+      try { await writeLocal(url); localSent = true; } catch { queued = [...selected]; }
     }
-    if (remote.length) {
+    let unauthorized = false;
+    if (queued.length) {
       try {
-        const r = await request(this.d.fetch, this.cfg, "POST", "/clipboard", { url, machines: remote }, 5000);
-        if (r.status >= 400) failures.push(...remote);
-      } catch { failures.push(...remote); }
+        const r = await request(this.d.fetch, this.cfg, "POST", "/clipboard", { url, machines: queued }, 5000);
+        if (r.status === 401) unauthorized = true;
+        else if (r.status >= 400) failures.push(...queued);
+      } catch { failures.push(...queued); }
     }
-    const sent = selected.filter((m) => !failures.includes(m));
     const label = (m) => ({ "thing-1": "Thing 1", "thing-2": "Thing 2", imac: "iMac", win: "Win" })[m];
-    const status = [sent.length ? `Sent to ${sent.map(label).join(", ")}` : "", failures.length ? `Failed to queue for ${failures.map(label).join(", ")}` : ""].filter(Boolean).join(". ");
-    this.emit({ clipboardStatus: status || "No machines selected." });
-    return failures.length === 0;
+    const status = unauthorized ? "Companion token was rejected. Check the token in extension Options."
+      : [queued.length && failures.length < queued.length ? `Queued for ${queued.filter((m) => !failures.includes(m)).map(label).join(", ")} (expires in 15 min)` : "",
+         localSent ? `Sent to ${label(local)}` : "",
+         failures.length ? `Failed to queue for ${failures.map(label).join(", ")}` : ""].filter(Boolean).join(". ");
+    this.emit({ clipboardStatus: status || (failures.length ? "Could not send to the selected computers." : ""), clipboardSending: false });
+    return failures.length === 0 && !unauthorized;
   }
 
   async selectMode(id) {
@@ -301,7 +309,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, pinError: null,
+    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, pinError: null, clipboardStatus: "",
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
@@ -652,7 +660,7 @@ export class Controller {
 
   cancelQuestion() {
     this.pendingMicAsk = false;
-    this.voice.cancel();
+    if (this.s.mic.state !== MIC.IDLE) this.voice.cancel();
     this.micBaseText = "";
     this.emit({ draft: "", draftSeq: this.s.draftSeq + 1, askError: null });
   }

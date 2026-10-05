@@ -448,16 +448,19 @@ class Round2(Base):
 
 class Round3(Base):
     def test_health_reports_codex_readiness_fields(self):  # finding 12 (server side)
-        saved = models.CODEX_HOME
-        models.CODEX_HOME = os.path.join(_SUP, "codex-home")
+        saved_model_home, saved_service_home = models.CODEX_HOME, service.CODEX_HOME
+        empty_home = os.path.join(_SUP, "codex-health-empty-home")
+        shutil.rmtree(empty_home, ignore_errors=True)
+        models.CODEX_HOME = service.CODEX_HOME = empty_home
         try:
             h = self.svc._compute_health()
         finally:
-            models.CODEX_HOME = saved
+            models.CODEX_HOME, service.CODEX_HOME = saved_model_home, saved_service_home
         for k in ("codex_logged_in", "codex_isolation_ok", "codex_isolation_error", "codex_ready"):
             self.assertIn(k, h)
         self.assertEqual(h["codex_ready"], bool(h["codex_logged_in"] and h["codex_isolation_ok"]))
         self.assertFalse(h["codex_logged_in"])  # no DipDive Codex login exists in the test home
+        self.assertTrue(os.path.isfile(os.path.join(empty_home, "config.toml")))
 
 
 class StaleClearGeneration(Base):

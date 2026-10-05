@@ -14,6 +14,7 @@ def main():
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     (Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist")).unlink(missing_ok=True)
     (Path.home() / "Library" / "Application Support" / "DipDive" / "clipboard-helper.json").unlink(missing_ok=True)
+    (Path.home() / "Library" / "Application Support" / "DipDive" / "mac_clipboard_helper.py").unlink(missing_ok=True)
     print("Removed Dip'n'Dive clipboard helper.")
 
 

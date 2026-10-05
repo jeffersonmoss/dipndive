@@ -35,6 +35,8 @@ test("rendered row reflects its saved checks and disables its button without a s
   renderClipboardRow({ button, status, inputs }, { source: { url: "https://example.com" }, clipboardStatus: "Sent to Win", clipboardMachines: ["win"] });
   assert.equal(button.disabled, false);
   assert.equal(status.textContent, "Sent to Win");
+  renderClipboardRow({ button, status, inputs }, { source: { url: "https://example.com" }, clipboardStatus: "Sending...", clipboardSending: true, clipboardMachines: ["win"] });
+  assert.equal(button.disabled, true);
 });
 
 test("no source means sending is disabled and does nothing", async () => {
@@ -60,7 +62,7 @@ test("local target gets the exact source URL and mailbox receives only other che
   const post = r.log.fetches.find((f) => f.path === "/clipboard");
   assert.equal(post.auth, "Bearer " + "t".repeat(40));
   assert.deepEqual(post.body, { url: "https://v.test/watch", machines: ["thing-2", "imac", "win"] });
-  assert.equal(r.state.last.clipboardStatus, "Sent to Thing 2, Thing 1, iMac, Win");
+  assert.equal(r.state.last.clipboardStatus, "Queued for Thing 2, iMac, Win (expires in 15 min). Sent to Thing 1");
 });
 
 test("when this computer is not set, every selected machine is posted to the mailbox", async () => {
@@ -71,11 +73,52 @@ test("when this computer is not set, every selected machine is posted to the mai
   assert.deepEqual(body, { url: "https://v.test/watch", machines: ["thing-2", "thing-1", "imac", "win"] });
 });
 
-test("local clipboard failure reports the failed machine and successful queues", async () => {
+test("local clipboard failure falls back to the mailbox", async () => {
   const r = await initialized({ shared: { base: "http://c.test", token: "t".repeat(40), computerName: "thing-2", "slot:1": slot() } });
-  r.c.d.fetch = async () => ({ status: 202, json: async () => ({}) });
-  assert.equal(await r.c.sendToClipboard(async () => { throw new Error("denied"); }), false);
-  assert.equal(r.state.last.clipboardStatus, "Sent to Thing 1, iMac, Win. Failed to queue for Thing 2");
+  let body;
+  r.c.d.fetch = async (_url, init) => { body = JSON.parse(init.body); return { status: 202, json: async () => ({}) }; };
+  assert.equal(await r.c.sendToClipboard(async () => { throw new Error("denied"); }), true);
+  assert.deepEqual(body.machines, ["thing-2", "thing-1", "imac", "win"]);
+  assert.equal(r.state.last.clipboardStatus, "Queued for Thing 2, Thing 1, iMac, Win (expires in 15 min)");
+});
+
+test("no checked machines, long URLs, and unauthorized tokens have clear statuses", async () => {
+  const r = await initialized();
+  await r.c.setClipboardMachines([]);
+  assert.equal(await r.c.sendToClipboard(async () => assert.fail("nothing selected")), false);
+  assert.equal(r.state.last.clipboardStatus, "Pick at least one computer.");
+  await r.c.setClipboardMachines(["win"]);
+  r.c.s.source = { url: "https://example.com/" + "x".repeat(2050) };
+  assert.equal(await r.c.sendToClipboard(async () => assert.fail("URL is too long")), false);
+  assert.match(r.state.last.clipboardStatus, /maximum 2048 characters/);
+  r.c.s.source = { url: "https://v.test/watch" };
+  r.c.d.fetch = async () => ({ status: 401, json: async () => ({}) });
+  assert.equal(await r.c.sendToClipboard(async () => {}), false);
+  assert.match(r.state.last.clipboardStatus, /token was rejected/);
+});
+
+test("clipboard sending disables the action and prevents duplicate mailbox posts", async () => {
+  const r = await initialized();
+  let release;
+  let posts = 0;
+  r.c.d.fetch = async () => { posts++; return new Promise((resolve) => { release = () => resolve({ status: 202, json: async () => ({}) }); }); };
+  const first = r.c.sendToClipboard(async () => {});
+  assert.equal(r.state.last.clipboardSending, true);
+  assert.equal(await r.c.sendToClipboard(async () => {}), false);
+  assert.equal(posts, 1);
+  release();
+  assert.equal(await first, true);
+  assert.equal(r.state.last.clipboardSending, false);
+});
+
+test("clipboard status clears when the source changes or the view resets", async () => {
+  const r = await initialized();
+  r.c.emit({ clipboardStatus: "old result" });
+  await r.c.onSlot(slot({ url: "https://other.test/page", requestId: "new-request" }));
+  assert.equal(r.state.last.clipboardStatus, "");
+  r.c.emit({ clipboardStatus: "old result" });
+  r.c.resetView();
+  assert.equal(r.state.last.clipboardStatus, "");
 });
 
 test("unconfigured computer queues every checked target and the Options setting persists", async () => {

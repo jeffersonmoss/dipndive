@@ -75,7 +75,7 @@ class ClipboardMailbox(unittest.TestCase):
             return error.code, json.loads(raw) if raw else None
 
     def enqueue(self, url="https://example.com/article", machines=None):
-        return self.request("POST", "/clipboard", {"url": url, "machines": machines or ["thing-1"]})
+        return self.request("POST", "/clipboard", {"url": url, "machines": machines if machines is not None else ["thing-1"]})
 
     def next(self, machine="thing-1"):
         return self.request("GET", "/clipboard/next?machine=" + machine)
@@ -92,7 +92,8 @@ class ClipboardMailbox(unittest.TestCase):
         good = "https://example.com/a"
         for url in ("file:///tmp/a", "ftp://example.com", "https://", "http://example.com:bad/path", "https://example.com/a b",
                     "https://example.com/\u0085",
-                    "https://example.com/\nheader", "https://example.com/\x00", "https://example.com/" + "a" * 2040):
+                    "https://example.com/\nheader", "https://example.com/\x00", "https://example.com/\u200b",
+                    "https://example.com/a\\b", "http:foo", "https://example.com/" + "a" * 2040):
             with self.subTest(url=url[:40]):
                 self.assertEqual(self.enqueue(url)[0], 400)
         for machines in ([], ["other"], ["imac", "unknown"], ["win", "win"], "imac"):
@@ -111,6 +112,21 @@ class ClipboardMailbox(unittest.TestCase):
         with open(path, "w") as f:
             json.dump(queues, f)
         self.assertEqual(self.next()[1], {"url": "https://example.com/second"})
+        self.assertEqual(self.next()[0], 204)
+
+    def test_stale_backlog_is_skipped_and_empty_poll_does_not_write_queue(self):
+        path = self.svc.clipboard_path
+        self.assertIsNone(self.svc.take_clipboard("thing-1"))
+        self.assertFalse(os.path.exists(path))
+        self.enqueue("https://example.com/old")
+        self.enqueue("https://example.com/new")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with open(path) as f:
+            queues = json.load(f)
+        queues["thing-1"][0]["created"] = time.time() - 121
+        with open(path, "w") as f:
+            json.dump(queues, f)
+        self.assertEqual(self.next()[1], {"url": "https://example.com/new"})
         self.assertEqual(self.next()[0], 204)
 
     def test_per_machine_isolation(self):

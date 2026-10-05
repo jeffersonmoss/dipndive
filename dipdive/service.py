@@ -8,6 +8,7 @@ import shutil
 import sys
 import threading
 import time
+import tempfile
 import uuid
 
 from . import ask, historylog, joblog
@@ -52,9 +53,10 @@ def _read_json(path):
 
 
 def _atomic_write(path: str, obj):
-    tmp = f"{path}.{uuid.uuid4().hex[:6]}.tmp"
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix="DipDive atomic temporary ", suffix=".tmp", dir=directory)
     try:
-        with open(tmp, "w") as f:
+        with os.fdopen(fd, "w") as f:
             json.dump(obj, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
@@ -151,28 +153,39 @@ class Service:
         """Persist one expiring source URL for each machine, dropping oldest items over the cap."""
         now = time.time()
         with self.lock:
-            queues = self._read_clipboard_queues()
+            original = self._read_clipboard_queues()
+            queues = {machine: list(items) for machine, items in original.items()}
             for machine in CLIPBOARD_MACHINES:
                 queues[machine] = [item for item in queues[machine]
                                    if isinstance(item, dict) and isinstance(item.get("url"), str)
                                    and isinstance(item.get("expires"), (int, float)) and item["expires"] > now]
             for machine in machines:
-                queues[machine].append({"url": url, "expires": now + CLIPBOARD_TTL})
+                queues[machine].append({"url": url, "created": now, "expires": now + CLIPBOARD_TTL})
                 queues[machine] = queues[machine][-CLIPBOARD_CAP:]
-            _atomic_write(self.clipboard_path, queues)
+            if queues != original:
+                _atomic_write(self.clipboard_path, queues)
         return {"queued": list(machines)}
 
     def take_clipboard(self, machine):
         """Remove and return the oldest unexpired URL for one machine."""
         now = time.time()
         with self.lock:
-            queues = self._read_clipboard_queues()
+            original = self._read_clipboard_queues()
+            queues = {name: list(items) for name, items in original.items()}
             queue_for_machine = [item for item in queues[machine]
                                  if isinstance(item, dict) and isinstance(item.get("url"), str)
                                  and isinstance(item.get("expires"), (int, float)) and item["expires"] > now]
+            # A helper that was offline should receive the latest useful link, not replay an old backlog.
+            fresh = []
+            for item in queue_for_machine:
+                created = item.get("created", item["expires"] - CLIPBOARD_TTL)
+                if isinstance(created, (int, float)) and created >= now - 120:
+                    fresh.append(item)
+            queue_for_machine = fresh
             result = queue_for_machine.pop(0) if queue_for_machine else None
             queues[machine] = queue_for_machine
-            _atomic_write(self.clipboard_path, queues)
+            if queues != original:
+                _atomic_write(self.clipboard_path, queues)
             return {"url": result["url"]} if result else None
 
     def _read_clipboard_queues(self):

@@ -221,7 +221,8 @@ def make_handler(svc: Service, token: str):
                             parsed = urllib.parse.urlsplit(url)
                             port = parsed.port
                             valid_url = (parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
-                                         and not any(ch.isspace() or unicodedata.category(ch) == "Cc" for ch in url))
+                                         and not any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf")
+                                                     or ch == "\\" for ch in url))
                         except ValueError:
                             valid_url = False
                     if (not valid_url or not isinstance(machines, list) or not machines
