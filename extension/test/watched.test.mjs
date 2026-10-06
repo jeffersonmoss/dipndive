@@ -1,0 +1,208 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { registerWatchedRecorder, WATCHED_ALARM_PREFIX, WATCH_DELAY_MS, youtubeVideoId } from "../lib/watched.js";
+
+function mockChrome({ enabled = true, granted = true, storageDelay = 0 } = {}) {
+  const handlers = { updated: [], activated: [], removed: [], alarm: [], changed: [] };
+  const local = { base: "http://127.0.0.1:8765", token: "t".repeat(40), ...(enabled ? {} : { recordWatchedVideos: false }) };
+  const session = {};
+  const tabs = new Map();
+  const alarms = new Map();
+  const chrome = {
+    permissions: { contains: async () => granted },
+    storage: {
+      local: { get: async (keys) => keys == null ? { ...local } : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((k) => [k, local[k]])) },
+      session: {
+        get: async (key) => { if (storageDelay) await new Promise((r) => setTimeout(r, storageDelay)); return { [key]: session[key] }; },
+        set: async (o) => { if (storageDelay) await new Promise((r) => setTimeout(r, storageDelay)); Object.assign(session, o); },
+      },
+      onChanged: { addListener: (f) => handlers.changed.push(f) },
+    },
+    tabs: {
+      onUpdated: { addListener: (f) => handlers.updated.push(f) },
+      onActivated: { addListener: (f) => handlers.activated.push(f) },
+      onRemoved: { addListener: (f) => handlers.removed.push(f) },
+      get: async (id) => { if (!tabs.has(id)) throw new Error("closed"); return tabs.get(id); },
+      query: async () => [...tabs.values()],
+    },
+    alarms: {
+      create: (name, info) => alarms.set(name, info),
+      clear: (name) => alarms.delete(name),
+      onAlarm: { addListener: (f) => handlers.alarm.push(f) },
+    },
+  };
+  return { chrome, handlers, local, session, tabs, alarms };
+}
+
+const A = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const B = "https://www.youtube.com/watch?v=9bZkp7q19f0";
+const SHORTS = "https://www.youtube.com/shorts/9bZkp7q19f0";
+
+function harness(opts = {}) {
+  const m = mockChrome(opts), calls = [];
+  let now = 10_000;
+  const statuses = [...(opts.fetchStatuses || [])];
+  const rec = registerWatchedRecorder(m.chrome, { now: () => now, fetchImpl: async (url, init) => {
+    calls.push([url, JSON.parse(init.body)]);
+    return { status: url.endsWith("/watched") && statuses.length ? statuses.shift() : 202, json: async () => ({ queued: true }) };
+  } });
+  return { ...m, rec, calls, now: (v) => { now = v; } };
+}
+
+test("ordinary YouTube watch and short-link ids are recognized, Shorts and live URLs are skipped", () => {
+  assert.equal(youtubeVideoId(A), "dQw4w9WgXcQ");
+  assert.equal(youtubeVideoId(SHORTS), null);
+  assert.equal(youtubeVideoId("https://www.youtube.com/live/dQw4w9WgXcQ"), null);
+  assert.equal(youtubeVideoId("https://youtu.be/dQw4w9WgXcQ?t=4"), "dQw4w9WgXcQ");
+  assert.equal(youtubeVideoId("https://youtube.com/playlist?list=x"), null);
+});
+
+test("opening a new video id prefetches once; no save before 2 minutes and one save at 2 minutes", async () => {
+  const h = harness();
+  h.tabs.set(4, { id: 4, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(4));
+  assert.equal(h.alarms.get(`${WATCHED_ALARM_PREFIX}4`).when, 10_000 + WATCH_DELAY_MS);
+  await h.rec.observe({ ...h.tabs.get(4), title: "title update" });
+  assert.deepEqual(h.calls.map((x) => x[0]), ["http://127.0.0.1:8765/watched/prefetch"]);
+  h.now(129_999);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}4` });
+  assert.equal(h.calls.length, 1);
+  h.now(130_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}4` });
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}4` });
+  assert.deepEqual(h.calls.map((x) => x[0]), ["http://127.0.0.1:8765/watched/prefetch", "http://127.0.0.1:8765/watched"]);
+  assert.deepEqual(h.calls.map((x) => x[1]), [{ url: A }, { url: A }]);
+});
+
+test("concurrent tab observations preserve both pending visits", async () => {
+  const h = harness({ storageDelay: 5 });
+  await new Promise((r) => setTimeout(r, 30)); // finish startup reconciliation
+  const one = { id: 31, url: A, incognito: false };
+  const two = { id: 32, url: B, incognito: false };
+  h.tabs.set(one.id, one); h.tabs.set(two.id, two);
+  await Promise.all([h.rec.observe(one), h.rec.observe(two)]);
+  assert.deepEqual(Object.keys(h.session.watchedPending).sort(), ["31", "32"]);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await Promise.all([h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}31` }), h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}32` })]);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 2);
+});
+
+test("retryable watched POST failures re-arm and retry; only 200 or 202 completes", async () => {
+  const h = harness({ fetchStatuses: [429, 503, 202] });
+  const tab = { id: 51, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].reported, false);
+  assert.equal(h.session.watchedPending["51"].tries, 1);
+  assert.equal(h.alarms.get(`${WATCHED_ALARM_PREFIX}51`).when, 190_000);
+  h.now(190_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].tries, 2);
+  h.now(490_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].reported, true);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 3);
+});
+
+test("permanent watched POST failures are dropped without retry", async () => {
+  const h = harness({ fetchStatuses: [400] });
+  const tab = { id: 52, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}52` });
+  assert.equal(h.session.watchedPending["52"], undefined);
+  assert.equal(h.alarms.has(`${WATCHED_ALARM_PREFIX}52`), false);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 1);
+});
+
+test("a tab closed after qualification keeps a failed visit for retry", async () => {
+  const h = harness({ fetchStatuses: [503] });
+  const tab = { id: 53, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  h.tabs.delete(tab.id);
+  h.handlers.removed[0](tab.id);
+  await new Promise((r) => setImmediate(r));
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}53` });
+  assert.equal(h.session.watchedPending["53"].reported, false);
+  assert.equal(h.session.watchedPending["53"].tries, 1);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 1);
+});
+
+test("leaving or closing before 2 minutes sends no archive request", async () => {
+  const h = harness();
+  h.tabs.set(1, { id: 1, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(1));
+  h.tabs.set(1, { id: 1, url: "https://example.com/", incognito: false });
+  await h.rec.observe(h.tabs.get(1));
+  h.now(200_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}1` });
+  assert.deepEqual(h.calls.map((x) => x[0]), ["http://127.0.0.1:8765/watched/prefetch"]);
+
+  h.tabs.set(2, { id: 2, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(2));
+  h.handlers.removed[0](2);
+  await new Promise((r) => setImmediate(r));
+  h.now(400_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}2` });
+  assert.equal(h.calls.filter((x) => x[0].endsWith("/watched")).length, 0);
+});
+
+test("navigating to another video prefetches it and restarts the 2-minute save delay", async () => {
+  const h = harness();
+  h.tabs.set(3, { id: 3, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(3));
+  h.now(25_000);
+  h.tabs.set(3, { id: 3, url: B, incognito: false });
+  await h.rec.observe(h.tabs.get(3));
+  assert.equal(h.alarms.get(`${WATCHED_ALARM_PREFIX}3`).when, 145_000);
+  h.now(40_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}3` });
+  assert.equal(h.calls.filter((x) => x[0].endsWith("/watched")).length, 0);
+  h.now(145_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}3` });
+  assert.deepEqual(h.calls.map((x) => x[0]), ["http://127.0.0.1:8765/watched/prefetch", "http://127.0.0.1:8765/watched/prefetch", "http://127.0.0.1:8765/watched"]);
+});
+
+test("Shorts and live URLs are never sent", async () => {
+  const h = harness();
+  for (const [id, url] of [[10, SHORTS], [11, "https://www.youtube.com/live/dQw4w9WgXcQ"]]) {
+    h.tabs.set(id, { id, url, incognito: false });
+    await h.rec.observe(h.tabs.get(id));
+  }
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.alarms.size, 0);
+});
+
+test("incognito tabs and the disabled setting are ignored", async () => {
+  const h = harness();
+  h.tabs.set(2, { id: 2, url: A, incognito: true });
+  await h.rec.observe(h.tabs.get(2));
+  assert.equal(Object.keys(h.session.watchedPending || {}).length, 0);
+  h.local.recordWatchedVideos = false;
+  h.tabs.set(5, { id: 5, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(5));
+  assert.equal(Object.keys(h.session.watchedPending || {}).length, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test("a worker restart keeps the pending visit and due time in storage.session", async () => {
+  const h = harness();
+  h.tabs.set(8, { id: 8, url: A, incognito: false });
+  await h.rec.observe(h.tabs.get(8));
+  const saved = h.session.watchedPending["8"];
+  assert.equal(saved.due, 130_000);
+  const restarted = registerWatchedRecorder(h.chrome, { now: () => 130_000, fetchImpl: async (_url, init) => {
+    h.calls.push([_url, JSON.parse(init.body)]);
+    return { status: 202, json: async () => ({ queued: true }) };
+  } });
+  await new Promise((r) => setImmediate(r)); // let startup restore alarms and reconcile tabs
+  assert.equal(h.alarms.get(`${WATCHED_ALARM_PREFIX}8`).when, 130_000);
+  await restarted.onAlarm({ name: `${WATCHED_ALARM_PREFIX}8` });
+  assert.equal(h.calls.filter((x) => x[0].endsWith("/watched/prefetch")).length, 1);
+  assert.equal(h.calls.filter((x) => x[0].endsWith("/watched")).length, 1);
+});

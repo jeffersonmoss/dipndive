@@ -117,7 +117,7 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
 test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.equal(m.manifest_version, 3);
-  assert.deepEqual([...m.permissions].sort(), ["clipboardWrite", "contextMenus", "sidePanel", "storage"]);
+  assert.deepEqual([...m.permissions].sort(), ["alarms", "clipboardWrite", "contextMenus", "sidePanel", "storage"]);
   // the pin button reads the active tab's address through "tabs", asked for once, in a click, never at install
   assert.deepEqual(m.optional_permissions, ["tabs"]);
   assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab"));
