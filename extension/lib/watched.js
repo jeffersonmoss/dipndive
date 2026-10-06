@@ -22,6 +22,15 @@ export function youtubeVideoId(value) {
 export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch(...args), now = () => Date.now() } = {}) {
   if (!chrome.storage?.session || !chrome.permissions || !chrome.tabs) return null;
   const alarmName = (tabId) => `${WATCHED_ALARM_PREFIX}${tabId}`;
+  let stateTail = Promise.resolve();
+  const mutateState = (fn) => {
+    const operation = stateTail.then(async () => {
+      const state = await read();
+      return fn(state);
+    });
+    stateTail = operation.catch(() => {});
+    return operation;
+  };
   const hasPermission = async () => {
     try { return !!(await chrome.permissions.contains({ permissions: ["tabs"] })); }
     catch { return false; }
@@ -41,30 +50,35 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
 
   async function observe(tab) {
     if (!tab || tab.id == null) return;
-    const state = await read(), key = String(tab.id);
     if (tab.incognito || !await hasPermission() || !await enabled()) {
-      await clearTab(tab.id, state);
+      await mutateState((state) => clearTab(tab.id, state));
       return;
     }
     const videoId = youtubeVideoId(tab.url || "");
     if (!videoId) {
-      if (state[key]) await clearTab(tab.id, state);
+      await mutateState(async (state) => { if (state[String(tab.id)]) await clearTab(tab.id, state); });
       return;
     }
-    const current = state[key];
-    if (current && current.videoId === videoId) return; // Same video page; don't restart on title/status changes.
-    const entry = { videoId, url: tab.url, started: now(), due: now() + WATCH_DELAY_MS, reported: false };
-    state[key] = entry;
-    await write(state);
-    if (chrome.alarms) chrome.alarms.create(alarmName(tab.id), { when: entry.due });
+    const entry = await mutateState(async (state) => {
+      const key = String(tab.id), current = state[key];
+      if (current && current.videoId === videoId) return null; // Same video page; don't restart on title/status changes.
+      const fresh = { videoId, url: tab.url, started: now(), due: now() + WATCH_DELAY_MS, reported: false, tries: 0 };
+      state[key] = fresh;
+      await write(state);
+      if (chrome.alarms) chrome.alarms.create(alarmName(tab.id), { when: fresh.due });
+      return fresh;
+    });
+    if (!entry) return;
     await prefetch(entry);
   }
 
-  async function send(tabId, entry) {
+  async function send(entry) {
     const cfg = await chrome.storage.local.get(["base", "token"]);
-    if (!cfg.base || !cfg.token) return;
-    try { await request(fetchImpl, cfg, "POST", "/watched", { url: entry.url }); }
-    catch { /* The visit is reported once; a later visit can report again. */ }
+    if (!cfg.base || !cfg.token) return { status: 0, retryable: true };
+    try {
+      const response = await request(fetchImpl, cfg, "POST", "/watched", { url: entry.url });
+      return { status: response.status, retryable: response.status === 429 || response.status >= 500 };
+    } catch { return { status: 0, retryable: true }; }
   }
 
   async function prefetch(entry) {
@@ -78,22 +92,46 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
     if (!alarm?.name?.startsWith(WATCHED_ALARM_PREFIX)) return;
     const tabId = Number(alarm.name.slice(WATCHED_ALARM_PREFIX.length));
     if (!Number.isInteger(tabId) || !await hasPermission() || !await enabled()) return;
-    const state = await read(), entry = state[String(tabId)];
-    if (!entry || entry.reported) return;
-    if (now() < entry.due) {
-      if (chrome.alarms) chrome.alarms.create(alarmName(tabId), { when: entry.due });
-      return;
-    }
+    const entry = await mutateState(async (state) => {
+      const current = state[String(tabId)];
+      if (!current || current.reported) return null;
+      if (now() < current.due) {
+        if (chrome.alarms) chrome.alarms.create(alarmName(tabId), { when: current.due });
+        return null;
+      }
+      current.reported = true; // claim the attempt before the POST to suppress duplicate alarms
+      state[String(tabId)] = current;
+      await write(state);
+      return { ...current };
+    });
+    if (!entry) return;
     let tab;
-    try { tab = await chrome.tabs.get(tabId); } catch { await clearTab(tabId, state); return; }
-    if (!tab || tab.incognito || youtubeVideoId(tab.url || "") !== entry.videoId) {
-      await clearTab(tabId, state);
+    try { tab = await chrome.tabs.get(tabId); } catch {
+      // A closed tab only qualifies after the full delay; preserve it for a retry then.
+      if (now() < entry.due) await mutateState((state) => clearTab(tabId, state));
+      else tab = null;
+    }
+    if (tab && (tab.incognito || youtubeVideoId(tab.url || "") !== entry.videoId)) {
+      await mutateState((state) => clearTab(tabId, state));
       return;
     }
-    entry.reported = true;
-    state[String(tabId)] = entry;
-    await write(state); // persist before POST so a worker restart cannot duplicate the visit
-    await send(tabId, entry);
+    const result = await send(entry);
+    if (result.status === 200 || result.status === 202) return;
+    await mutateState(async (state) => {
+      const current = state[String(tabId)];
+      if (!current || current.videoId !== entry.videoId) return;
+      if (result.retryable && (current.tries || 0) < 3) {
+        const delays = [60_000, 300_000, 900_000];
+        current.reported = false;
+        current.tries = (current.tries || 0) + 1;
+        current.due = now() + delays[current.tries - 1];
+        state[String(tabId)] = current;
+        await write(state);
+        if (chrome.alarms) chrome.alarms.create(alarmName(tabId), { when: current.due });
+      } else {
+        await clearTab(tabId, state);
+      }
+    });
   }
 
   chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
@@ -103,12 +141,18 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
     if (!await hasPermission()) return;
     try { await observe(await chrome.tabs.get(tabId)); } catch { /* tab closed before lookup */ }
   });
-  chrome.tabs?.onRemoved?.addListener((tabId) => { void read().then((state) => clearTab(tabId, state)); });
+  chrome.tabs?.onRemoved?.addListener((tabId) => {
+    void mutateState(async (state) => {
+      const entry = state[String(tabId)];
+      if (entry && (entry.reported || now() >= entry.due)) return; // a qualified visit remains retryable
+      await clearTab(tabId, state);
+    });
+  });
   chrome.alarms?.onAlarm?.addListener((alarm) => { void onAlarm(alarm); });
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes.recordWatchedVideos) return;
     if (changes.recordWatchedVideos.newValue === false) {
-      void read().then(async (state) => {
+      void mutateState(async (state) => {
         for (const id of Object.keys(state)) if (chrome.alarms) chrome.alarms.clear(alarmName(Number(id)));
         await write({});
       });
@@ -122,11 +166,11 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
 
   // session storage survives service-worker restarts; restore alarms and reconcile current pages.
   void (async () => {
-    const state = await read();
     if (!await hasPermission() || !await enabled()) {
-      await write({});
+      await mutateState(async () => write({}));
       return;
     }
+    const state = await read();
     for (const [id, entry] of Object.entries(state)) {
       if (!entry.reported && chrome.alarms) chrome.alarms.create(alarmName(Number(id)), { when: entry.due });
     }

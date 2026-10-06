@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { registerWatchedRecorder, WATCHED_ALARM_PREFIX, WATCH_DELAY_MS, youtubeVideoId } from "../lib/watched.js";
 
-function mockChrome({ enabled = true, granted = true } = {}) {
+function mockChrome({ enabled = true, granted = true, storageDelay = 0 } = {}) {
   const handlers = { updated: [], activated: [], removed: [], alarm: [], changed: [] };
   const local = { base: "http://127.0.0.1:8765", token: "t".repeat(40), ...(enabled ? {} : { recordWatchedVideos: false }) };
   const session = {};
@@ -12,7 +12,10 @@ function mockChrome({ enabled = true, granted = true } = {}) {
     permissions: { contains: async () => granted },
     storage: {
       local: { get: async (keys) => keys == null ? { ...local } : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((k) => [k, local[k]])) },
-      session: { get: async (key) => ({ [key]: session[key] }), set: async (o) => Object.assign(session, o) },
+      session: {
+        get: async (key) => { if (storageDelay) await new Promise((r) => setTimeout(r, storageDelay)); return { [key]: session[key] }; },
+        set: async (o) => { if (storageDelay) await new Promise((r) => setTimeout(r, storageDelay)); Object.assign(session, o); },
+      },
       onChanged: { addListener: (f) => handlers.changed.push(f) },
     },
     tabs: {
@@ -38,9 +41,10 @@ const SHORTS = "https://www.youtube.com/shorts/9bZkp7q19f0";
 function harness(opts = {}) {
   const m = mockChrome(opts), calls = [];
   let now = 10_000;
+  const statuses = [...(opts.fetchStatuses || [])];
   const rec = registerWatchedRecorder(m.chrome, { now: () => now, fetchImpl: async (url, init) => {
     calls.push([url, JSON.parse(init.body)]);
-    return { status: 202, json: async () => ({ queued: true }) };
+    return { status: url.endsWith("/watched") && statuses.length ? statuses.shift() : 202, json: async () => ({ queued: true }) };
   } });
   return { ...m, rec, calls, now: (v) => { now = v; } };
 }
@@ -68,6 +72,65 @@ test("opening a new video id prefetches once; no save before 2 minutes and one s
   await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}4` });
   assert.deepEqual(h.calls.map((x) => x[0]), ["http://127.0.0.1:8765/watched/prefetch", "http://127.0.0.1:8765/watched"]);
   assert.deepEqual(h.calls.map((x) => x[1]), [{ url: A }, { url: A }]);
+});
+
+test("concurrent tab observations preserve both pending visits", async () => {
+  const h = harness({ storageDelay: 5 });
+  await new Promise((r) => setTimeout(r, 30)); // finish startup reconciliation
+  const one = { id: 31, url: A, incognito: false };
+  const two = { id: 32, url: B, incognito: false };
+  h.tabs.set(one.id, one); h.tabs.set(two.id, two);
+  await Promise.all([h.rec.observe(one), h.rec.observe(two)]);
+  assert.deepEqual(Object.keys(h.session.watchedPending).sort(), ["31", "32"]);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await Promise.all([h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}31` }), h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}32` })]);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 2);
+});
+
+test("retryable watched POST failures re-arm and retry; only 200 or 202 completes", async () => {
+  const h = harness({ fetchStatuses: [429, 503, 202] });
+  const tab = { id: 51, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].reported, false);
+  assert.equal(h.session.watchedPending["51"].tries, 1);
+  assert.equal(h.alarms.get(`${WATCHED_ALARM_PREFIX}51`).when, 190_000);
+  h.now(190_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].tries, 2);
+  h.now(490_000);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}51` });
+  assert.equal(h.session.watchedPending["51"].reported, true);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 3);
+});
+
+test("permanent watched POST failures are dropped without retry", async () => {
+  const h = harness({ fetchStatuses: [400] });
+  const tab = { id: 52, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}52` });
+  assert.equal(h.session.watchedPending["52"], undefined);
+  assert.equal(h.alarms.has(`${WATCHED_ALARM_PREFIX}52`), false);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 1);
+});
+
+test("a tab closed after qualification keeps a failed visit for retry", async () => {
+  const h = harness({ fetchStatuses: [503] });
+  const tab = { id: 53, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  h.now(10_000 + WATCH_DELAY_MS);
+  h.tabs.delete(tab.id);
+  h.handlers.removed[0](tab.id);
+  await new Promise((r) => setImmediate(r));
+  await h.rec.onAlarm({ name: `${WATCHED_ALARM_PREFIX}53` });
+  assert.equal(h.session.watchedPending["53"].reported, false);
+  assert.equal(h.session.watchedPending["53"].tries, 1);
+  assert.equal(h.calls.filter(([url]) => url.endsWith("/watched")).length, 1);
 });
 
 test("leaving or closing before 2 minutes sends no archive request", async () => {

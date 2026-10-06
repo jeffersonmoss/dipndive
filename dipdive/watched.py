@@ -54,15 +54,18 @@ def contains_video(directory, video_id):
     """Recover safely if a process stopped after the Markdown append but before index update."""
     if not os.path.isdir(directory):
         return False
-    needle = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/live/)" + re.escape(video_id) + r"(?:[&#>/\s)]|$)")
+    link_line = re.compile(r"^\[[^\n]*\]\(<([^>\n]+)>\)$")
     for name in os.listdir(directory):
         if not (name.startswith("Dipn Dive Transcripts - ") and name.endswith(".md")):
             continue
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as f:
                 for line in f:
-                    if needle.search(line):
-                        return True
+                    match = link_line.fullmatch(line.rstrip("\r\n"))
+                    if match:
+                        found_id, is_youtube = youtube_id(match.group(1))
+                        if is_youtube and found_id == video_id:
+                            return True
         except OSError:
             raise
     return False

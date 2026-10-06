@@ -8,7 +8,7 @@ import threading
 import time
 import unittest
 from email.message import Message
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 os.environ["DIPDIVE_TEST_ALLOW_LOOPBACK"] = "1"
 
@@ -100,6 +100,50 @@ class WatchedTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.svc.watched_index))
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "Dipn Dive Transcripts - October 2026.md")))
 
+    def test_watched_queue_does_not_hold_queue_lock_while_waiting_for_history_lock(self):
+        from contextlib import contextmanager
+        acquired = threading.Event()
+        release = threading.Event()
+        checking = threading.Event()
+        result = []
+
+        def hold_history_lock():
+            with historylog.locked():
+                acquired.set()
+                release.wait(2)
+
+        holder = threading.Thread(target=hold_history_lock, daemon=True)
+        holder.start()
+        self.assertTrue(acquired.wait(1))
+        original_locked = watched.locked
+
+        @contextmanager
+        def observe_history_lock(*args, **kwargs):
+            checking.set()
+            with original_locked(*args, **kwargs):
+                yield
+
+        def queue_record():
+            result.append(self.svc.queue_watched("https://www.youtube.com/watch?v=aaaaaaaaaaa"))
+
+        with patch("dipdive.watched.locked", side_effect=observe_history_lock):
+            queued = threading.Thread(target=queue_record, daemon=True)
+            queued.start()
+            self.assertTrue(checking.wait(1))
+            prefetch_result = []
+            prefetch = threading.Thread(target=lambda: prefetch_result.append(
+                self.svc.queue_watched_prefetch("https://www.youtube.com/watch?v=bbbbbbbbbbb")), daemon=True)
+            prefetch.start()
+            prefetch.join(0.5)
+            prefetch_completed_before_unlock = not prefetch.is_alive()
+            release.set()
+            holder.join(1)
+            queued.join(1)
+            prefetch.join(1)
+        self.assertTrue(prefetch_completed_before_unlock, "prefetch blocked behind the history-lock wait")
+        self.assertEqual(prefetch_result[0][0], 202)
+        self.assertEqual(result[0][0], 202)
+
     def test_queue_dedupes_concurrent_reports(self):
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         results = []
@@ -176,6 +220,42 @@ class WatchedTests(unittest.TestCase):
                                         "url": src.url})
         self.assertEqual(got["text"], src.text)
         self.assertTrue(watched.contains_video(self.tmp, src.source_id))
+
+    def test_late_prefetch_never_downgrades_watched_cache_ttl(self):
+        src = self.source()
+        self.svc._cache_source(src.source_id, src, self.svc.generation, service.WATCHED_SOURCE_TTL)
+        self.svc._cache_source(src.source_id, src, self.svc.generation, service.SOURCE_TTL)
+        cached = self.svc._read_source(f"yt:{src.source_id}")
+        self.assertEqual(cached["ttl"], service.WATCHED_SOURCE_TTL)
+
+    def test_worker_retries_transient_failures_and_logs_once_after_exhaustion(self):
+        src = self.source("zzzzzzzzzzz")
+        failure = DipDiveError("fetch_failed", "temporary network failure")
+        with patch("dipdive.service.acquire", side_effect=failure) as acquire_mock, \
+             patch("dipdive.service.time.sleep") as sleep_mock, \
+             patch("dipdive.service.joblog.write") as log_mock:
+            self.assertFalse(self.svc._record_watched_with_retry(src.source_id, src.url))
+        self.assertEqual(acquire_mock.call_count, 3)
+        self.assertEqual(sleep_mock.call_args_list, [call(60), call(120)])
+        log_mock.assert_called_once()
+        self.assertIn("watched_transcript_error", log_mock.call_args.args[0])
+        self.assertTrue(self.svc._watched_transient(historylog.LockUnavailable("lock unavailable")))
+
+    def test_contains_video_reads_only_the_archive_link_line(self):
+        src = self.source()
+        for url in (f"https://youtu.be/{src.source_id}?si=abc",
+                    f"https://www.youtube.com/embed/{src.source_id}"):
+            directory = os.path.join(self.tmp, "archive " + str(len(os.listdir(self.tmp))))
+            os.makedirs(directory)
+            watched.append(src, url, directory=directory)
+            self.assertTrue(watched.contains_video(directory, src.source_id))
+
+        other_id = "AAAAAAAAAAA"
+        other = self.source(other_id, title=f"A title mentioning https://youtube.com/watch?v={src.source_id}")
+        directory = os.path.join(self.tmp, "quoted url archive")
+        os.makedirs(directory)
+        watched.append(other, other.url, directory=directory)
+        self.assertFalse(watched.contains_video(directory, src.source_id))
 
 
 if __name__ == "__main__":

@@ -130,13 +130,15 @@ class Service:
         vid, is_yt = youtube_id(url)
         if not is_yt or not vid:
             return 400, {"error_code": "bad_request", "error_message": "url must identify a YouTube video"}
+        # The history flock can block on another Dip. Never hold watched_lock while waiting;
+        # prefetch uses that lock only to coordinate its own queue.
+        with watched.locked(historylog.log_path()):
+            recorded = vid in self._watched_ids() or watched.contains_video(watched.transcripts_dir(), vid)
+        if recorded:
+            return 200, {"queued": False, "recorded": True}
         with self.watched_lock:
             if vid in self.watched_pending:
                 return 200, {"queued": False, "recorded": False}
-            with watched.locked(historylog.log_path()):
-                recorded = vid in self._watched_ids() or watched.contains_video(watched.transcripts_dir(), vid)
-            if recorded:
-                return 200, {"queued": False, "recorded": True}
             if len(self.watched_pending) >= WATCHED_QUEUE_CAP or self.watched_q.full():
                 return 429, {"error_code": "queue_full", "error_message": "watched transcript queue is full"}
             self.watched_pending.add(vid)
@@ -180,7 +182,7 @@ class Service:
         while True:
             vid, url = self.watched_q.get()
             try:
-                self._record_watched(vid, url)
+                self._record_watched_with_retry(vid, url)
             except BaseException as e:
                 print(f"dipdive: watched transcript skipped {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             finally:
@@ -207,8 +209,38 @@ class Service:
                   "ttl": ttl, "hash": hashlib.sha256(src.text.encode()).hexdigest()}
         with self.lock:
             if self.generation == generation:
+                existing = self._read_source(norm)
+                if existing:
+                    old_ttl = existing.get("ttl", SOURCE_TTL)
+                    if type(old_ttl) is not int or old_ttl < SOURCE_TTL:
+                        old_ttl = SOURCE_TTL
+                    cached["ttl"] = max(ttl, old_ttl)
                 _atomic_write(self._src_path(norm), cached)
         return cached
+
+    @staticmethod
+    def _watched_transient(error):
+        if isinstance(error, historylog.LockUnavailable):
+            return True
+        if isinstance(error, (TimeoutError, ConnectionError)):
+            return True
+        return isinstance(error, DipDiveError) and error.code in {
+            "fetch_failed", "timeout", "network", "rate_limited"
+        }
+
+    def _record_watched_with_retry(self, vid, url):
+        """Retry transient watched-fetch and archive failures, then persist one job log entry."""
+        delays = (60, 120)
+        for attempt in range(3):
+            try:
+                return self._record_watched(vid, url)
+            except Exception as error:
+                if not self._watched_transient(error):
+                    raise
+                if attempt == 2:
+                    joblog.write({"watched_transcript_error": f"{type(error).__name__}: {error}", "url": url})
+                    return False
+                time.sleep(delays[attempt])
 
     @staticmethod
     def _source_live(src):
