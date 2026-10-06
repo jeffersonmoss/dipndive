@@ -10,7 +10,7 @@ const posts = (r) => r.log.fetches.filter((f) => f.method === "POST" && f.path =
 const read = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
 
 test("the pin summarizes the active tab's page with the selected mode: a per-window slot, a requestId, a normal job", async () => {
-  const r = rig({ mode: "claude-dive", tab: { id: 4, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s" } });
+  const r = rig({ mode: "claude-dip", tab: { id: 4, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s" } });
   await r.c.init(1);
   assert.deepEqual(posts(r), [], "nothing is sent before the click");
   assert.equal(await r.c.summarizePage(), true);
@@ -19,14 +19,14 @@ test("the pin summarizes the active tab's page with the selected mode: a per-win
   assert.equal(s.windowId, 1);
   assert.equal(s.consumed, true, "acknowledged once the companion made the job");
   assert.equal(s.jobId, "job1");
-  assert.equal(s.mode, "claude-dive");
+  assert.equal(s.mode, "claude-dip");
   const p = posts(r);
   assert.equal(p.length, 1);
-  assert.deepEqual(p[0].body, { url: s.url, mode: "claude-dive", requestId: s.requestId, force: false });
+  assert.deepEqual(p[0].body, { url: s.url, mode: "claude-dip", requestId: s.requestId, force: false });
   await r.tick();
-  assert.equal(r.state.last.result, "Summary for claude-dive");
+  assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(r.state.last.saved, true, "it is in the history log like any other Dip or Dive");
-  assert.equal(r.state.last.mode, "claude-dive");
+  assert.equal(r.state.last.mode, "claude-dip");
 });
 
 test("the slot is the one a right-click makes (same fields, same writer), plus the mode this panel had selected", async () => {
@@ -42,7 +42,7 @@ test("the slot is the one a right-click makes (same fields, same writer), plus t
   L.clicked[0]({ pageUrl: "https://v.test/page" }, { windowId: 1 });
   await new Promise((res) => setTimeout(res, 5));
   const fromMenu = store[slotKey(1)];
-  const r = rig({ mode: "codex-dive", tab: { url: "https://v.test/page" } });
+  const r = rig({ mode: "codex-dip", tab: { url: "https://v.test/page" } });
   await r.c.init(1);
   await r.c.summarizePage();
   const fromPin = r.store[slotKey(1)];
@@ -50,7 +50,7 @@ test("the slot is the one a right-click makes (same fields, same writer), plus t
   assert.deepEqual(shape(fromPin), shape(fromMenu));
   assert.equal(fromPin.url, fromMenu.url);
   assert.equal(typeof fromPin.requestId, "string");
-  assert.equal(fromPin.mode, "codex-dive");
+  assert.equal(fromPin.mode, "codex-dip");
 });
 
 test("the permission is asked first, before the tab is read, and on every click until it is held", async () => {
@@ -119,14 +119,14 @@ test("it reads the tab of this panel's own window and writes that window's slot"
 });
 
 test("it is an action: no mode, stored setting or pressed state changes; another summary of the same page is a fresh job", async () => {
-  const r = rig({ mode: "claude-dive", tab: { url: "https://v.test/same" } });
+  const r = rig({ mode: "claude-dip", tab: { url: "https://v.test/same" } });
   await r.c.init(1);
   const states = [];
   const orig = r.c.d.onState;
   r.c.d.onState = (st) => { states.push(st.mode); orig(st); };
   await r.c.summarizePage(); await r.tick(); await r.tick();
-  assert.equal(r.store.mode, "claude-dive");
-  assert.ok(states.every((m) => m === "claude-dive"));
+  assert.equal(r.store.mode, "claude-dip");
+  assert.ok(states.every((m) => m === "claude-dip"));
   await r.c.summarizePage();
   const [a, b] = posts(r);
   assert.notEqual(a.body.requestId, b.body.requestId);
@@ -134,7 +134,7 @@ test("it is an action: no mode, stored setting or pressed state changes; another
 });
 
 test("with Codex unavailable the pin summarizes with Claude Dip, like a right-click would", async () => {
-  const r = rig({ mode: "codex-dive", tab: { url: "https://v.test/x" }, health: { codex_ready: false, codex_logged_in: false } });
+  const r = rig({ mode: "codex-dip", tab: { url: "https://v.test/x" }, health: { codex_ready: false, codex_logged_in: false } });
   await r.c.init(1);
   await r.c.summarizePage();
   assert.equal(posts(r)[0].body.mode, "claude-dip");
@@ -201,10 +201,10 @@ test("a pin still waiting does not override a newer mode button press (a mode-dr
   const r = rig({ slot: slot(), mode: "claude-dip", tab: { url: "https://v.test/from-pin" }, tabsGrant: () => d.promise });
   await r.c.init(1);
   const pin = r.c.summarizePage();
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   d.resolve(true);
   assert.equal(await pin, false);
-  assert.deepEqual(posts(r).map((p) => [p.body.url, p.body.mode]), [["https://v.test/watch", "claude-dip"], ["https://v.test/watch", "claude-dive"]]);
+  assert.deepEqual(posts(r).map((p) => [p.body.url, p.body.mode]), [["https://v.test/watch", "claude-dip"], ["https://v.test/watch", "claude-dip"]]);
   assert.equal(r.state.last.source.url, "https://v.test/watch");
 });
 
@@ -272,19 +272,19 @@ test("choosing a mode on a fresh panel with no source is kept, moves the pressed
   const r = rig({ tab: { url: "https://v.test/fresh" } });
   await r.c.init(1);
   assert.equal(r.state.last.mode, "codex-dip");
-  await r.c.selectMode("claude-dive");
-  assert.equal(r.state.last.mode, "claude-dive", "the pressed look moves");
-  assert.equal(r.store.mode, "claude-dive", "and the choice is stored, so a right-click uses it too");
+  await r.c.selectMode("claude-dip");
+  assert.equal(r.state.last.mode, "claude-dip", "the pressed look moves");
+  assert.equal(r.store.mode, "claude-dip", "and the choice is stored, so a right-click uses it too");
   assert.deepEqual(posts(r), [], "no source, nothing submitted");
   assert.equal(r.state.last.busy, false);
   await r.c.summarizePage();
   assert.equal(posts(r).length, 1);
-  assert.equal(posts(r)[0].body.mode, "claude-dive");
+  assert.equal(posts(r)[0].body.mode, "claude-dip");
   assert.equal(posts(r)[0].body.url, "https://v.test/fresh");
   // a disabled Codex button is still refused when Codex is unavailable
   const off = rig({ health: { codex_ready: false, codex_logged_in: false } });
   await off.c.init(1);
-  await off.c.selectMode("codex-dive");
+  await off.c.selectMode("codex-dip");
   assert.equal(off.store.mode, undefined);
 });
 

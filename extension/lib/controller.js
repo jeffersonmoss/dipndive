@@ -5,7 +5,7 @@ import { makeSlot, pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, pickUrl, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
 import { MIC, VoiceInput } from "./voice.js";
-import { DEFAULT_MODE, MODE_IDS, normalizeMode } from "./modes.js";
+import { DEFAULT_MODE, migrateMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
@@ -113,8 +113,12 @@ export class Controller {
     this.windowId = windowId;
     const all = await this.d.storage.get(null);
     this.cfg = { base: all.base, token: all.token };
-    // An old install can have the removed "temp" mode stored: forget it, so every window and the menu fall back to the default.
-    if (all.mode !== undefined && !MODE_IDS.includes(all.mode)) await this.d.storage.remove("mode");
+    // A stored retired Dive mode becomes its Dip (so every window and the menu agree); anything else invalid, such as the
+    // removed "temp" mode, is forgotten and falls back to the default.
+    if (all.mode !== undefined && migrateMode(all.mode) !== all.mode) {
+      const m = migrateMode(all.mode);
+      if (m) await this.d.storage.set({ mode: m }); else await this.d.storage.remove("mode");
+    }
     this.emit({ configured: !!(all.base && all.token), mode: normalizeMode(all.mode) });
     this.emit({ clipboardMachines: validClipboardSet(all.clipboardMachines), computerName: ["thing-1", "thing-2", "imac", "win"].includes(all.computerName) ? all.computerName : "" });
     if (!this.s.configured) {
@@ -153,12 +157,16 @@ export class Controller {
     if (!prev || sourceKey(prev.url) !== sourceKey(slot.url)) this.resetAsk();
     // Slots written by an old install can carry the removed "temp" mode (its job was a source-only fetch, with no summary).
     // That job is not resumed and nothing is submitted by itself: the page is shown and the person picks a mode.
-    const legacy = (m) => !!m && !MODE_IDS.includes(m);
+    // A retired Dive mode is not legacy in that sense: it becomes its Dip and the slot goes on as usual.
+    const legacy = (m) => !!m && !migrateMode(m);
     if (legacy(slot.mode) || legacy(slot.pendingMode)) {
       this.slot = { url: slot.url, requestId: slot.requestId, windowId: slot.windowId, ts: slot.ts, consumed: false };
       this.emit({ status: "Choose a mode to summarize this page." });
       return;
     }
+    if (slot.mode) slot = { ...slot, mode: migrateMode(slot.mode) };
+    if (slot.pendingMode) slot = { ...slot, pendingMode: migrateMode(slot.pendingMode) };
+    this.slot = slot;
     if (slot.consumed && slot.jobId) {
       this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)) });
       await this.beginTracking(slot.jobId);

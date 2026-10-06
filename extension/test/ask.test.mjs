@@ -80,11 +80,11 @@ test("capHistory matches the Python cap on the shared fixtures", () => {
 
 test("provider follows the pressed button; a Codex button asks Claude when Codex is unavailable", async () => {
   assert.equal(askProvider("claude-dip", true), "claude");
-  assert.equal(askProvider("claude-dive", false), "claude");
+  assert.equal(askProvider("claude-dip", false), "claude");
   assert.equal(askProvider("codex-dip", true), "codex");
-  assert.equal(askProvider("codex-dive", null), "codex");
-  assert.equal(askProvider("codex-dive", false), "claude");
-  const cases = [["claude-dive", "claude-ask"], ["codex-dip", "codex-ask"], ["codex-dive", "codex-ask"]];
+  assert.equal(askProvider("codex-dip", null), "codex");
+  assert.equal(askProvider("codex-dip", false), "claude");
+  const cases = [["claude-dip", "claude-ask"], ["codex-dip", "codex-ask"], ["codex-dip", "codex-ask"]];
   for (const [mode, want] of cases) {
     const r = rig({ slot: slot(), mode, health: { codex_ready: true, codex_logged_in: true } });
     await r.c.init(1);
@@ -92,7 +92,7 @@ test("provider follows the pressed button; a Codex button asks Claude when Codex
     await r.c.askQuestion("who said it?");
     assert.equal(asks(r)[0].body.mode, want, mode);
   }
-  const off = rig({ slot: slot(), mode: "codex-dive", health: { codex_ready: false, codex_logged_in: false } });
+  const off = rig({ slot: slot(), mode: "codex-dip", health: { codex_ready: false, codex_logged_in: false } });
   await off.c.init(1);
   await off.c.askQuestion("who said it?");
   assert.equal(asks(off)[0].body.mode, "claude-ask", "with Codex unavailable the question goes to Claude");
@@ -270,7 +270,7 @@ test("a Dip in flight in another window when history is cleared is dropped, not 
   const { A, B } = twoPanels();
   await A.c.init(1); await B.c.init(2);
   await B.tick(); await A.tick();
-  await A.c.selectMode("claude-dive");  // submits; polling is queued
+  await A.c.selectMode("claude-dip");  // submits; polling is queued
   assert.equal(A.state.last.busy, true);
   await B.c.clearHistory();
   assert.equal(A.state.last.busy, false);
@@ -287,10 +287,10 @@ test("the Dip or Dive text on screen is sent with a question, for follow-ups suc
   assert.equal(asks(r)[0].body.summary, "Summary for claude-dip");
   assert.deepEqual(asks(r)[0].body.history, []);
   // Dive instead
-  const d = rig({ slot: slot(), mode: "claude-dive" });
+  const d = rig({ slot: slot(), mode: "claude-dip" });
   await d.c.init(1); await d.tick();
   await d.c.askQuestion("and the third?");
-  assert.equal(asks(d)[0].body.summary, "Summary for claude-dive");
+  assert.equal(asks(d)[0].body.summary, "Summary for claude-dip");
 });
 
 test("no summary is sent while a Dip is still running or after Clear history", async () => {

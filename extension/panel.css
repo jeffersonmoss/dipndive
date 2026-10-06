@@ -36,9 +36,9 @@ body {
 #go:active { transform: translateY(1px); }
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
-#buttons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-/* Five black squares (the 7900f77 size): four modes with the provider's logo (Claude's starburst, the Codex app logo, full
-   strength for Dive and faded toward black, partly transparent, for Dip) and the pin action in the center. Unpressed they stand
+#buttons { --u: calc((100% - 32px) / 5); display: grid; grid-template-columns: calc(var(--u) * 1.5) var(--u) calc(var(--u) * 1.5); justify-content: center; gap: 8px; }
+/* Three black buttons: the pin action is the old square (one fifth of the row, less the gaps, --u) in the center, and each
+   provider (Claude, Codex) is 1.5 times that width at the same height, with its logo at full strength. Unpressed they stand
    on a ledge; a pressed mode sinks, loses the ledge, takes inset shading and a rim and glow in the provider's colour (--rim),
    in both themes. The pin (button.action) is not a mode: it never takes the pressed look. */
 button.mode {
@@ -46,9 +46,10 @@ button.mode {
   display: flex; align-items: center; justify-content: center; background: var(--mode-bg); color: #ffffff;
   box-shadow: 0 4px 0 var(--mode-ledge); transition: transform .06s, box-shadow .06s;
 }
+button.mode:not(.action) { aspect-ratio: auto; }  /* the row is as tall as the pin square; the providers stretch to it */
 button.mode img, button.mode svg { width: 34px; height: 34px; display: block; pointer-events: none; }
-button.claude-dive, button.claude-dip { --rim: #D97757; --glow: rgba(217, 119, 87, .55); }
-button.codex-dive, button.codex-dip   { --rim: #5B8CFF; --glow: rgba(91, 140, 255, .55); }
+button.claude-dip { --rim: #D97757; --glow: rgba(217, 119, 87, .55); }
+button.codex-dip  { --rim: #5B8CFF; --glow: rgba(91, 140, 255, .55); }
 button.action                         { --rim: #e9e6df; }
 button.mode:hover:not(:disabled):not([aria-pressed="true"]) { border-color: var(--rim); }
 /* physically pressed: sunk by its ledge, inset shading, and a rim and glow in the provider's colour */
