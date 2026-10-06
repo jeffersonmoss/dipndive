@@ -1,3 +1,4 @@
+import { MODES } from "../lib/modes.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -79,10 +80,10 @@ test("an answer for a summary that is no longer on screen is dropped", async () 
   const p = r.c.setSaved(false);
   assert.equal(r.state.last.saved, false, "the box follows the click at once");
   assert.equal(r.state.last.savingSaved, true);
-  await r.c.selectMode("claude-dive");  // another summary replaces it before the answer arrives
+  await r.c.selectMode("codex-dip");  // another summary replaces it before the answer arrives
   r.holds.shift()();
   assert.equal(await p, false);
-  assert.equal(r.state.last.mode, "claude-dive");
+  assert.equal(r.state.last.mode, "codex-dip");
   assert.equal(r.state.last.saved, null);
   assert.equal(r.state.last.savingSaved, false);
 });
@@ -173,17 +174,27 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   assert.match(html, /<label id="saveline" class="savebox" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Save this Dip to history<\/span><\/label>/);
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /\$\("savehist"\)\.addEventListener\("change", \(\) => ctl\.setSaved\(\$\("savehist"\)\.checked\)\)/);
-  assert.match(js, /Save this \$\{s\.mode\.endsWith\("-dive"\) \? "Dive" : "Dip"\} to history/);
+  assert.ok(!/Save this \$\{/.test(js) && /savelabel"\)\.textContent/.test(js), "the label follows the result mode");
+  assert.ok(!/Dive/.test(html.replace(/Dip'n'Dive|Dive in/g, "")), "no dive wording left in the panel markup");
   assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
   const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
   assert.match(opts, /<button id="clear"[^>]*>Clear history<\/button>/);
   assert.match(opts, /<div id="clearconfirm"[^>]*hidden>/);
 });
 
-test("layout: the mode buttons stay the 7900f77 squares; the bottom row is about a third less tall (36 px controls, not 44)", () => {
+test("layout: the pin keeps the old square, each provider is 1.5 times as wide at the same height; the bottom row is about a third less tall (36 px controls, not 44)", () => {
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
   const mode = css.match(/button\.mode \{([^}]*)\}/)[1];
   assert.match(mode, /aspect-ratio: 1; min-height: 56px/);
+  // the pin square stays one fifth of the row less the four old gaps; the providers are 1.5 of that and stretch to the pin's height
+  const row = css.match(/#buttons \{([^}]*)\}/)[1];
+  assert.match(row, /--u: calc\(\(100% - 32px\) \/ 5\)/);
+  const cols = row.match(/grid-template-columns: ([^;]*);/)[1];
+  assert.equal(cols, "calc(var(--u) * 1.5) var(--u) calc(var(--u) * 1.5)");
+  const factors = [...cols.matchAll(/calc\(var\(--u\) \* ([\d.]+)\)|(var\(--u\))/g)].map((m) => Number(m[1] || 1));
+  assert.deepEqual(factors, [1.5, 1, 1.5], "provider, pin, provider");
+  assert.ok(factors[0] > 1 && factors[0] < 2, "wider than the old square, narrower than two");
+  assert.match(css, /button\.mode:not\(\.action\) \{ aspect-ratio: auto; \}/, "providers take the row height instead of being square");
   assert.match(css, /#askinput \{[^}]*height: 36px/);
   assert.match(css, /\.rowbtn \{[^}]*height: 36px/);
   assert.match(css, /#mic \{[^}]*height: 36px/);
@@ -201,7 +212,7 @@ test("colours: the mode, History and Ask buttons are black and Speak is white, i
   assert.match(pressed, /transform: translateY\(3px\)/);
   assert.match(pressed, /border-color: var\(--rim\)/);
   assert.match(pressed, /var\(--glow\)/);
-  for (const m of ["claude-dive, button\\.claude-dip", "codex-dive, button\\.codex-dip"]) assert.match(css, new RegExp(`button\\.${m} +\\{ --rim: #[0-9A-Fa-f]{6}; --glow:`));
+  for (const m of ["claude-dip", "codex-dip"]) assert.match(css, new RegExp(`button\\.${m} +\\{ --rim: #[0-9A-Fa-f]{6}; --glow:`));
   for (const [sheet, sel] of [[css, "\\.iconbtn"], [page, "\\.hentry"], [page, "#search"], [page, "header#top"]]) {
     const rule = sheet.match(new RegExp(`${sel} \\{([^}]*)\\}`))[1];
     assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(rule), `${sel} uses tokens: ${rule}`);
@@ -231,11 +242,11 @@ function readPng(file) {
   return { w, h, px: out };
 }
 
-test("every logo stands out from its black button: Dive by at least 3:1, the darker (partly transparent) Dip by at least 2.5:1", () => {
+test("every logo in use is at full strength and stands out from its black button by at least 3:1", () => {
   const lum = ([r, g, b]) => [r, g, b].map((v) => v / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((s, c, i) => s + c * [0.2126, 0.7152, 0.0722][i], 0);
   const vsBlack = (rgb) => (lum(rgb) + 0.05) / 0.05;
-  const medians = {};
-  for (const name of ["claude-dive", "claude-dip", "codex-dive", "codex-dip"]) {
+  assert.deepEqual(MODES.map((m) => m.logo), ["claude-dive", "codex-dive"], "the existing full-strength logo files are used");
+  for (const { logo: name } of MODES) {
     for (const size of [36, 72]) {
       const { w, h, px } = readPng(new URL(`../icons/modes/${name}-${size}.png`, import.meta.url));
       assert.equal(w, size); assert.equal(h, size);
@@ -247,24 +258,13 @@ test("every logo stands out from its black button: Dive by at least 3:1, the dar
       shown.sort((x, y) => x - y);
       const median = shown[shown.length >> 1];
       assert.ok(shown.length > size * size * 0.1, `${name}-${size} has a visible mark`);
-      const need = name.endsWith("-dip") ? 2.5 : 3;
-      assert.ok(median >= need, `${name}-${size}: median ${median.toFixed(2)}:1 against black, needs ${need}`);
-      medians[`${name}-${size}`] = median;
+      assert.ok(median >= 3, `${name}-${size}: median ${median.toFixed(2)}:1 against black, needs 3`);
+      // full strength means the body of the mark is opaque, not the half-transparent Dip variant (alpha about 148)
+      const counts = new Map();
+      for (let i = 3; i < px.length; i += 4) if (px[i] > 25) counts.set(px[i], (counts.get(px[i]) || 0) + 1);
+      const [commonAlpha] = [...counts.entries()].sort((x, y) => y[1] - x[1])[0];
+      assert.ok(commonAlpha >= 250, `${name}-${size} is not washed out (most common alpha ${commonAlpha})`);
     }
-  }
-  // Dip is the same logo faded toward black (partly transparent over the black button): darker than Dive, never lighter
-  assert.ok(medians["claude-dip-72"] < medians["claude-dive-72"] && medians["codex-dip-72"] < medians["codex-dive-72"], JSON.stringify(medians));
-  for (const n of ["claude", "codex"]) {
-    const dive = readPng(new URL(`../icons/modes/${n}-dive-72.png`, import.meta.url)), dip = readPng(new URL(`../icons/modes/${n}-dip-72.png`, import.meta.url));
-    let faded = 0, solid = 0;
-    for (let i = 0; i < dive.px.length; i += 4) {
-      if (dive.px[i + 3] < 250) continue;
-      solid++;
-      const same = [0, 1, 2].every((k) => dip.px[i + k] === dive.px[i + k]);  // the colours are kept, not mixed toward white
-      const ratio = dip.px[i + 3] / dive.px[i + 3];
-      if (same && ratio > 0.45 && ratio < 0.65) faded++;
-    }
-    assert.ok(solid > 100 && faded === solid, `${n}-dip is the Dive logo at about half opacity (${faded} of ${solid} solid pixels)`);
   }
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.ok(!/temp/i.test(js.replace(/template/gi, "")), "no Temp chat leftovers in the panel");

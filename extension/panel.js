@@ -1,5 +1,5 @@
 import { Controller } from "./lib/controller.js";
-import { MODES } from "./lib/modes.js";
+import { MODES, saveHistoryLabel } from "./lib/modes.js";
 import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
@@ -10,12 +10,9 @@ import { renderClipboardRow } from "./lib/clipboard-view.js";
 installShim();
 const $ = (id) => document.getElementById(id);
 
-// The logos (icons/modes/, made by tools/mode_icons.py): full strength for Dive, the same logo partly transparent over the black button (darker) for Dip. Decorative: the
-// button's name is its hidden label.
+// The logos (icons/modes/, made by tools/mode_icons.py), always at full strength: each mode names its logo file in lib/modes.js.
+// Decorative: the button's name is its hidden label.
 const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/modes/${name}-72.png 2x" width="34" height="34" alt="">`;
-const MODE_ICON = {
-  "claude-dive": logo("claude-dive"), "claude-dip": logo("claude-dip"), "codex-dip": logo("codex-dip"), "codex-dive": logo("codex-dive"),
-};
 // The center button is an action, not a mode: a white map pin (a round head tapering to a point, with a small round hole), solid.
 const PIN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#ffffff" fill-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7ZM12 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>';
 
@@ -27,12 +24,12 @@ const addButton = (m) => {
   b.className = `mode ${m.id}`;
   b.dataset.mode = m.id;
   b.setAttribute("aria-pressed", "false");
-  b.innerHTML = `${MODE_ICON[m.id]}<span class="sr-only">${m.label}</span>`;  // the name is the label; the tooltip too
+  b.innerHTML = `${logo(m.logo)}<span class="sr-only">${m.label}</span>`;  // the name is the label; the tooltip too
   b.title = m.label;
   $("buttons").appendChild(b);
   buttons[m.id] = b;
 };
-MODES.slice(0, 2).forEach(addButton);
+MODES.slice(0, 1).forEach(addButton);
 const pin = document.createElement("button");
 pin.type = "button";
 pin.id = "pin";
@@ -41,7 +38,7 @@ pin.setAttribute("aria-label", "Summarize this page");
 pin.title = "Summarize this page";
 pin.innerHTML = PIN_ICON;
 $("buttons").appendChild(pin);
-MODES.slice(2).forEach(addButton);
+MODES.slice(1).forEach(addButton);
 
 let urlDirty = false;
 $("urlinput").addEventListener("input", () => { urlDirty = true; });
@@ -86,13 +83,13 @@ function render(s) {
 }
 
 // ---------- "Save this Dip to history" ----------
-// Shown only next to a finished Dip or Dive that has an entry in the companion's history log.
+// Shown only next to a finished Dip that has an entry in the companion's history log.
 function renderSave(s) {
   const show = s.configured && !!s.result && typeof s.saved === "boolean";  // also while unknown
   $("saveline").hidden = !show;
   if (!show) return;
-  $("savelabel").textContent = `Save this ${s.mode.endsWith("-dive") ? "Dive" : "Dip"} to history`;
   $("savehist").checked = s.saved;
+  $("savelabel").textContent = saveHistoryLabel(s.resultMode);
   $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
   $("savehist").disabled = !!s.savingSaved;
 }
@@ -175,7 +172,7 @@ function renderAsk(s) {
     }
   }
   if (live && document.activeElement !== box) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
-  box.placeholder = live ? "Listening..." : "Ask a question";
+  box.placeholder = live ? "Listening..." : "Dive in...";
   $("askgo").disabled = !!s.asking;
   const line = m.state === MIC.LISTENING ? "Listening. Click Pause recording when you are done." : m.message;
   $("micmsg").hidden = !line;

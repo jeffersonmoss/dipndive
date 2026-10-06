@@ -199,6 +199,8 @@ test("history page: an error is shown in plain words and nothing else", async ()
 
 test("history.html: a search box at the top, the list, its own script; no inline script", () => {
   const h = fs.readFileSync(new URL("../history.html", import.meta.url), "utf8");
+  assert.match(h, /A summary is added here every time one finishes\./);
+  assert.ok(!/A Dip or Dive summary is added here/.test(h));
   assert.match(h, /<input id="search" type="search"[^>]*aria-label="Search the history"/);
   assert.ok(h.indexOf('id="search"') < h.indexOf('id="list"'));
   assert.match(h, /<script type="module" src="history\.js"><\/script>/);

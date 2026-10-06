@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pickUrl, knownVideo, normalizeTyped } from "../lib/urls.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { MODES, DEFAULT_MODE, menuLabel, normalizeMode } from "../lib/modes.js";
+import { MODES, MODE_IDS, DEFAULT_MODE, menuLabel, normalizeMode, migrateMode, saveHistoryLabel } from "../lib/modes.js";
 
 test("url precedence: linkUrl, then known-video srcUrl, then frameUrl, then pageUrl", () => {
   const base = { pageUrl: "https://a.test/page", frameUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ", srcUrl: "blob:https://www.youtube.com/xyz" };
@@ -44,27 +44,48 @@ test("markdown: attribute breakout in a link is escaped", () => {
   assert.ok(!/onmouseover="/.test(h.replace(/&quot;/g, "")) || !/ onmouseover=/.test(h));
 });
 
-test("modes: four modes, default, menu label uses 'and'; the removed temp mode normalizes to the default", () => {
-  assert.deepEqual(MODES.map((m) => m.id), ["claude-dive", "claude-dip", "codex-dip", "codex-dive"]);
-  assert.deepEqual(MODES.map((m) => m.label), ["Claude Dive", "Claude Dip", "Codex Dip", "Codex Dive"]);
+test("modes: two Dip modes (Claude, Codex), default, menu label uses 'and'; the removed temp mode normalizes to the default", () => {
+  assert.deepEqual(MODES.map((m) => m.id), ["claude-dip", "codex-dip"]);
+  assert.deepEqual(MODES.map((m) => m.label), ["Claude Dip", "Codex Dip"]);
+  assert.deepEqual(MODE_IDS, ["claude-dip", "codex-dip"]);
   assert.equal(DEFAULT_MODE, "codex-dip");
   assert.equal(menuLabel("codex-dip"), "Dip'n'Dive");
   assert.equal(normalizeMode("temp"), "codex-dip");
   assert.equal(normalizeMode(undefined), "codex-dip");
-  assert.equal(normalizeMode("claude-dive"), "claude-dive");
+  assert.equal(normalizeMode("claude-dip"), "claude-dip");
+});
+
+test("stored dive modes migrate to their Dip; anything else invalid falls back to the default", () => {
+  assert.equal(normalizeMode("claude-dive"), "claude-dip");
+  assert.equal(normalizeMode("codex-dive"), "codex-dip");
+  assert.equal(migrateMode("claude-dive"), "claude-dip");
+  assert.equal(migrateMode("codex-dive"), "codex-dip");
+  assert.equal(migrateMode("codex-dip"), "codex-dip");
+  for (const bad of ["temp", "", null, undefined, 7, "CLAUDE-DIP", "claude-ask", "__proto__", "constructor", "toString"]) {
+    assert.equal(migrateMode(bad), null, String(bad));
+    assert.equal(normalizeMode(bad), DEFAULT_MODE, String(bad));
+  }
+});
+
+test("the history save label follows the result's original mode", () => {
+  assert.equal(saveHistoryLabel("claude-dip"), "Save this Dip to history");
+  assert.equal(saveHistoryLabel("codex-dip"), "Save this Dip to history");
+  assert.equal(saveHistoryLabel("claude-dive"), "Save this summary to history");
+  assert.equal(saveHistoryLabel("codex-dive"), "Save this summary to history");
 });
 
 test("the buttons are built in order, the pin in the center slot, and nothing reorders them, so the Tab order is the visual order", () => {
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  // two modes, then the pin, then the other two, each appended to #buttons in that order
-  const i = js.indexOf("MODES.slice(0, 2).forEach(addButton);"), j = js.indexOf('$("buttons").appendChild(pin);'), k = js.indexOf("MODES.slice(2).forEach(addButton);");
-  assert.ok(i > 0 && j > i && k > j, "Claude pair, pin, Codex pair");
+  // Claude, then the pin, then Codex, each appended to #buttons in that order
+  const i = js.indexOf("MODES.slice(0, 1).forEach(addButton);"), j = js.indexOf('$("buttons").appendChild(pin);'), k = js.indexOf("MODES.slice(1).forEach(addButton);");
+  assert.ok(i > 0 && j > i && k > j, "Claude, pin, Codex");
+  assert.deepEqual(MODES.map((m) => m.id), ["claude-dip", "codex-dip"], "exactly two mode buttons, so Claude is first and Codex last");
   assert.match(js, /const addButton = \(m\) => \{[\s\S]*?document\.createElement\("button"\)[\s\S]*?\$\("buttons"\)\.appendChild\(b\);[\s\S]*?\n\};/);
   assert.ok(!/tabindex/i.test(h) && !/tabindex/i.test(js), "no tabindex anywhere: focus follows document order");
   assert.ok(!/<button[^>]*class="mode/.test(h), "the buttons are not also written by hand in the markup");
-  assert.match(css, /#buttons \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(css, /#buttons \{[^}]*grid-template-columns: calc\(var\(--u\) \* 1\.5\) var\(--u\) calc\(var\(--u\) \* 1\.5\)/, "three columns: provider, pin, provider");
   // no style that places a button anywhere but its natural cell
   const rules = [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => /#buttons|button\.(mode|claude-|codex-|action)/.test(m[1])).map((m) => m[2]).join(";");
   assert.ok(rules.length > 500, "the button rules were found");
@@ -164,7 +185,11 @@ test("panel has the question box below the result, a mic button next to it, and 
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   assert.ok(h.indexOf('id="result"') < h.indexOf('id="askform"'), "box is below the result");
   assert.match(h, /<form id="askform"/);
-  assert.match(h, /id="askinput"[^>]*placeholder="Ask a question"/);
+  assert.match(h, /id="askinput"[^>]*placeholder="Dive in\.\.\."[^>]*aria-label="Dive in: ask about this source"/);
+  assert.ok(!/placeholder="Ask a question"/.test(h));
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.match(js, /box\.placeholder = live \? "Listening\.\.\." : "Dive in\.\.\."/, "the idle placeholder is restored as Dive in...");
+  assert.ok(!/Ask a question/.test(js));
   assert.ok(h.indexOf('id="askinput"') < h.indexOf('id="mic"'), "mic is next to the box");
   assert.match(h, /<button id="mic" class="rowbtn" type="button" data-state="idle"/);
   assert.match(h, /<button id="micsetup" type="button" hidden>Enable microphone<\/button>/);
@@ -237,4 +262,17 @@ test("the microphone needs no extra manifest permission", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.ok(!m.permissions.includes("audioCapture"));
   assert.ok(!m.permissions.includes("offscreen"), "no offscreen document: recognition runs in the panel itself");
+});
+
+test("panel buttons: exactly two mode buttons (Claude Dip, Codex Dip) either side of the pin, with names, tooltips and the full-strength Dive logos", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  assert.deepEqual(MODES.map((m) => [m.label, m.logo]), [["Claude Dip", "claude-dive"], ["Codex Dip", "codex-dive"]]);
+  assert.match(js, /<span class="sr-only">\$\{m\.label\}<\/span>/, "the accessible name is the label");
+  assert.match(js, /b\.title = off \? s\.codexReason : MODES\.find\(\(m\) => m\.id === id\)\.label/, "tooltip is the label, or the reason Codex is off");
+  assert.match(js, /const off = s\.codexOk === false && id\.startsWith\("codex"\);\s*b\.disabled = off;/, "Codex button disabled when Codex is unavailable");
+  assert.match(js, /b\.setAttribute\("aria-pressed", String\(id === s\.mode\)\)/, "the selected provider is the pressed one");
+  assert.ok(!/MODE_ICON/.test(js) && !/-dip"\)/.test(js.replace(/logo\(m\.logo\)/g, "")), "no per-mode faded Dip logo table");
+  assert.ok(!/dive/i.test(js.replace(/claude-dive|codex-dive/g, "").replace(/\bDive in\b/g, "").replace(/Dip'n'Dive|dipdive/gi, "")), "no dive wording left in the panel script");
+  assert.ok(!/Dive/.test(h.replace(/Dip'n'Dive|Dive in/g, "")), "nor in the markup");
 });

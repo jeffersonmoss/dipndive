@@ -37,10 +37,10 @@ test("the first request of a panel that has heard nothing carries no generation;
   await r.tick();
   assert.equal(r.c.clearGen, 0);
   await r.c.askQuestion("a question");   // an ask
-  await r.c.selectMode("claude-dive");   // a summary
+  await r.c.selectMode("claude-dip");   // a summary
   await r.c.summarizePage();             // the pin button
   const later = posts(r).slice(1);
-  assert.deepEqual(later.map((p) => p.body.mode), ["claude-ask", "claude-dive", "claude-dive"]);
+  assert.deepEqual(later.map((p) => p.body.mode), ["claude-ask", "claude-dip", "claude-dip"]);
   for (const p of later) assert.equal(p.body.clearGeneration, 0, p.body.mode);
 });
 
@@ -51,7 +51,7 @@ test("after Clear history here the panel sends the new generation and is not ref
   await r.tick();
   await r.c.clearHistory();
   assert.equal(r.c.clearGen, 1);
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   assert.equal(posts(r).at(-1).body.clearGeneration, 1);
   assert.equal(r.state.last.error, null);
 });
@@ -60,7 +60,7 @@ test("a mode button pressed after another machine cleared is refused: summary an
   const r = await ready();
   clearedOnAnotherMachine(r.server);
   const sent = posts(r).length, polled = gets(r).length;
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   assert.equal(posts(r).length, sent + 1, "exactly the one press was sent");
   assert.equal(posts(r).at(-1).body.clearGeneration, 0);
   const st = r.state.last;
@@ -79,19 +79,19 @@ test("a mode button pressed after another machine cleared is refused: summary an
   assert.equal(gets(r).length, polled, "no polling of a job that was never made");
   assert.equal(r.c.clearGen, 1, "the companion's generation is adopted");
   // pressing again (the person's own action) works and carries the new generation
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   assert.equal(posts(r).at(-1).body.clearGeneration, 1);
   await r.tick();
-  assert.equal(r.state.last.result, "Summary for claude-dive");
+  assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(r.state.last.error, null);
 });
 
 test("the pressed button stays pressed after a refusal and pressing it again is an ordinary press, not a forced rerun", async () => {
   const r = await ready();
   clearedOnAnotherMachine(r.server);
-  await r.c.selectMode("claude-dive");
-  assert.equal(r.state.last.mode, "claude-dive");
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
+  assert.equal(r.state.last.mode, "claude-dip");
+  await r.c.selectMode("claude-dip");
   assert.equal(posts(r).at(-1).body.force, false, "no job is on screen to rerun");
 });
 
@@ -180,8 +180,8 @@ test("a refused Go (typed link) is handled the same way and the typed link stays
 test("a refusal that arrives after the person pressed another button is ignored", async () => {
   const r = await ready();
   clearedOnAnotherMachine(r.server);
-  r.server.hold = (path, body) => path === "/jobs" && body.mode === "claude-dive";
-  const first = r.c.selectMode("claude-dive");     // sent with generation 0; the companion's answer is held
+  r.server.hold = (path, body) => path === "/jobs" && body.mode === "claude-dip";
+  const first = r.c.selectMode("claude-dip");     // sent with generation 0; the companion's answer is held
   await flush();
   r.server.hold = null;
   r.c.clearGen = 1;                                 // the panel has since heard the new generation (storage, a poll)
@@ -218,7 +218,7 @@ test("a Dip or Dive refused while a question is on its way drops that answer too
   await flush();
   r.server.hold = null;
   clearedOnAnotherMachine(r.server);
-  await r.c.selectMode("claude-dive");              // refused: the whole old history is gone
+  await r.c.selectMode("claude-dip");              // refused: the whole old history is gone
   assert.equal(r.state.last.error, STALE_MESSAGE);
   r.server.staleCheck = false;
   r.holds.forEach((h) => h());                      // the held question now reaches the companion and is answered
@@ -237,7 +237,7 @@ test("a refusal while the microphone is listening stops it (the box is reset wit
   speech.last.fire("audiostart");
   assert.equal(r.state.last.mic.state, MIC.LISTENING);
   clearedOnAnotherMachine(r.server);
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   assert.equal(r.state.last.mic.state, MIC.IDLE);
   assert.ok(speech.last.calls.includes("abort"));
   assert.equal(r.state.last.error, STALE_MESSAGE);

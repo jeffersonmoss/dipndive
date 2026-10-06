@@ -42,7 +42,7 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
   const vtimers = [];
   const state = { last: null };
   const holds = []; // pending fetch resolvers for race tests
-  const server = sharedServer || { jobs, clearGen: 0, hold: null, fail: null, sources: {}, health: health || { state: "starting" }, conflictOnce: false, seq: 0 };
+  const server = sharedServer || { jobs, requests: {}, clearGen: 0, hold: null, fail: null, sources: {}, health: health || { state: "starting" }, conflictOnce: false, seq: 0 };
   const fetchImpl = async (url, init) => {
     const path = url.replace("http://c.test", "");
     const body = init.body ? JSON.parse(init.body) : null;
@@ -58,10 +58,17 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         if (server.staleCheck && typeof body.clearGeneration === "number" && body.clearGeneration < server.clearGen) {
           return respond(409, { error_code: "stale_clear_generation", error_message: "history was cleared since this client last synced", clear_generation: server.clearGen });
         }
+        server.requests ||= {};
+        const previous = server.requests[body.requestId];
+        if (previous) {
+          if (previous.url !== body.url || previous.mode !== body.mode) return respond(409, { error_code: "request_id_conflict" });
+          return respond(200, { job_id: previous.jobId, clear_generation: server.clearGen });
+        }
         const id = `job${++server.seq}`;
         if (server.postStatus) return respond(server.postStatus, { error_code: server.postError || "bad_request", error_message: null });
         server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history,
           logged: !server.noLog && /-(dip|dive)$/.test(body.mode), saved: true };
+        server.requests[body.requestId] = { url: body.url, mode: body.mode, jobId: id };
         return respond(202, { job_id: id, clear_generation: server.clearGen });
       }
       if (init.method === "POST" && path === "/clear") { server.clearGen++; return respond(200, { clear_generation: server.clearGen }); }
@@ -138,4 +145,3 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
   return { c, store, log, server, state, tick, timers, holds, vtimers, speech, permissions };
 }
 export const slot = (extra = {}) => ({ url: "https://v.test/watch", requestId: "slot-req-1", windowId: 1, ts: 1, consumed: false, ...extra });
-

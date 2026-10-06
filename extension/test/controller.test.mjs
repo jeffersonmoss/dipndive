@@ -25,12 +25,12 @@ test("pressing a different button submits that mode with a fresh requestId; pres
   const r = rig({ slot: slot(), mode: "codex-dip" });
   await r.c.init(1);
   await r.tick();
-  await r.c.selectMode("claude-dive");
+  await r.c.selectMode("claude-dip");
   const posts = () => r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
   const b = posts().at(-1).body;
-  assert.equal(b.mode, "claude-dive"); assert.equal(b.force, false); assert.notEqual(b.requestId, "slot-req-1");
-  assert.equal(r.store.mode, "claude-dive");
-  await r.c.selectMode("claude-dive");
+  assert.equal(b.mode, "claude-dip"); assert.equal(b.force, false); assert.notEqual(b.requestId, "slot-req-1");
+  assert.equal(r.store.mode, "claude-dip");
+  await r.c.selectMode("claude-dip");
   assert.equal(posts().at(-1).body.force, true);
 });
 
@@ -41,12 +41,12 @@ test("a stale response (older selection) is discarded", async () => {
   const first = r.c.selectMode("claude-dip");  // held
   await new Promise((x) => setTimeout(x, 0));
   r.server.hold = null;
-  await r.c.selectMode("claude-dive");           // newer selection completes
+  await r.c.selectMode("claude-dip");           // newer selection completes
   r.holds.forEach((h) => h());                   // the old response now arrives
   await first;
   await r.tick();
-  assert.equal(r.state.last.mode, "claude-dive");
-  assert.ok(!r.state.last.result || r.state.last.result.includes("claude-dive"));
+  assert.equal(r.state.last.mode, "claude-dip");
+  assert.ok(!r.state.last.result || r.state.last.result.includes("claude-dip"));
   assert.equal(r.store[slotKey(1)].jobId, "job2", "old response did not overwrite the slot");
 });
 
@@ -78,11 +78,60 @@ test("a stored slot of the removed temp mode is not resumed or resubmitted: the 
     assert.equal(r.state.last.source.url, "https://v.test/watch");
     assert.equal(r.state.last.mode, "claude-dip");
     assert.match(r.state.last.status, /Choose a mode/);
-    await r.c.selectMode("claude-dive");
+    await r.c.selectMode("claude-dip");
     const post = r.log.fetches.find((f) => f.method === "POST" && f.path === "/jobs");
-    assert.equal(post.body.mode, "claude-dive");
+    assert.equal(post.body.mode, "claude-dip");
     assert.equal(post.body.force, false);
   }
+});
+
+test("a stored Dive mode migrates to its Dip: storage is rewritten, the panel and the first job use the Dip", async () => {
+  for (const [stored, want] of [["claude-dive", "claude-dip"], ["codex-dive", "codex-dip"]]) {
+    const r = rig({ slot: slot(), mode: stored });
+    await r.c.init(1);
+    assert.equal(r.store.mode, want, "the stored mode is rewritten, so every window and the menu agree");
+    assert.equal(r.state.last.mode, want);
+    assert.equal(r.log.fetches.find((f) => f.method === "POST").body.mode, want, "a dive mode is never sent");
+    await r.tick();
+    assert.equal(r.state.last.result, `Summary for ${want}`);
+  }
+});
+
+test("a stored slot that names a Dive mode is migrated, not treated as legacy: pending resubmits as the Dip, a running job is resumed", async () => {
+  const p = rig({ slot: slot({ pendingMode: "claude-dive" }), mode: "codex-dip" });
+  await p.c.init(1);
+  assert.equal(p.log.fetches.find((f) => f.method === "POST").body.mode, "claude-dip");
+  assert.equal(p.state.last.mode, "claude-dip");
+  assert.ok(!/Choose a mode/.test(p.state.last.status || ""));
+  const c = rig({ slot: slot({ consumed: true, jobId: "job9", mode: "codex-dive" }), mode: "claude-dip", jobs: { job9: { state: "queued", mode: "codex-dive", url: "https://v.test/watch", polls: 1 } } });
+  await c.c.init(1);
+  assert.ok(!c.log.fetches.some((f) => f.method === "POST"), "resumed, not resubmitted");
+  assert.equal(c.state.last.mode, "codex-dip");
+  assert.equal(c.state.last.resultMode, "codex-dive", "the resumed result keeps its original mode for result-specific UI");
+  assert.equal(c.log.fetches.some((f) => /-dive/.test(JSON.stringify(f.body || {}))), false, "no dive mode is sent");
+});
+
+test("a pending Dive already accepted by the companion is recovered by requestId and remains a Dive result", async () => {
+  const job = { state: "queued", mode: "claude-dive", url: "https://v.test/watch", polls: 0, logged: true, saved: true };
+  const r = rig({ slot: slot({ pendingMode: "claude-dive" }), mode: "codex-dip", jobs: { accepted: job } });
+  r.server.requests["slot-req-1"] = { url: "https://v.test/watch", mode: "claude-dive", jobId: "accepted" };
+  await r.c.init(1);
+  const posts = r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
+  assert.deepEqual(posts.map((f) => f.body.mode), ["claude-dip", "claude-dive"], "Dip conflicts, then replaying the original request recovers the accepted job");
+  assert.deepEqual(posts.map((f) => f.body.requestId), ["slot-req-1", "slot-req-1"]);
+  assert.equal(r.store[slotKey(1)].jobId, "accepted");
+  assert.equal(r.store[slotKey(1)].mode, "claude-dive");
+  await r.tick();
+  assert.equal(r.state.last.mode, "claude-dip", "the selected button stays on the migrated Dip mode");
+  assert.equal(r.state.last.resultMode, "claude-dive", "the result retains the mode the companion actually ran");
+});
+
+test("selecting a stored or old Dive id (a stale caller) selects the Dip and sends the Dip", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  await r.c.init(1); await r.tick();
+  await r.c.selectMode("codex-dive");
+  assert.equal(r.store.mode, "codex-dip");
+  assert.equal(r.log.fetches.filter((f) => f.method === "POST").at(-1).body.mode, "codex-dip");
 });
 
 test("unreachable companion gives a clear error naming the iMac, no endless polling", async () => {
@@ -111,11 +160,11 @@ test("a job error code becomes a plain message; no summary is invented", async (
 });
 
 test("reopening the panel resumes a consumed slot without resubmitting", async () => {
-  const r = rig({ slot: slot({ consumed: true, jobId: "job9", mode: "claude-dive" }), mode: "codex-dip", jobs: { job9: { state: "queued", mode: "claude-dive", url: "https://v.test/watch", polls: 1 } } });
+  const r = rig({ slot: slot({ consumed: true, jobId: "job9", mode: "claude-dip" }), mode: "codex-dip", jobs: { job9: { state: "queued", mode: "claude-dip", url: "https://v.test/watch", polls: 1 } } });
   await r.c.init(1);
   assert.ok(!r.log.fetches.some((f) => f.method === "POST"));
-  assert.equal(r.state.last.mode, "claude-dive");
-  assert.equal(r.state.last.result, "Summary for claude-dive");
+  assert.equal(r.state.last.mode, "claude-dip");
+  assert.equal(r.state.last.result, "Summary for claude-dip");
 });
 
 test("a new slot (right-click while the panel is open) is submitted; our own acknowledgement write is not", async () => {
@@ -157,15 +206,15 @@ test("a mode change in another window does not change this panel's pressed butto
   await A.c.init(1); await A.tick();
   B.c.windowId = 2;
   await B.c.init(2); await B.tick();
-  await A.c.selectMode("claude-dive");   // window A switches; storage.mode changes
-  B.c.onStorageChange({ mode: { newValue: "claude-dive" } }, "local");
+  await A.c.selectMode("codex-dip");   // window A switches; storage.mode changes
+  B.c.onStorageChange({ mode: { newValue: "codex-dip" } }, "local");
   assert.equal(B.state.last.mode, "claude-dip", "B keeps its own pressed button");
   assert.match(B.state.last.result, /claude-dip/);
-  await B.c.selectMode("claude-dive");
+  await B.c.selectMode("codex-dip");
   const post = B.log.fetches.filter((f) => f.method === "POST").at(-1).body;
-  assert.equal(post.mode, "claude-dive");
-  assert.equal(post.force, false, "first Dive in B is not a forced rerun");
-  await B.c.selectMode("claude-dive");
+  assert.equal(post.mode, "codex-dip");
+  assert.equal(post.force, false, "first Dip of the other provider in B is not a forced rerun");
+  await B.c.selectMode("codex-dip");
   assert.equal(B.log.fetches.filter((f) => f.method === "POST").at(-1).body.force, true, "own pressed button forces");
 });
 
@@ -212,10 +261,10 @@ test("a 409 requestId conflict is retried once with a fresh requestId", async ()
 });
 
 test("an unacknowledged slot resubmits with the mode it was first sent with", async () => {
-  const r = rig({ slot: slot({ pendingMode: "claude-dive" }), mode: "codex-dip" });
+  const r = rig({ slot: slot({ pendingMode: "claude-dip" }), mode: "codex-dip" });
   await r.c.init(1);
   const b = r.log.fetches.find((f) => f.method === "POST").body;
-  assert.equal(b.mode, "claude-dive");
+  assert.equal(b.mode, "claude-dip");
   assert.equal(b.requestId, "slot-req-1");
 });
 
@@ -226,7 +275,7 @@ test("Codex unavailable: Claude Dip is the effective default, Codex buttons refu
   assert.equal(off.state.last.codexOk, false);
   assert.match(off.state.last.codexReason, /not signed in/);
   const posts = off.log.fetches.filter((f) => f.method === "POST").length;
-  await off.c.selectMode("codex-dive");
+  await off.c.selectMode("codex-dip");
   assert.equal(off.log.fetches.filter((f) => f.method === "POST").length, posts);
   assert.equal(off.store.mode, undefined, "the stored preference is untouched");
   const iso = rig({ slot: slot(), health: { codex_ready: false, codex_logged_in: true, codex_isolation_ok: false } });
@@ -246,14 +295,14 @@ test("health unknown (starting or unreachable) leaves Codex enabled", async () =
 });
 
 test("typed link: same path as a right-click (slot, requestId, own mode, ack in slot), bare host normalized", async () => {
-  const r = rig({ mode: "claude-dive" });
+  const r = rig({ mode: "claude-dip" });
   await r.c.init(1);
   assert.match(r.state.last.status, /Paste a link above/);
   assert.equal(r.state.last.source, null);
   assert.equal(await r.c.submitTyped("  example.com/post  "), true);
   const post = r.log.fetches.find((f) => f.method === "POST" && f.path === "/jobs");
   assert.equal(post.body.url, "https://example.com/post");
-  assert.equal(post.body.mode, "claude-dive");
+  assert.equal(post.body.mode, "claude-dip");
   assert.equal(post.body.force, false);
   assert.ok(post.body.requestId.startsWith("uuid-"));
   const slot = r.store[slotKey(1)];
@@ -262,7 +311,7 @@ test("typed link: same path as a right-click (slot, requestId, own mode, ack in 
   assert.equal(slot.jobId, "job1");
   assert.equal(slot.requestId, post.body.requestId);
   await r.tick();
-  assert.equal(r.state.last.result, "Summary for claude-dive");
+  assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(r.state.last.title, "A Title");
   assert.equal(r.state.last.source.url, "https://example.com/post");
 });
@@ -291,10 +340,10 @@ test("typed link: junk is refused with a message and nothing is sent", async () 
 test("typed link uses this panel's own selected mode, and a second link starts a fresh job", async () => {
   const r = rig({ slot: slot(), mode: "codex-dip" });
   await r.c.init(1); await r.tick();
-  await r.c.selectMode("claude-dive"); await r.tick();
+  await r.c.selectMode("claude-dip"); await r.tick();
   await r.c.submitTyped("https://example.com/second");
   const posts = r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
-  assert.equal(posts.at(-1).body.mode, "claude-dive");
+  assert.equal(posts.at(-1).body.mode, "claude-dip");
   assert.equal(posts.at(-1).body.url, "https://example.com/second");
   assert.notEqual(posts.at(-1).body.requestId, posts[0].body.requestId);
 });
