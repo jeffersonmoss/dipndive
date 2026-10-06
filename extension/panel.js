@@ -1,5 +1,5 @@
 import { Controller } from "./lib/controller.js";
-import { MODES } from "./lib/modes.js";
+import { MODES, saveHistoryLabel } from "./lib/modes.js";
 import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
@@ -89,6 +89,7 @@ function renderSave(s) {
   $("saveline").hidden = !show;
   if (!show) return;
   $("savehist").checked = s.saved;
+  $("savelabel").textContent = saveHistoryLabel(s.resultMode);
   $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
   $("savehist").disabled = !!s.savingSaved;
 }

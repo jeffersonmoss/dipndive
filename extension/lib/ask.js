@@ -5,7 +5,7 @@ export const ASK_LIMITS = Object.freeze({
   budget: 8000,     // characters of earlier questions and answers, newest first
   turnQ: 500,       // one earlier question is cut to this
   turnA: 3000,      // one earlier answer is cut to this
-  summary: 4000,    // the Dip or Dive text on screen, sent along with a question (the start is kept)
+  summary: 4000,    // the summary on screen, sent along with a question (the start is kept)
 });
 
 // The same normalization the companion applies before it counts anything: lone surrogates become U+FFFD, then NFKC and

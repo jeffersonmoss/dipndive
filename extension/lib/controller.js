@@ -58,7 +58,7 @@ export class Controller {
     this.pendingMicAsk = false;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
-      result: null, error: null, status: "", busy: false, pinError: null,
+      result: null, resultMode: null, error: null, status: "", busy: false, pinError: null,
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
       // history log, null when it has none (no summary, a log failure); savingSaved while a change is on its way
@@ -165,6 +165,7 @@ export class Controller {
       return;
     }
     if (slot.mode) slot = { ...slot, mode: migrateMode(slot.mode) };
+    const recoveryMode = slot.pendingMode && migrateMode(slot.pendingMode) !== slot.pendingMode ? slot.pendingMode : null;
     if (slot.pendingMode) slot = { ...slot, pendingMode: migrateMode(slot.pendingMode) };
     this.slot = slot;
     if (slot.consumed && slot.jobId) {
@@ -181,7 +182,7 @@ export class Controller {
       mode = this.effectiveMode(normalizeMode(st.mode));
     }
     this.emit({ mode });
-    await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true });
+    await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true, recoveryMode });
   }
 
   // Writes a fresh slot for `url` to this window's key and submits it through onSlot with this panel's own selected mode.
@@ -317,7 +318,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, result: null, error: null, pinError: null, clipboardStatus: "",
+    this.emit({ jobId: null, jobState: null, title: null, result: null, resultMode: null, error: null, pinError: null, clipboardStatus: "",
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
@@ -391,7 +392,7 @@ export class Controller {
     this.emit({ error: msg, status: "", busy: false });
   }
 
-  async submit(mode, { requestId, force, fromSlot, retried }) {
+  async submit(mode, { requestId, force, fromSlot, retried, recoveryMode }) {
     const gen = ++this.selGen;
     this.resetView({ status: "Submitting...", busy: true });
     if (fromSlot && !this.slot.consumed && this.slot.pendingMode !== mode) {
@@ -406,6 +407,24 @@ export class Controller {
     if (gen !== this.selGen) return;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json); return; }
     if (!this.accept(gen, r.json)) return;
+    if (r.status === 409 && r.json?.error_code === "request_id_conflict" && recoveryMode && !retried) {
+      // The pending slot may have reached the companion as a Dive before its acknowledgement was lost. The migrated Dip
+      // conflicts with that request ID; replay the original request so the companion returns its already accepted job.
+      let recovered;
+      try {
+        recovered = await request(this.d.fetch, this.cfg, "POST", "/jobs",
+          { url: this.slot.url, mode: recoveryMode, requestId, force: !!force, ...this.genField() }, 5000);
+      } catch (e) { this.failure(gen, e); return; }
+      if (gen !== this.selGen || !this.accept(gen, recovered.json)) return;
+      if (recovered.status < 400 && recovered.json.job_id) {
+        const slot = { ...this.slot, jobId: recovered.json.job_id, mode: recoveryMode, consumed: true, pendingMode: undefined };
+        this.slot = slot;
+        await this.d.storage.set({ [slotKey(this.windowId)]: slot });
+        await this.beginTracking(recovered.json.job_id, gen);
+        return;
+      }
+      r = recovered;
+    }
     if (r.status === 409 && !retried) {  // requestId already used for another mode: start over with a fresh id
       return this.submit(mode, { requestId: this.d.uuid(), force, fromSlot: false, retried: true });
     }
@@ -437,7 +456,7 @@ export class Controller {
     const j = r.json;
     this.emit({ title: j.title || this.s.title, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
-      this.emit({ result: j.result_markdown, status: "Done.", busy: false,
+      this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: "Done.", busy: false,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
       this.noteRev(j.history_rev);
     } else if (j.state === "error") {

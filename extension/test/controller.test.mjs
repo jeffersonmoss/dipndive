@@ -107,7 +107,23 @@ test("a stored slot that names a Dive mode is migrated, not treated as legacy: p
   await c.c.init(1);
   assert.ok(!c.log.fetches.some((f) => f.method === "POST"), "resumed, not resubmitted");
   assert.equal(c.state.last.mode, "codex-dip");
+  assert.equal(c.state.last.resultMode, "codex-dive", "the resumed result keeps its original mode for result-specific UI");
   assert.equal(c.log.fetches.some((f) => /-dive/.test(JSON.stringify(f.body || {}))), false, "no dive mode is sent");
+});
+
+test("a pending Dive already accepted by the companion is recovered by requestId and remains a Dive result", async () => {
+  const job = { state: "queued", mode: "claude-dive", url: "https://v.test/watch", polls: 0, logged: true, saved: true };
+  const r = rig({ slot: slot({ pendingMode: "claude-dive" }), mode: "codex-dip", jobs: { accepted: job } });
+  r.server.requests["slot-req-1"] = { url: "https://v.test/watch", mode: "claude-dive", jobId: "accepted" };
+  await r.c.init(1);
+  const posts = r.log.fetches.filter((f) => f.method === "POST" && f.path === "/jobs");
+  assert.deepEqual(posts.map((f) => f.body.mode), ["claude-dip", "claude-dive"], "Dip conflicts, then replaying the original request recovers the accepted job");
+  assert.deepEqual(posts.map((f) => f.body.requestId), ["slot-req-1", "slot-req-1"]);
+  assert.equal(r.store[slotKey(1)].jobId, "accepted");
+  assert.equal(r.store[slotKey(1)].mode, "claude-dive");
+  await r.tick();
+  assert.equal(r.state.last.mode, "claude-dip", "the selected button stays on the migrated Dip mode");
+  assert.equal(r.state.last.resultMode, "claude-dive", "the result retains the mode the companion actually ran");
 });
 
 test("selecting a stored or old Dive id (a stale caller) selects the Dip and sends the Dip", async () => {

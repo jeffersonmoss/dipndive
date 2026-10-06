@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pickUrl, knownVideo, normalizeTyped } from "../lib/urls.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { MODES, MODE_IDS, DEFAULT_MODE, menuLabel, normalizeMode, migrateMode } from "../lib/modes.js";
+import { MODES, MODE_IDS, DEFAULT_MODE, menuLabel, normalizeMode, migrateMode, saveHistoryLabel } from "../lib/modes.js";
 
 test("url precedence: linkUrl, then known-video srcUrl, then frameUrl, then pageUrl", () => {
   const base = { pageUrl: "https://a.test/page", frameUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ", srcUrl: "blob:https://www.youtube.com/xyz" };
@@ -65,6 +65,13 @@ test("stored dive modes migrate to their Dip; anything else invalid falls back t
     assert.equal(migrateMode(bad), null, String(bad));
     assert.equal(normalizeMode(bad), DEFAULT_MODE, String(bad));
   }
+});
+
+test("the history save label follows the result's original mode", () => {
+  assert.equal(saveHistoryLabel("claude-dip"), "Save this Dip to history");
+  assert.equal(saveHistoryLabel("codex-dip"), "Save this Dip to history");
+  assert.equal(saveHistoryLabel("claude-dive"), "Save this summary to history");
+  assert.equal(saveHistoryLabel("codex-dive"), "Save this summary to history");
 });
 
 test("the buttons are built in order, the pin in the center slot, and nothing reorders them, so the Tab order is the visual order", () => {

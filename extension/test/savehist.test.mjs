@@ -174,7 +174,7 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   assert.match(html, /<label id="saveline" class="savebox" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Save this Dip to history<\/span><\/label>/);
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /\$\("savehist"\)\.addEventListener\("change", \(\) => ctl\.setSaved\(\$\("savehist"\)\.checked\)\)/);
-  assert.ok(!/Save this \$\{/.test(js) && !/savelabel"\)\.textContent/.test(js), "the label is fixed markup: Save this Dip to history");
+  assert.ok(!/Save this \$\{/.test(js) && /savelabel"\)\.textContent/.test(js), "the label follows the result mode");
   assert.ok(!/Dive/.test(html.replace(/Dip'n'Dive|Dive in/g, "")), "no dive wording left in the panel markup");
   assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
   const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
