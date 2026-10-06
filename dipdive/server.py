@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import historylog, joblog
 from .ask import AskError
 from .service import CLIPBOARD_MACHINES, LAUNCHD_LOGS, MODES, Service
+from .acquire import youtube_id
 from .tmp import sweep_stale
 
 TOKEN_PATH = os.path.join(joblog.SUPPORT, "token")
@@ -231,6 +232,24 @@ def make_handler(svc: Service, token: str):
                         return self._send(400, {"error_code": "bad_request",
                                                 "error_message": "need an http(s) url up to 2048 characters and supported machines"})
                     return self._send(202, svc.queue_clipboard(url, machines))
+                if u.path == "/watched":
+                    url = d.get("url")
+                    valid = False
+                    if isinstance(url, str) and 1 <= len(url) <= 2048:
+                        try:
+                            parsed = urllib.parse.urlsplit(url)
+                            valid = (parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+                                     and not any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf")
+                                                 or ch == "\\" for ch in url))
+                            vid, is_youtube = youtube_id(url)
+                            valid = valid and is_youtube and bool(vid)
+                        except ValueError:
+                            valid = False
+                    if not valid:
+                        return self._send(400, {"error_code": "bad_request",
+                                                "error_message": "need an http(s) YouTube video URL up to 2048 characters"})
+                    status, body = svc.queue_watched(url)
+                    return self._send(status, body)
                 if u.path == "/clear":
                     return self._send(200, svc.clear())
                 m = SAVE_PATH.match(u.path)

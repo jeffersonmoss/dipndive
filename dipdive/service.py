@@ -23,6 +23,8 @@ ACTIVE = ("queued", "fetching", "summarizing")
 REQUIRED_KEYS = ("job_id", "request_id", "state", "pre_key", "norm_id", "url", "mode", "generation", "updated")
 MAX_FETCH, MAX_MODEL, QUEUE_CAP, WORKERS = 2, 2, 20, 6
 SOURCE_TTL, PRUNE_AFTER = 7 * 86400, 30 * 86400
+WATCHED_SOURCE_TTL = 30 * 86400
+WATCHED_QUEUE_CAP = 20
 SUPPORT = joblog.SUPPORT
 LAUNCHD_LOGS = ("launchd.out.log", "launchd.err.log")
 CLIPBOARD_MACHINES = ("thing-1", "thing-2", "imac", "win")
@@ -86,6 +88,10 @@ class Service:
         self.by_prekey = {}     # pre_key -> job_id (latest)
         self.inflight = {}      # norm source id -> (Event, [result])
         self.q = queue.Queue()
+        self.watched_q = queue.Queue(maxsize=WATCHED_QUEUE_CAP)
+        self.watched_pending = set()
+        self.watched_lock = threading.RLock()
+        self.watched_index = os.path.join(self.dir, "watched-video-index.json")
         self.fetch_sem = threading.Semaphore(MAX_FETCH)
         self.model_sem = threading.Semaphore(MAX_MODEL)
         self.state_path = os.path.join(self.dir, "state.json")
@@ -108,7 +114,87 @@ class Service:
         if start_workers:
             for _ in range(WORKERS):
                 threading.Thread(target=self._worker, daemon=True).start()
+            threading.Thread(target=self._watched_worker, daemon=True).start()
             threading.Thread(target=self._pruner, daemon=True).start()
+
+    def queue_watched(self, url):
+        """Queue one YouTube video for transcript-only acquisition and recording."""
+        url = unwrap(url.strip())
+        vid, is_yt = youtube_id(url)
+        if not is_yt or not vid:
+            return 400, {"error_code": "bad_request", "error_message": "url must identify a YouTube video"}
+        from . import watched
+        with self.watched_lock:
+            if vid in self.watched_pending:
+                return 200, {"queued": False, "recorded": False}
+            with watched.locked(historylog.log_path()):
+                recorded = vid in self._watched_ids() or watched.contains_video(watched.transcripts_dir(), vid)
+            if recorded:
+                return 200, {"queued": False, "recorded": True}
+            if len(self.watched_pending) >= WATCHED_QUEUE_CAP or self.watched_q.full():
+                return 429, {"error_code": "queue_full", "error_message": "watched transcript queue is full"}
+            self.watched_pending.add(vid)
+            self.watched_q.put_nowait((vid, url))
+        return 202, {"queued": True}
+
+    def _watched_ids(self):
+        try:
+            with open(self.watched_index, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list) or any(not isinstance(x, str) for x in data):
+                raise ValueError("invalid watched index")
+            return set(data)
+        except FileNotFoundError:
+            return set()
+
+    def _watched_worker(self):
+        while True:
+            vid, url = self.watched_q.get()
+            try:
+                self._record_watched(vid, url)
+            except BaseException as e:
+                print(f"dipdive: watched transcript skipped {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            finally:
+                with self.watched_lock:
+                    self.watched_pending.discard(vid)
+                self.watched_q.task_done()
+
+    def _record_watched(self, vid, url):
+        """Acquire captions without a model call, then append and index under the history log lock."""
+        from . import watched
+        log_path = historylog.log_path()
+        with self.lock:
+            cache_generation = self.generation
+        with watched.locked(log_path):
+            if vid in self._watched_ids() or watched.contains_video(watched.transcripts_dir(log_path), vid):
+                return False
+        with self.fetch_sem:
+            try:
+                src = acquire(url)
+            except DipDiveError as e:
+                if e.code in ("live_in_progress", "no_captions"):
+                    return False
+                raise
+        if (src.meta or {}).get("live_status") == "is_live":
+            return False
+        if not src.text or not src.text.strip():
+            return False
+        with watched.locked(log_path):
+            ids = self._watched_ids()
+            if vid in ids:
+                return False
+            watched.append(src, url, directory=watched.transcripts_dir(log_path), when=time.time())
+            ids.add(vid)
+            _atomic_write(self.watched_index, sorted(ids))
+        # A later Dip/Dive can use these captions for 30 days without another yt-dlp fetch.
+        norm = f"yt:{vid}"
+        cached = {"norm_id": norm, "source_id": src.source_id, "title": src.title, "url": src.url,
+                  "text": src.text, "meta": src.meta, "fetched": time.time(), "generation": cache_generation,
+                  "ttl": WATCHED_SOURCE_TTL, "hash": hashlib.sha256(src.text.encode()).hexdigest()}
+        with self.lock:
+            if self.generation == cache_generation:
+                _atomic_write(self._src_path(norm), cached)
+        return True
 
     # ---------- persistence ----------
     def _load_jobs(self):
@@ -314,7 +400,10 @@ class Service:
             return None
         if "hash" not in s or "fetched" not in s:
             return None  # entry from before the hash field existed: treat as expired, refetch
-        if time.time() - s["fetched"] > SOURCE_TTL or s["generation"] != self.generation:
+        ttl = s.get("ttl", SOURCE_TTL)
+        if type(ttl) is not int or ttl < SOURCE_TTL:
+            ttl = SOURCE_TTL
+        if time.time() - s["fetched"] > ttl or s["generation"] != self.generation:
             return None
         return s
 
@@ -500,7 +589,7 @@ class Service:
     # ---------- pruning ----------
     def prune(self):
         now = time.time()
-        for d, ttl in ((self.jobs_dir, PRUNE_AFTER), (self.res_dir, PRUNE_AFTER), (self.src_dir, SOURCE_TTL)):
+        for d, ttl in ((self.jobs_dir, PRUNE_AFTER), (self.res_dir, PRUNE_AFTER)):
             for n in os.listdir(d):
                 p = os.path.join(d, n)
                 try:
@@ -508,6 +597,18 @@ class Service:
                         os.remove(p)
                 except OSError:
                     pass
+        for n in os.listdir(self.src_dir):
+            p = os.path.join(self.src_dir, n)
+            try:
+                source = _read_json(p)
+                ttl = source.get("ttl", SOURCE_TTL)
+                if type(ttl) is not int or ttl < SOURCE_TTL:
+                    ttl = SOURCE_TTL
+                fetched = source.get("fetched", os.path.getmtime(p))
+                if now - fetched > ttl:
+                    os.remove(p)
+            except (OSError, ValueError, TypeError):
+                pass
         with self.lock:
             for jid in [k for k, v in self.jobs.items()
                         if v["state"] not in ACTIVE and now - v["updated"] > PRUNE_AFTER]:

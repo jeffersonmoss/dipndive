@@ -12,6 +12,9 @@ $("token").value = st.token || "";
 const computer = await chrome.storage.local.get("computerName");
 $("computer").value = ["thing-1", "thing-2", "imac", "win"].includes(computer.computerName) ? computer.computerName : "";
 $("computer").addEventListener("change", () => chrome.storage.local.set({ computerName: $("computer").value }));
+const watchedSetting = await chrome.storage.local.get("recordWatchedVideos");
+$("recordWatched").checked = watchedSetting.recordWatchedVideos !== false;
+$("recordWatched").addEventListener("change", () => chrome.storage.local.set({ recordWatchedVideos: $("recordWatched").checked }));
 
 $("save").addEventListener("click", async () => {
   let base = $("base").value.trim().replace(/\/+$/, "");

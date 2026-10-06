@@ -9,6 +9,7 @@
     "contextMenus",
     "sidePanel",
     "storage",
+    "alarms",
     "clipboardWrite"
   ],
   "optional_permissions": [

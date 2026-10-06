@@ -2,6 +2,7 @@
 import { DEFAULT_MODE, menuLabel, normalizeMode } from "./modes.js";
 import { OPEN_HISTORY, createHistoryOpener } from "./history.js";
 import { pickUrl } from "./urls.js";
+import { registerWatchedRecorder } from "./watched.js";
 
 export const MENU_ID = "dipdive-run";
 export const slotKey = (windowId) => `slot:${windowId}`;
@@ -21,6 +22,7 @@ export async function pruneSlots(storage, keep = MAX_SLOTS) {
 
 export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
   const swallow = () => void chrome.runtime.lastError;
+  registerWatchedRecorder(chrome);
 
   async function currentMode() {
     const { mode } = await chrome.storage.local.get("mode");

@@ -226,7 +226,8 @@ def fetch_youtube(url: str, vid: str) -> Source:
         raise DipDiveError("no_captions", "caption track was empty")
     return Source("youtube", vid, info.get("title") or vid, canon, text,
                   {"duration": info.get("duration"), "track": lang, "auto": is_auto,
-                   "language": info.get("language"), "channel": channel_name(info)})
+                   "language": info.get("language"), "channel": channel_name(info),
+                   "live_status": info.get("live_status")})
 
 
 # ---------- 3.3.6 articles ----------
