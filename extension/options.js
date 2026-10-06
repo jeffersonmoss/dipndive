@@ -14,7 +14,17 @@ $("computer").value = ["thing-1", "thing-2", "imac", "win"].includes(computer.co
 $("computer").addEventListener("change", () => chrome.storage.local.set({ computerName: $("computer").value }));
 const watchedSetting = await chrome.storage.local.get("recordWatchedVideos");
 $("recordWatched").checked = watchedSetting.recordWatchedVideos !== false;
-$("recordWatched").addEventListener("change", () => chrome.storage.local.set({ recordWatchedVideos: $("recordWatched").checked }));
+// The recorder only runs with the optional "tabs" permission, which the background never requests itself; ask for it
+// here, inside a click, and say so while it is missing so recording is never silently idle.
+const tabsGranted = async () => { try { return !!(await chrome.permissions.contains({ permissions: ["tabs"] })); } catch { return false; } };
+const showWatchedAccess = async () => { $("watchedAccess").hidden = !$("recordWatched").checked || await tabsGranted(); };
+const askTabs = async () => { try { await chrome.permissions.request({ permissions: ["tabs"] }); } catch {} await showWatchedAccess(); };
+$("recordWatched").addEventListener("change", async () => {
+  await chrome.storage.local.set({ recordWatchedVideos: $("recordWatched").checked });
+  if ($("recordWatched").checked && !(await tabsGranted())) await askTabs(); else await showWatchedAccess();
+});
+$("watchedAllow").addEventListener("click", askTabs);
+await showWatchedAccess();
 
 $("save").addEventListener("click", async () => {
   let base = $("base").value.trim().replace(/\/+$/, "");
