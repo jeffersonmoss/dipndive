@@ -46,7 +46,7 @@ class WatchedTests(unittest.TestCase):
                 os.environ[env] = self.old[key]
         joblog.SUPPORT, joblog.LOG_DIR = self.old["support"], self.old["logdir"]
 
-    def req(self, body, token=None, headers=None):
+    def req(self, body, token=None, headers=None, path="/watched"):
         raw = json.dumps(body).encode()
         h = Message()
         h["Host"] = "127.0.0.1:8765"
@@ -59,7 +59,7 @@ class WatchedTests(unittest.TestCase):
             def send_header(self, key, value): pass
             def end_headers(self): pass
         request = Handler.__new__(Handler)
-        request.headers, request.path = h, "/watched"
+        request.headers, request.path = h, path
         request.rfile, request.wfile = io.BytesIO(raw), io.BytesIO()
         request.close_connection = False
         request.do_POST()
@@ -77,7 +77,28 @@ class WatchedTests(unittest.TestCase):
         self.assertEqual(self.req({"url": url}, token="x" * 48)[0], 401)
         self.assertEqual(self.req({"url": "https://youtube.com/playlist?list=PL1"})[0], 400)
         self.assertEqual(self.req({"url": "file:///tmp/x"})[0], 400)
+        for path in ("/watched", "/watched/prefetch"):
+            self.assertEqual(self.req({"url": "https://www.youtube.com/shorts/dQw4w9WgXcQ"}, path=path)[0], 400)
+            self.assertEqual(self.req({"url": "https://www.youtube.com/live/dQw4w9WgXcQ"}, path=path)[0], 400)
         self.assertEqual(self.req({"url": url}, headers={"Origin": "https://evil.example"})[0], 403)
+
+    def test_prefetch_queues_and_deduplicates(self):
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        self.assertEqual(self.req({"url": url}, path="/watched/prefetch")[0], 202)
+        self.assertEqual(self.svc.queue_watched_prefetch(url)[0], 200)
+        self.assertEqual(self.svc.prefetch_q.qsize(), 1)
+
+    def test_prefetch_caches_source_without_archive_or_index(self):
+        src = self.source()
+        with patch("dipdive.service.acquire", return_value=src):
+            self.assertTrue(self.svc._prefetch_watched(src.source_id, src.url))
+        norm = f"yt:{src.source_id}"
+        cached = self.svc._read_source(norm)
+        self.assertEqual(cached["ttl"], service.SOURCE_TTL)
+        self.assertEqual(cached["text"], src.text)
+        self.assertEqual(self.svc.queue_watched_prefetch(src.url), (200, {"queued": False, "cached": True}))
+        self.assertFalse(os.path.exists(self.svc.watched_index))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "Dipn Dive Transcripts - October 2026.md")))
 
     def test_queue_dedupes_concurrent_reports(self):
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -89,13 +110,19 @@ class WatchedTests(unittest.TestCase):
         self.assertEqual(results.count(200), 11)
         self.assertEqual(self.svc.watched_q.qsize(), 1)
 
-    def test_live_and_no_captions_are_skipped(self):
-        live = self.source(live_status="is_live")
-        with patch("dipdive.service.acquire", return_value=live):
-            self.assertFalse(self.svc._record_watched(live.source_id, live.url))
+    def test_live_status_values_and_missing_captions_are_quietly_skipped(self):
+        for index, status in enumerate(("is_live", "is_upcoming", "was_live", "post_live")):
+            live = self.source(f"{index:011d}", live_status=status)
+            with patch("dipdive.service.acquire", return_value=live):
+                self.assertFalse(self.svc._record_watched(live.source_id, live.url))
+                self.assertFalse(self.svc._prefetch_watched(live.source_id, live.url))
         no_caps = self.source("a" * 11)
         with patch("dipdive.service.acquire", side_effect=DipDiveError("no_captions", "none")):
             self.assertFalse(self.svc._record_watched(no_caps.source_id, no_caps.url))
+            self.assertFalse(self.svc._prefetch_watched(no_caps.source_id, no_caps.url))
+        with patch("dipdive.service.acquire", side_effect=DipDiveError("live_in_progress", "live")):
+            self.assertFalse(self.svc._record_watched("live-video-01", no_caps.url))
+            self.assertFalse(self.svc._prefetch_watched("live-video-01", no_caps.url))
         self.assertFalse(os.path.exists(self.svc.watched_index))
         self.assertFalse(os.path.exists(os.environ["DIPDIVE_LOG_PATH"]))
 
@@ -131,9 +158,11 @@ class WatchedTests(unittest.TestCase):
         self.assertEqual(text.count("## A title"), len(items))
         self.assertEqual(text.count("\n---\n"), len(items))
 
-    def test_recorded_video_index_dedupe_and_cache_reuse(self):
+    def test_watched_save_reuses_prefetched_cache_and_extends_ttl(self):
         src = self.source()
         with patch("dipdive.service.acquire", return_value=src):
+            self.assertTrue(self.svc._prefetch_watched(src.source_id, src.url))
+        with patch("dipdive.service.acquire", side_effect=AssertionError("prefetched captions should be reused")):
             self.assertTrue(self.svc._record_watched(src.source_id, src.url))
         self.assertFalse(self.svc._record_watched(src.source_id, src.url))
         norm = f"yt:{src.source_id}"

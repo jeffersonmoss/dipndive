@@ -1,6 +1,6 @@
 import { request } from "./api.js";
 
-export const WATCH_DELAY_MS = 30_000;
+export const WATCH_DELAY_MS = 120_000;
 export const WATCHED_ALARM_PREFIX = "dipdive-watched:";
 const STATE_KEY = "watchedPending";
 
@@ -12,7 +12,8 @@ export function youtubeVideoId(value) {
     if (host === "youtu.be") id = u.pathname.split("/").filter(Boolean)[0] || "";
     else if (host === "youtube.com" || host.endsWith(".youtube.com")) {
       if (u.pathname === "/watch") id = u.searchParams.get("v") || "";
-      else id = u.pathname.match(/^\/(?:shorts|live|embed|v)\/([A-Za-z0-9_-]{11})(?:\/|$)/)?.[1] || "";
+      else if (/^\/(?:shorts|live)(?:\/|$)/.test(u.pathname)) return null;
+      else id = u.pathname.match(/^\/(?:embed|v)\/([A-Za-z0-9_-]{11})(?:\/|$)/)?.[1] || "";
     }
     return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
   } catch { return null; }
@@ -56,6 +57,7 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
     state[key] = entry;
     await write(state);
     if (chrome.alarms) chrome.alarms.create(alarmName(tab.id), { when: entry.due });
+    await prefetch(entry);
   }
 
   async function send(tabId, entry) {
@@ -63,6 +65,13 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
     if (!cfg.base || !cfg.token) return;
     try { await request(fetchImpl, cfg, "POST", "/watched", { url: entry.url }); }
     catch { /* The visit is reported once; a later visit can report again. */ }
+  }
+
+  async function prefetch(entry) {
+    const cfg = await chrome.storage.local.get(["base", "token"]);
+    if (!cfg.base || !cfg.token) return;
+    try { await request(fetchImpl, cfg, "POST", "/watched/prefetch", { url: entry.url }); }
+    catch { /* Saving at the delay can still fetch captions if prefetch failed. */ }
   }
 
   async function onAlarm(alarm) {

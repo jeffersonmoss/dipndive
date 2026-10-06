@@ -14,6 +14,7 @@ from . import historylog, joblog
 from .ask import AskError
 from .service import CLIPBOARD_MACHINES, LAUNCHD_LOGS, MODES, Service
 from .acquire import youtube_id
+from . import watched
 from .tmp import sweep_stale
 
 TOKEN_PATH = os.path.join(joblog.SUPPORT, "token")
@@ -232,7 +233,7 @@ def make_handler(svc: Service, token: str):
                         return self._send(400, {"error_code": "bad_request",
                                                 "error_message": "need an http(s) url up to 2048 characters and supported machines"})
                     return self._send(202, svc.queue_clipboard(url, machines))
-                if u.path == "/watched":
+                if u.path in ("/watched", "/watched/prefetch"):
                     url = d.get("url")
                     valid = False
                     if isinstance(url, str) and 1 <= len(url) <= 2048:
@@ -242,12 +243,15 @@ def make_handler(svc: Service, token: str):
                                      and not any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf")
                                                  or ch == "\\" for ch in url))
                             vid, is_youtube = youtube_id(url)
-                            valid = valid and is_youtube and bool(vid)
+                            valid = (valid and is_youtube and bool(vid)
+                                     and not watched.is_short_or_live_url(url))
                         except ValueError:
                             valid = False
                     if not valid:
                         return self._send(400, {"error_code": "bad_request",
                                                 "error_message": "need an http(s) YouTube video URL up to 2048 characters"})
+                    if u.path == "/watched/prefetch":
+                        return self._send(*svc.queue_watched_prefetch(url))
                     status, body = svc.queue_watched(url)
                     return self._send(status, body)
                 if u.path == "/clear":

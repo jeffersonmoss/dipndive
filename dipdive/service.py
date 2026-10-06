@@ -25,6 +25,7 @@ MAX_FETCH, MAX_MODEL, QUEUE_CAP, WORKERS = 2, 2, 20, 6
 SOURCE_TTL, PRUNE_AFTER = 7 * 86400, 30 * 86400
 WATCHED_SOURCE_TTL = 30 * 86400
 WATCHED_QUEUE_CAP = 20
+LIVE_STATUSES = {"is_live", "is_upcoming", "was_live", "post_live"}
 SUPPORT = joblog.SUPPORT
 LAUNCHD_LOGS = ("launchd.out.log", "launchd.err.log")
 CLIPBOARD_MACHINES = ("thing-1", "thing-2", "imac", "win")
@@ -90,6 +91,8 @@ class Service:
         self.q = queue.Queue()
         self.watched_q = queue.Queue(maxsize=WATCHED_QUEUE_CAP)
         self.watched_pending = set()
+        self.prefetch_q = queue.Queue(maxsize=WATCHED_QUEUE_CAP)
+        self.prefetch_pending = set()
         self.watched_lock = threading.RLock()
         self.watched_index = os.path.join(self.dir, "watched-video-index.json")
         self.fetch_sem = threading.Semaphore(MAX_FETCH)
@@ -115,15 +118,18 @@ class Service:
             for _ in range(WORKERS):
                 threading.Thread(target=self._worker, daemon=True).start()
             threading.Thread(target=self._watched_worker, daemon=True).start()
+            threading.Thread(target=self._prefetch_worker, daemon=True).start()
             threading.Thread(target=self._pruner, daemon=True).start()
 
     def queue_watched(self, url):
         """Queue one YouTube video for transcript-only acquisition and recording."""
         url = unwrap(url.strip())
+        from . import watched
+        if watched.is_short_or_live_url(url):
+            return 400, {"error_code": "bad_request", "error_message": "Shorts and live URLs are not recorded"}
         vid, is_yt = youtube_id(url)
         if not is_yt or not vid:
             return 400, {"error_code": "bad_request", "error_message": "url must identify a YouTube video"}
-        from . import watched
         with self.watched_lock:
             if vid in self.watched_pending:
                 return 200, {"queued": False, "recorded": False}
@@ -135,6 +141,29 @@ class Service:
                 return 429, {"error_code": "queue_full", "error_message": "watched transcript queue is full"}
             self.watched_pending.add(vid)
             self.watched_q.put_nowait((vid, url))
+        return 202, {"queued": True}
+
+    def queue_watched_prefetch(self, url):
+        """Queue a transcript-only fetch into the ordinary source cache."""
+        url = unwrap(url.strip())
+        from . import watched
+        if watched.is_short_or_live_url(url):
+            return 400, {"error_code": "bad_request", "error_message": "Shorts and live URLs are not prefetched"}
+        vid, is_yt = youtube_id(url)
+        if not is_yt or not vid:
+            return 400, {"error_code": "bad_request", "error_message": "url must identify a YouTube video"}
+        norm = f"yt:{vid}"
+        with self.watched_lock:
+            with self.lock:
+                cached = self._read_source(norm)
+            if cached:
+                return 200, {"queued": False, "cached": True}
+            if vid in self.prefetch_pending:
+                return 200, {"queued": False, "cached": False}
+            if len(self.prefetch_pending) >= WATCHED_QUEUE_CAP or self.prefetch_q.full():
+                return 429, {"error_code": "queue_full", "error_message": "watched transcript queue is full"}
+            self.prefetch_pending.add(vid)
+            self.prefetch_q.put_nowait((vid, url))
         return 202, {"queued": True}
 
     def _watched_ids(self):
@@ -159,6 +188,51 @@ class Service:
                     self.watched_pending.discard(vid)
                 self.watched_q.task_done()
 
+    def _prefetch_worker(self):
+        while True:
+            vid, url = self.prefetch_q.get()
+            try:
+                self._prefetch_watched(vid, url)
+            except BaseException as e:
+                print(f"dipdive: watched transcript prefetch skipped {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            finally:
+                with self.watched_lock:
+                    self.prefetch_pending.discard(vid)
+                self.prefetch_q.task_done()
+
+    def _cache_source(self, vid, src, generation, ttl=SOURCE_TTL):
+        norm = f"yt:{vid}"
+        cached = {"norm_id": norm, "source_id": src.source_id, "title": src.title, "url": src.url,
+                  "text": src.text, "meta": src.meta, "fetched": time.time(), "generation": generation,
+                  "ttl": ttl, "hash": hashlib.sha256(src.text.encode()).hexdigest()}
+        with self.lock:
+            if self.generation == generation:
+                _atomic_write(self._src_path(norm), cached)
+        return cached
+
+    @staticmethod
+    def _source_live(src):
+        return (src.meta or {}).get("live_status") in LIVE_STATUSES
+
+    def _prefetch_watched(self, vid, url):
+        """Fetch captions in the background without touching watched archive/index state."""
+        norm = f"yt:{vid}"
+        with self.lock:
+            generation = self.generation
+            if self._read_source(norm):
+                return False
+        try:
+            with self.fetch_sem:
+                src = acquire(url)
+        except DipDiveError as e:
+            if e.code in ("live_in_progress", "no_captions"):
+                return False
+            raise
+        if self._source_live(src) or not src.text or not src.text.strip():
+            return False
+        self._cache_source(vid, src, generation, SOURCE_TTL)
+        return True
+
     def _record_watched(self, vid, url):
         """Acquire captions without a model call, then append and index under the history log lock."""
         from . import watched
@@ -168,14 +242,20 @@ class Service:
         with watched.locked(log_path):
             if vid in self._watched_ids() or watched.contains_video(watched.transcripts_dir(log_path), vid):
                 return False
-        with self.fetch_sem:
-            try:
-                src = acquire(url)
-            except DipDiveError as e:
-                if e.code in ("live_in_progress", "no_captions"):
-                    return False
-                raise
-        if (src.meta or {}).get("live_status") == "is_live":
+        norm = f"yt:{vid}"
+        with self.lock:
+            cached = self._read_source(norm)
+        if cached:
+            src = Source("youtube", cached["source_id"], cached["title"], cached["url"], cached["text"], cached.get("meta"))
+        else:
+            with self.fetch_sem:
+                try:
+                    src = acquire(url)
+                except DipDiveError as e:
+                    if e.code in ("live_in_progress", "no_captions"):
+                        return False
+                    raise
+        if self._source_live(src):
             return False
         if not src.text or not src.text.strip():
             return False
@@ -187,13 +267,7 @@ class Service:
             ids.add(vid)
             _atomic_write(self.watched_index, sorted(ids))
         # A later Dip/Dive can use these captions for 30 days without another yt-dlp fetch.
-        norm = f"yt:{vid}"
-        cached = {"norm_id": norm, "source_id": src.source_id, "title": src.title, "url": src.url,
-                  "text": src.text, "meta": src.meta, "fetched": time.time(), "generation": cache_generation,
-                  "ttl": WATCHED_SOURCE_TTL, "hash": hashlib.sha256(src.text.encode()).hexdigest()}
-        with self.lock:
-            if self.generation == cache_generation:
-                _atomic_write(self._src_path(norm), cached)
+        self._cache_source(vid, src, cache_generation, WATCHED_SOURCE_TTL)
         return True
 
     # ---------- persistence ----------

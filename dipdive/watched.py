@@ -9,6 +9,17 @@ from . import historylog
 from .acquire import youtube_id
 
 
+def is_short_or_live_url(url):
+    """True for YouTube Shorts and live URL paths, which are never recorded."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except (TypeError, ValueError):
+        return False
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    return (host == "youtube.com" or host.endswith(".youtube.com")) and bool(
+        re.match(r"^/(?:shorts|live)(?:/|$)", parsed.path))
+
+
 def transcripts_dir(log_path=None):
     configured = os.environ.get("DIPDIVE_TRANSCRIPTS_DIR")
     return os.path.expanduser(configured) if configured else os.path.dirname(os.path.abspath(log_path or historylog.log_path()))
