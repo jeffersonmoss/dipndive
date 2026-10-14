@@ -182,19 +182,15 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   assert.match(opts, /<div id="clearconfirm"[^>]*hidden>/);
 });
 
-test("layout: the pin keeps the old square, each provider is 1.5 times as wide at the same height; the bottom row is about a third less tall (36 px controls, not 44)", () => {
+test("layout: five equal square buttons and a compact bottom row (36 px controls, not 44)", () => {
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
   const mode = css.match(/button\.mode \{([^}]*)\}/)[1];
   assert.match(mode, /aspect-ratio: 1; min-height: 56px/);
-  // the pin square stays one fifth of the row less the four old gaps; the providers are 1.5 of that and stretch to the pin's height
+  // five equal tracks share the row after accounting for the four gaps
   const row = css.match(/#buttons \{([^}]*)\}/)[1];
   assert.match(row, /--u: calc\(\(100% - 32px\) \/ 5\)/);
   const cols = row.match(/grid-template-columns: ([^;]*);/)[1];
-  assert.equal(cols, "calc(var(--u) * 1.5) var(--u) calc(var(--u) * 1.5)");
-  const factors = [...cols.matchAll(/calc\(var\(--u\) \* ([\d.]+)\)|(var\(--u\))/g)].map((m) => Number(m[1] || 1));
-  assert.deepEqual(factors, [1.5, 1, 1.5], "provider, pin, provider");
-  assert.ok(factors[0] > 1 && factors[0] < 2, "wider than the old square, narrower than two");
-  assert.match(css, /button\.mode:not\(\.action\) \{ aspect-ratio: auto; \}/, "providers take the row height instead of being square");
+  assert.equal(cols, "repeat(5, var(--u))");
   assert.match(css, /#askinput \{[^}]*height: 36px/);
   assert.match(css, /\.rowbtn \{[^}]*height: 36px/);
   assert.match(css, /#mic \{[^}]*height: 36px/);

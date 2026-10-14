@@ -74,18 +74,18 @@ test("the history save label follows the result's original mode", () => {
   assert.equal(saveHistoryLabel("codex-dive"), "Save this summary to history");
 });
 
-test("the buttons are built in order, the pin in the center slot, and nothing reorders them, so the Tab order is the visual order", () => {
+test("the five buttons are built in order and nothing reorders them, so the Tab order is the visual order", () => {
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
-  // Claude, then the pin, then Codex, each appended to #buttons in that order
-  const i = js.indexOf("MODES.slice(0, 1).forEach(addButton);"), j = js.indexOf('$("buttons").appendChild(pin);'), k = js.indexOf("MODES.slice(1).forEach(addButton);");
-  assert.ok(i > 0 && j > i && k > j, "Claude, pin, Codex");
+  const left = js.indexOf('addHandoff("claude", "Continue in Claude")');
+  const i = js.indexOf("MODES.slice(0, 1).forEach(addButton);"), j = js.indexOf('$("buttons").appendChild(pin);'), k = js.indexOf("MODES.slice(1).forEach(addButton);"), right = js.indexOf('addHandoff("chatgpt", "Continue in ChatGPT")');
+  assert.ok(left >= 0 && i > left && j > i && k > j && right > k, "Claude arrow, Claude Dip, pin, Codex Dip, ChatGPT arrow");
   assert.deepEqual(MODES.map((m) => m.id), ["claude-dip", "codex-dip"], "exactly two mode buttons, so Claude is first and Codex last");
   assert.match(js, /const addButton = \(m\) => \{[\s\S]*?document\.createElement\("button"\)[\s\S]*?\$\("buttons"\)\.appendChild\(b\);[\s\S]*?\n\};/);
   assert.ok(!/tabindex/i.test(h) && !/tabindex/i.test(js), "no tabindex anywhere: focus follows document order");
   assert.ok(!/<button[^>]*class="mode/.test(h), "the buttons are not also written by hand in the markup");
-  assert.match(css, /#buttons \{[^}]*grid-template-columns: calc\(var\(--u\) \* 1\.5\) var\(--u\) calc\(var\(--u\) \* 1\.5\)/, "three columns: provider, pin, provider");
+  assert.match(css, /#buttons \{[^}]*grid-template-columns: repeat\(5, var\(--u\)\)/, "five equal columns");
   // no style that places a button anywhere but its natural cell
   const rules = [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => /#buttons|button\.(mode|claude-|codex-|action)/.test(m[1])).map((m) => m[2]).join(";");
   assert.ok(rules.length > 500, "the button rules were found");
@@ -117,7 +117,7 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
 test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.equal(m.manifest_version, 3);
-  assert.deepEqual([...m.permissions].sort(), ["alarms", "clipboardWrite", "contextMenus", "sidePanel", "storage"]);
+  assert.deepEqual([...m.permissions].sort(), ["alarms", "clipboardWrite", "contextMenus", "scripting", "sidePanel", "storage"]);
   // the pin button reads the active tab's address through "tabs", asked for once, in a click, never at install
   assert.deepEqual(m.optional_permissions, ["tabs"]);
   assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab"));
@@ -125,7 +125,7 @@ test("manifest: exact permissions, fixed key, no content scripts, no broad hosts
   assert.equal(m.content_scripts, undefined);
   assert.ok(!JSON.stringify(m).includes("<all_urls>"));
   assert.equal(m.host_permissions, undefined, "no always-on host access");
-  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*"]);
+  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*", "https://claude.ai/*", "https://chatgpt.com/*"]);
   assert.equal(m.minimum_chrome_version, "116");
   assert.equal(m.side_panel.default_path, "panel.html");
 });

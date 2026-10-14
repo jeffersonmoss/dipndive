@@ -1,14 +1,17 @@
 import { ApiError, request } from "./lib/api.js";
 import { clearCompanion } from "./lib/clear.js";
 import { installShim } from "./lib/shim.js";
+import { HANDOFF_SITES, validateHandoffUrl } from "./lib/handoff-sites.js";
 
 installShim();  // inert inside the extension; lets the page run as a plain page against the dev harness
 const $ = (id) => document.getElementById(id);
 const say = (t) => { $("msg").textContent = t; };
 
-const st = await chrome.storage.local.get(["base", "token"]);
+const st = await chrome.storage.local.get(["base", "token", HANDOFF_SITES.claude.urlKey, HANDOFF_SITES.chatgpt.urlKey]);
 $("base").value = st.base || "";
 $("token").value = st.token || "";
+$("handoffClaude").value = st[HANDOFF_SITES.claude.urlKey] || HANDOFF_SITES.claude.defaultUrl;
+$("handoffChatgpt").value = st[HANDOFF_SITES.chatgpt.urlKey] || HANDOFF_SITES.chatgpt.defaultUrl;
 const computer = await chrome.storage.local.get("computerName");
 $("computer").value = ["thing-1", "thing-2", "imac", "win"].includes(computer.computerName) ? computer.computerName : "";
 $("computer").addEventListener("change", () => chrome.storage.local.set({ computerName: $("computer").value }));
@@ -27,6 +30,10 @@ $("watchedAllow").addEventListener("click", askTabs);
 await showWatchedAccess();
 
 $("save").addEventListener("click", async () => {
+  const claudeUrl = validateHandoffUrl($("handoffClaude").value, "claude");
+  if (!claudeUrl.ok) { say(`Claude project URL: ${claudeUrl.error}`); return; }
+  const chatgptUrl = validateHandoffUrl($("handoffChatgpt").value, "chatgpt");
+  if (!chatgptUrl.ok) { say(`ChatGPT project URL: ${chatgptUrl.error}`); return; }
   let base = $("base").value.trim().replace(/\/+$/, "");
   const token = $("token").value.trim();
   let u;
@@ -38,7 +45,7 @@ $("save").addEventListener("click", async () => {
   // Host access is optional: ask for exactly this origin, inside the click so the user gesture is valid.
   const ok = await chrome.permissions.request({ origins: [`${u.protocol}//${u.hostname}/*`] });
   if (!ok) { say("Permission to reach that address was declined."); return; }
-  await chrome.storage.local.set({ base, token });
+  await chrome.storage.local.set({ base, token, [HANDOFF_SITES.claude.urlKey]: claudeUrl.value, [HANDOFF_SITES.chatgpt.urlKey]: chatgptUrl.value });
   say("Saved. Testing...");
   try {
     const r = await request((...a) => fetch(...a), { base, token }, "GET", "/health", null, 5000);

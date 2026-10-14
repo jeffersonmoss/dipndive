@@ -6,6 +6,8 @@ import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { renderClipboardRow } from "./lib/clipboard-view.js";
+import { request } from "./lib/api.js";
+import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
@@ -16,7 +18,7 @@ const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/mode
 // The center button is an action, not a mode: a white map pin (a round head tapering to a point, with a small round hole), solid.
 const PIN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#ffffff" fill-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7ZM12 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>';
 
-// Buttons are built once; state changes only flip aria-pressed and classes. The pin sits in the center slot.
+// Buttons are built once; state changes only flip aria-pressed and classes.
 const buttons = {};
 const addButton = (m) => {
   const b = document.createElement("button");
@@ -29,6 +31,22 @@ const addButton = (m) => {
   $("buttons").appendChild(b);
   buttons[m.id] = b;
 };
+function addHandoff(id, label) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = `mode handoff handoff-${id}`;
+  b.dataset.handoff = id;
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  const img = document.createElement("img");
+  img.alt = "";
+  img.width = img.height = 28;
+  img.setAttribute("aria-hidden", "true");
+  b.appendChild(img);
+  $("buttons").appendChild(b);
+  return b;
+}
+const claudeHandoff = addHandoff("claude", "Continue in Claude");
 MODES.slice(0, 1).forEach(addButton);
 const pin = document.createElement("button");
 pin.type = "button";
@@ -39,6 +57,17 @@ pin.title = "Summarize this page";
 pin.innerHTML = PIN_ICON;
 $("buttons").appendChild(pin);
 MODES.slice(1).forEach(addButton);
+const chatgptHandoff = addHandoff("chatgpt", "Continue in ChatGPT");
+
+function setHandoffIcons() {
+  const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+  for (const [id, b] of [["left", claudeHandoff], ["right", chatgptHandoff]]) {
+    b.querySelector("img").src = `icons/handoff/handoff-${id}-${dark ? "light" : "ink"}-36.png`;
+    b.querySelector("img").srcset = `icons/handoff/handoff-${id}-${dark ? "light" : "ink"}-72.png 2x`;
+  }
+}
+setHandoffIcons();
+window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", setHandoffIcons);
 
 let urlDirty = false;
 $("urlinput").addEventListener("input", () => { urlDirty = true; });
@@ -56,6 +85,11 @@ function render(s) {
     const off = s.codexOk === false && id.startsWith("codex");
     b.disabled = off;
     b.title = off ? s.codexReason : MODES.find((m) => m.id === id).label;
+  }
+  const ready = handoffEnabled(s);
+  for (const b of [claudeHandoff, chatgptHandoff]) {
+    b.disabled = !ready;
+    b.title = ready ? b.getAttribute("aria-label") : "Available when a Dip has finished and its result is on screen.";
   }
   $("codexnote").hidden = !(s.codexOk === false);
   $("codexnote").textContent = s.codexOk === false ? s.codexReason : "";
@@ -204,6 +238,77 @@ const ctl = new Controller({
   micSetupUrl,
   onState: render,
 });
+
+const handoffUrls = { claude: HANDOFF_SITES.claude.defaultUrl, chatgpt: HANDOFF_SITES.chatgpt.defaultUrl };
+chrome.storage.local.get([HANDOFF_SITES.claude.urlKey, HANDOFF_SITES.chatgpt.urlKey]).then((saved) => {
+  for (const [id, site] of Object.entries(HANDOFF_SITES)) {
+    const checked = validateHandoffUrl(saved[site.urlKey] || site.defaultUrl, site);
+    if (checked.ok) handoffUrls[id] = checked.value;
+  }
+});
+
+async function copyHandoff(payload) {
+  await navigator.clipboard.writeText(payload.fullText);
+}
+function waitForTab(tabId) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const finish = (err) => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(updated);
+      if (err) reject(err); else resolve();
+    };
+    const updated = (id, info) => { if (id === tabId && info.status === "complete") finish(); };
+    timer = setTimeout(() => finish(new Error("The destination page did not finish loading.")), 15000);
+    chrome.tabs.onUpdated.addListener(updated);
+    chrome.tabs.get(tabId).then((tab) => { if (tab.status === "complete") finish(); }, finish);
+  });
+}
+async function handoff(id) {
+  const s = ctl.s;
+  if (!handoffEnabled(s)) return;
+  const label = id === "claude" ? "Claude" : "ChatGPT";
+  const button = id === "claude" ? claudeHandoff : chatgptHandoff;
+  button.disabled = true;
+  $("pinmsg").hidden = true;
+  let payload = null;
+  try {
+    const originPermission = { origins: ["https://claude.ai/*", "https://chatgpt.com/*"] };
+    const allowed = await chrome.permissions.request(originPermission);
+    const sourceRes = await request((...args) => fetch(...args), ctl.cfg, "GET", `/source?job=${encodeURIComponent(s.jobId)}`, null, 5000).catch(() => null);
+    const sourceText = sourceRes?.status === 200 && typeof sourceRes.json?.text === "string" ? sourceRes.json.text : "";
+    payload = buildHandoffText({
+      title: sourceText && sourceRes.json.title ? sourceRes.json.title : s.title,
+      url: sourceText && sourceRes.json.url ? sourceRes.json.url : s.source.url,
+      result: s.result,
+      sourceText,
+    });
+    if (!allowed) {
+      await copyHandoff(payload);
+      $("pinmsg").textContent = "Dip'n'Dive: site access was declined. Everything is on your clipboard; paste it into the new conversation.";
+      $("pinmsg").hidden = false;
+      chrome.tabs.create({ url: handoffUrls[id] });
+      return;
+    }
+    const tab = await chrome.tabs.create({ url: handoffUrls[id] });
+    await waitForTab(tab.id);
+    const site = injectionSite(id);
+    const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: fillHandoffComposer, args: [payload, site] });
+    if (!injected?.[0]?.result?.ok) {
+      $("pinmsg").textContent = "Dip'n'Dive: couldn't fill the message box. Everything is on your clipboard; paste it here.";
+      $("pinmsg").hidden = false;
+      await copyHandoff(payload);
+    }
+  } catch {
+    $("pinmsg").textContent = "Dip'n'Dive: couldn't fill the message box. Everything is on your clipboard; paste it here.";
+    $("pinmsg").hidden = false;
+    try { await copyHandoff(payload || buildHandoffText({ title: s.title, url: s.source.url, result: s.result })); } catch {}
+  } finally {
+    button.disabled = !handoffEnabled(ctl.s);
+  }
+}
+claudeHandoff.addEventListener("click", () => handoff("claude"));
+chatgptHandoff.addEventListener("click", () => handoff("chatgpt"));
 
 for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () => ctl.selectMode(id));
 pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click

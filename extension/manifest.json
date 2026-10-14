@@ -10,7 +10,8 @@
     "sidePanel",
     "storage",
     "alarms",
-    "clipboardWrite"
+    "clipboardWrite",
+    "scripting"
   ],
   "optional_permissions": [
     "tabs"
@@ -18,7 +19,9 @@
   "optional_host_permissions": [
     "https://*.ts.net/*",
     "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "https://claude.ai/*",
+    "https://chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js",
