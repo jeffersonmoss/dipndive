@@ -75,15 +75,20 @@ test("Like clicks only the positive action and confirms aria-pressed", () => {
   delete globalThis.document;
 });
 
-test("playback mutes before play and sets HTML5 fallback muted", () => {
+test("page step never touches YouTube's own mute (the tab is muted by the browser) and stops on an ad", () => {
   const order = [];
-  const video = { muted: false, paused: true, currentTime: 0, duration: 90, dataset: {}, play: () => { order.push("video-play"); return Promise.resolve(); }, pause() {} };
-  const player = { mute: () => order.push("mute"), getCurrentTime: () => 0, getDuration: () => 90, getPlayerState: () => 2, setPlaybackRate: () => order.push("speed"), playVideo: () => order.push("play") };
+  const video = { muted: false, paused: true, currentTime: 0, duration: 90, dataset: {}, play: () => { order.push("video-play"); return Promise.resolve(); }, pause() { order.push("pause"); } };
+  const player = { classList: { contains: () => false }, mute: () => order.push("mute"), getCurrentTime: () => 0, getDuration: () => 90, getPlayerState: () => 2, setPlaybackRate: () => order.push("speed"), playVideo: () => order.push("play"), pauseVideo: () => order.push("pause") };
   globalThis.document = { querySelector: (s) => s === "#movie_player" ? player : s === "video" ? video : s === "#avatar-btn" ? {} : null, querySelectorAll: () => [] };
   youtubePageStep("history", { selectors: YOUTUBE_ACTIONS.selectors, speed: 1, historyPlaybackMs: 30_000 });
-  assert.equal(order[0], "mute");
-  assert.ok(order.indexOf("mute") < order.indexOf("play"));
-  assert.equal(video.muted, true);
+  assert.equal(order.includes("mute"), false);
+  assert.equal(video.muted, false);
+  assert.ok(order.includes("play"));
+  order.length = 0;
+  player.classList.contains = (c) => c === "ad-showing";
+  const r = youtubePageStep("watchThrough", { selectors: YOUTUBE_ACTIONS.selectors, speed: 2 });
+  assert.match(r.error, /ad started/);
+  assert.equal(order.includes("play"), false);
   delete globalThis.document;
 });
 

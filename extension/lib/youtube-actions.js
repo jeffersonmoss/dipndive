@@ -24,8 +24,9 @@ export function youtubePageStep(action, config) {
   const sel = config.selectors;
   const player = document.querySelector(sel.player);
   const video = document.querySelector(sel.video);
-  const mute = () => { try { player?.mute?.(); } catch {} try { if (video) video.muted = true; } catch {} };
-  mute();
+  // Silence comes from the browser-level tab mute set before YouTube loads. The player's own mute is not used: YouTube
+  // remembers it, and his normal YouTube would then start muted.
+  const mute = () => {};
   const state = () => {
     try { if (typeof player?.getPlayerState === "function") return player.getPlayerState(); } catch {}
     return video?.ended ? 0 : video && !video.paused ? 1 : 2;
@@ -47,6 +48,11 @@ export function youtubePageStep(action, config) {
     mute();
   };
   if (action === "like" || action === "subscribe") pause();
+  // Premium Lite still shows ads on music videos: never let one play unseen.
+  if ((action === "history" || action === "watchThrough") && player?.classList?.contains?.("ad-showing")) {
+    pause();
+    return { error: "An ad started (Premium Lite shows ads on music videos), so playback was stopped" };
+  }
   const signedIn = !!document.querySelector(sel.avatar);
   if (!signedIn) return { error: "YouTube is signed out" };
   const find = (selectors) => selectors.flatMap((s) => [...document.querySelectorAll(s)]).find((el) => el && !el.disabled) || null;
@@ -102,8 +108,7 @@ export function youtubePageStep(action, config) {
 // Self-contained injection used while waiting for the watch page to expose its channel link.
 export function youtubeOwnerLinkStep(selectors) {
   const player = document.querySelector(selectors.player), video = document.querySelector(selectors.video);
-  try { player?.mute?.(); } catch {}
-  try { if (video) { video.muted = true; video.pause?.(); } } catch {}
+  try { video?.pause?.(); } catch {}
   try { player?.pauseVideo?.(); } catch {}
   const a = selectors.owner.map((s) => document.querySelector(s)).find(Boolean);
   return a?.href || null;
