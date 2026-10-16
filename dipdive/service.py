@@ -483,6 +483,20 @@ class Service:
             return 404, {"error_code": "source_gone", "error_message": "cached source expired or cleared"}
         return 200, {"title": s["title"], "url": s["url"], "text": s["text"], "clear_generation": self.generation}
 
+    def archived_source(self, url):
+        """GET /transcript?url=: the kept source text of a page or video, however old (no TTL or generation check)."""
+        try:
+            norm = norm_source_id(url)
+            s = _read_json(self._src_path(norm))
+        except (OSError, ValueError):
+            return 404, {"error_code": "not_archived", "error_message": "no transcript or text is kept for that link"}
+        if not isinstance(s, dict) or not isinstance(s.get("text"), str) or s.get("norm_id") != norm:
+            return 404, {"error_code": "not_archived", "error_message": "no transcript or text is kept for that link"}
+        meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+        channel = meta.get("channel") or meta.get("uploader") or ""
+        return 200, {"title": s.get("title") or "", "url": s.get("url") or url, "text": s["text"],
+                     "fetched": s.get("fetched"), "channel": channel if isinstance(channel, str) else ""}
+
     def clear(self):
         # The history log's write lock first (the same order as set_saved), so a remove or restore is never half done
         # around a clear: it finishes before, or it starts after and finds the new generation and no removed store.
@@ -712,18 +726,8 @@ class Service:
                         os.remove(p)
                 except OSError:
                     pass
-        for n in os.listdir(self.src_dir):
-            p = os.path.join(self.src_dir, n)
-            try:
-                source = _read_json(p)
-                ttl = source.get("ttl", SOURCE_TTL)
-                if type(ttl) is not int or ttl < SOURCE_TTL:
-                    ttl = SOURCE_TTL
-                fetched = source.get("fetched", os.path.getmtime(p))
-                if now - fetched > ttl:
-                    os.remove(p)
-            except (OSError, ValueError, TypeError):
-                pass
+        # Fetched sources (transcripts, article text) are never pruned (Jefferson, 16 October 2026): the TTL only decides
+        # when a Dip refetches instead of reusing; the text itself is kept for good and served by archived_source().
         with self.lock:
             for jid in [k for k, v in self.jobs.items()
                         if v["state"] not in ACTIVE and now - v["updated"] > PRUNE_AFTER]:

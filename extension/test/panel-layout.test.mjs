@@ -176,8 +176,8 @@ test("outlined hand-off arrows exist for left and right at 36 and 72 px, are use
 
 test("Settings page: one YouTube section with the transcripts checkbox only; no computer, default picker, Premium or speed", () => {
   const o = read("options.html");
-  assert.equal((o.match(/<h2>/g) || []).length, 3, "Hand-off destinations, YouTube, History");
-  assert.deepEqual([...o.matchAll(/<h2>([^<]*)<\/h2>/g)].map((m) => m[1]), ["Hand-off destinations", "YouTube", "History"]);
+  assert.equal((o.match(/<h2>/g) || []).length, 2, "Hand-off destinations, YouTube (History and its Clear button went in 1.3)");
+  assert.deepEqual([...o.matchAll(/<h2>([^<]*)<\/h2>/g)].map((m) => m[1]), ["Hand-off destinations", "YouTube"]);
   assert.ok(!/Watched videos/.test(o), "the old Watched videos section is merged");
   assert.match(o, /<h2>YouTube<\/h2>\s*<label style="font-weight:400"><input id="recordWatched" type="checkbox"[^>]*>Save transcripts of videos I watch<\/label>/);
   assert.match(o, /<small>A video's transcript goes into your monthly transcripts file when you stay on it for 2 minutes, or when a background watch finishes\. Shorts, live streams and incognito tabs are skipped\.<\/small>/);

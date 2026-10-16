@@ -16,20 +16,6 @@
     small { color: GrayText; }
     h2 { font-size: 17px; margin: 28px 0 4px; }
     p { margin: 4px 0; }
-    #clear { color: #b3261e; border: 1px solid currentColor; background: Canvas; }
-    #clearconfirm { margin-top: 12px; padding: 12px 14px; border-radius: 8px; border: 1px solid #b3261e; background: rgba(179, 38, 30, .08); }
-    #clearconfirm button { margin: 10px 8px 0 0; }
-    #clearyes { background: #b3261e; color: #ffffff; border: 1px solid #b3261e; }
-    #clearmsg { margin-top: 12px; }
-    #clearmsg.bad { color: #b3261e; }
-    #clearmsg.ok { color: #1d6b31; }
-    @media (prefers-color-scheme: dark) {
-      #clear { color: #ff8a80; }
-      #clearconfirm { border-color: #ff8a80; background: rgba(255, 138, 128, .1); }
-      #clearyes { background: #d23a2c; border-color: #d23a2c; }
-      #clearmsg.bad { color: #ff8a80; }
-      #clearmsg.ok { color: #8fdca0; }
-    }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -55,15 +41,6 @@
   <small>A video's transcript goes into your monthly transcripts file when you stay on it for 2 minutes, or when a background watch finishes. Shorts, live streams and incognito tabs are skipped.</small>
   <p id="watchedAccess" hidden><small>Saving needs permission to see which tab is showing which video.</small> <button id="watchedAllow" type="button">Allow tab access</button></p>
 
-  <h2>History</h2>
-  <p><small>Clear history makes the iMac forget every summary, fetched source and question thread, and every open side panel starts fresh. The history log file (Dip'n'Dive Log.md) is kept; delete it by hand if you want it gone.</small></p>
-  <div><button id="clear" type="button">Clear history</button></div>
-  <div id="clearconfirm" role="alertdialog" aria-labelledby="clearq" aria-describedby="cleard" hidden>
-    <strong id="clearq">Clear history now?</strong>
-    <div id="cleard">This cannot be undone. Summaries and questions in open side panels go too.</div>
-    <button id="clearyes" type="button">Yes, clear history</button><button id="clearno" type="button">Cancel</button>
-  </div>
-  <div id="clearmsg" role="status"></div>
   <script type="module" src="options.js"></script>
 </body>
 </html>

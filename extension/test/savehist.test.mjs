@@ -110,53 +110,11 @@ test("Clear history from the Options page: /clear, every slot dropped, every ope
   assert.match(A.state.last.status, /cleared in another window or on the Options page/);
 });
 
-// The real options.js against a stubbed page: Clear history needs a second, explicit click.
-async function optionsPage({ removeFails = null, unreachable = false } = {}) {
-  const els = {};
-  const el = (id) => (els[id] ||= { id, hidden: false, disabled: false, value: "", textContent: "", className: "", handlers: {}, focused: 0,
-    addEventListener(t, f) { this.handlers[t] = f; }, focus() { this.focused++; } });
-  for (const id of ["base", "token", "save", "msg", "clear", "clearconfirm", "clearyes", "clearno", "clearmsg"]) el(id);
-  els.clearconfirm.hidden = true;
-  const store = { base: "http://c.test", token: "t".repeat(40), "slot:1": { url: "https://v.test/" } };
-  const fetches = [];
-  const saved = { document: globalThis.document, chrome: globalThis.chrome, fetch: globalThis.fetch };
-  const doc = { handlers: {}, getElementById: (id) => el(id), addEventListener(t, f) { this.handlers[t] = f; } };
-  globalThis.document = doc;
-  globalThis.chrome = { storage: { local: {
-    get: async (k) => (k === null ? { ...store } : Object.fromEntries((Array.isArray(k) ? k : [k]).filter((x) => x in store).map((x) => [x, store[x]]))),
-    set: async (o) => Object.assign(store, o),
-    remove: async (ks) => { if (removeFails) throw removeFails; for (const k of [].concat(ks)) delete store[k]; },
-  } }, permissions: { request: async () => true } };
-  globalThis.fetch = async (url, init) => { fetches.push({ url, method: init.method }); if (unreachable) throw new TypeError("Failed to fetch"); return { status: 200, json: async () => ({ clear_generation: 4 }) }; };
-  await import(`../options.js?run=${Math.random()}`);
-  return { els, store, fetches, doc, restore: () => Object.assign(globalThis, saved) };
-}
-
-test("Options page: Clear history asks first; Cancel sends nothing; Yes clears", async () => {
-  const p = await optionsPage();
-  try {
-    assert.equal(p.els.base.value, "http://c.test");
-    p.els.clear.handlers.click();
-    assert.equal(p.els.clearconfirm.hidden, false, "the confirmation appears");
-    assert.equal(p.els.clear.hidden, true);
-    assert.equal(p.fetches.length, 0, "nothing is cleared by the first click");
-    p.els.clearno.handlers.click();
-    assert.equal(p.els.clearconfirm.hidden, true);
-    assert.equal(p.els.clear.hidden, false);
-    assert.equal(p.fetches.length, 0, "Cancel sends nothing");
-    p.els.clear.handlers.click();
-    p.doc.handlers.keydown({ key: "Escape" });
-    assert.equal(p.els.clearconfirm.hidden, true, "Escape cancels too");
-    p.els.clear.handlers.click();
-    await p.els.clearyes.handlers.click();
-    assert.deepEqual(p.fetches, [{ url: "http://c.test/clear", method: "POST" }]);
-    assert.equal(p.store.clearGen, 4);
-    assert.ok(!("slot:1" in p.store));
-    assert.match(p.els.clearmsg.textContent, /History cleared/);
-    assert.equal(p.els.clearconfirm.hidden, true);
-  } finally {
-    p.restore();
-  }
+test("Settings page: no Clear history button (removed in 1.3; transcripts are kept for good)", () => {
+  const o = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const oj = fs.readFileSync(new URL("../options.js", import.meta.url), "utf8");
+  for (const gone of ["Clear history", 'id="clear"', "clearconfirm", "clearyes", "clearmsg"]) assert.ok(!o.includes(gone), `options.html: ${gone}`);
+  assert.ok(!/clearCompanion|\/clear/.test(oj), "options.js sends no /clear");
 });
 
 test("markup: the Settings gear is an icon button with an accessible name; the bottom row's icon buttons are easy to hit", () => {
@@ -177,9 +135,6 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   assert.match(js, /\$\("savelabel"\)\.textContent = s\.saved \? "Summary saved" : "Summary deleted";/, "the label follows the box: Summary saved when ticked, Summary deleted when unticked");
   assert.ok(!/Dive/.test(html.replace(/Dip'n'Dive|Dive in/g, "")), "no dive wording left in the panel markup");
   assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
-  const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
-  assert.match(opts, /<button id="clear"[^>]*>Clear history<\/button>/);
-  assert.match(opts, /<div id="clearconfirm"[^>]*hidden>/);
 });
 
 test("layout: five equal square buttons and a compact bottom row (36 px controls, not 44)", () => {
@@ -331,25 +286,6 @@ test("a save change after Clear history on another machine is refused as stale a
   assert.equal(r.c.clearGen, 3);
 });
 
-
-test("Options page: focus returns to Clear history after the confirmation, and Escape works anywhere while it is open", async () => {
-  const p = await optionsPage();
-  try {
-    p.els.clear.handlers.click();
-    assert.equal(p.els.clearno.focused, 1, "Cancel has the focus while the question is open");
-    p.doc.handlers.keydown({ key: "Escape" });
-    assert.equal(p.els.clearconfirm.hidden, true, "Escape on the page closes it");
-    const before = p.els.clear.focused;
-    p.els.clear.handlers.click();
-    await p.els.clearyes.handlers.click();
-    assert.equal(p.els.clear.hidden, false);
-    assert.ok(p.els.clear.focused > before, "focus is back on Clear history");
-    p.doc.handlers.keydown({ key: "Escape" });  // closed: nothing happens
-    assert.equal(p.els.clearconfirm.hidden, true);
-  } finally {
-    p.restore();
-  }
-});
 
 test("a reconciled lost answer is announced to the other panels like any change", async () => {
   // re-verification finding 10: A reconciled to false through GET, B stayed true
@@ -540,24 +476,6 @@ test("review 3: Clear history reports a storage failure after the companion succ
   assert.equal((await clearCompanion({ fetch, cfg: { base: "http://c.test", token: "t".repeat(40) }, storage: setFails })).localError, "set failed");
   const refused = await clearCompanion({ fetch: async () => ({ status: 401, json: async () => ({}) }), cfg: { base: "http://c.test", token: "t".repeat(40) }, storage });
   assert.deepEqual([refused.ok, refused.localError], [false, null]);
-});
-
-test("review 3: the Options page says what happened: cleared but this browser's state could not be reset", async () => {
-  const p = await optionsPage({ removeFails: new Error("QuotaExceededError") });
-  try {
-    p.els.clear.handlers.click();
-    await p.els.clearyes.handlers.click();
-    assert.deepEqual(p.fetches, [{ url: "http://c.test/clear", method: "POST" }]);
-    assert.match(p.els.clearmsg.textContent, /^History cleared\. Could not reset this browser's panel state: QuotaExceededError/);
-    assert.ok(!/Not cleared|cannot reach/i.test(p.els.clearmsg.textContent), p.els.clearmsg.textContent);
-    assert.match(p.els.clearmsg.className, /bad/);
-  } finally { p.restore(); }
-  const q = await optionsPage({ unreachable: true });
-  try {
-    q.els.clear.handlers.click();
-    await q.els.clearyes.handlers.click();
-    assert.match(q.els.clearmsg.textContent, /^Not cleared: cannot reach the companion/, "a real network failure is still reported as such");
-  } finally { q.restore(); }
 });
 
 test("review 3: the panel's own Clear history says the same when its storage cleanup fails", async () => {

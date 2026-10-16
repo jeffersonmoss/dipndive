@@ -141,6 +141,11 @@ def make_handler(svc: Service, token: str):
                 if u.path == "/source":
                     jid = (urllib.parse.parse_qs(u.query).get("job") or [""])[0]
                     return self._send(*svc.get_source_for_job(jid))
+                if u.path == "/transcript":
+                    url = (urllib.parse.parse_qs(u.query).get("url") or [""])[0]
+                    if not url or len(url) > 4096:
+                        return self._send(400, {"error_code": "bad_request", "error_message": "url is required"})
+                    return self._send(*svc.archived_source(url))
                 if u.path == "/health":
                     return self._send(200, svc.health())
                 if u.path == "/clipboard/next":

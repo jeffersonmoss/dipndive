@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 os.environ["DIPDIVE_TEST_ALLOW_LOOPBACK"] = "1"
@@ -248,6 +249,27 @@ class Lifecycle(Base):
         self.svc.prune()
         self.assertFalse(os.path.exists(p))
         self.assertNotIn(r["job_id"], self.svc.jobs)
+
+    def test_sources_are_kept_for_good_and_served_by_transcript(self):
+        _, r = self.submit("source")
+        self.wait(r["job_id"])
+        src = os.path.join(_SUP, "sources")
+        [name] = os.listdir(src)
+        p = os.path.join(src, name)
+        with open(p) as f:
+            s = json.load(f)
+        s["fetched"] = time.time() - 400 * 86400  # far past every TTL and the 30-day prune
+        with open(p, "w") as f:
+            json.dump(s, f)
+        self.svc.prune()
+        self.assertTrue(os.path.exists(p), "a fetched source is never pruned")
+        c, t = self.req("GET", "/transcript?url=" + urllib.parse.quote(self.base + "/a", safe=""))
+        self.assertEqual(c, 200)
+        self.assertEqual(t["text"], s["text"])
+        self.assertEqual(t["url"], s["url"])
+        self.assertEqual(self.req("GET", "/transcript?url=" + urllib.parse.quote(self.base + "/never", safe=""))[0], 404)
+        self.assertEqual(self.req("GET", "/transcript")[0], 400)
+        self.assertEqual(self.req("GET", "/transcript?url=x", auth=False)[0], 401)
 
     def test_health_cached_60s(self):
         calls = []
