@@ -21,7 +21,8 @@
     "http://127.0.0.1/*",
     "http://localhost/*",
     "https://claude.ai/*",
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "https://www.youtube.com/*"
   ],
   "background": {
     "service_worker": "background.js",

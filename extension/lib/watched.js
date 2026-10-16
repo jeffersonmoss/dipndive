@@ -50,6 +50,15 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
 
   async function observe(tab) {
     if (!tab || tab.id == null) return;
+    try {
+      const actionTabs = (await chrome.storage.session.get("youtubeActionTabs")).youtubeActionTabs || [];
+      const recovery = (await chrome.storage.local.get("youtubeActionWindowsRecovery")).youtubeActionWindowsRecovery || {};
+      const recoveryTabs = Object.values(recovery).map((entry) => entry.tabId);
+      if (actionTabs.includes(tab.id) || recoveryTabs.includes(tab.id)) {
+        await mutateState(async (state) => { if (state[String(tab.id)]) await clearTab(tab.id, state); });
+        return;
+      }
+    } catch { /* session storage may be unavailable during shutdown */ }
     if (tab.incognito || !await hasPermission() || !await enabled()) {
       await mutateState((state) => clearTab(tab.id, state));
       return;
@@ -150,6 +159,13 @@ export function registerWatchedRecorder(chrome, { fetchImpl = (...args) => fetch
   });
   chrome.alarms?.onAlarm?.addListener((alarm) => { void onAlarm(alarm); });
   chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area === "session" && changes.youtubeActionTabs) {
+      const actionTabs = changes.youtubeActionTabs.newValue || [];
+      void mutateState(async (state) => {
+        for (const id of actionTabs) if (state[String(id)]) await clearTab(id, state);
+      });
+      return;
+    }
     if (area !== "local" || !changes.recordWatchedVideos) return;
     if (changes.recordWatchedVideos.newValue === false) {
       void mutateState(async (state) => {

@@ -190,6 +190,26 @@ test("incognito tabs and the disabled setting are ignored", async () => {
   assert.equal(h.calls.length, 0);
 });
 
+test("watched recorder ignores session-tracked YouTube action tabs", async () => {
+  const h = harness();
+  h.session.youtubeActionTabs = [77];
+  const tab = { id: 77, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  assert.deepEqual(h.session.watchedPending || {}, {});
+  assert.equal(h.calls.length, 0);
+});
+
+test("watched recorder ignores a YouTube action tab while extension session storage is being recovered", async () => {
+  const h = harness();
+  h.local.youtubeActionWindowsRecovery = { "19": { windowId: 9, tabId: 19 } };
+  const tab = { id: 19, url: A, incognito: false };
+  h.tabs.set(tab.id, tab);
+  await h.rec.observe(tab);
+  assert.deepEqual(h.session.watchedPending || {}, {});
+  assert.equal(h.calls.length, 0);
+});
+
 test("a worker restart keeps the pending visit and due time in storage.session", async () => {
   const h = harness();
   h.tabs.set(8, { id: 8, url: A, incognito: false });

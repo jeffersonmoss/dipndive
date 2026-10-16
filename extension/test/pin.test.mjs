@@ -169,12 +169,13 @@ test("wiring: the panel asks for the optional tabs permission inside the click a
   assert.ok(!/\bawait\b/.test(beforeRequest), "nothing is awaited before the permission request");
 });
 
-test("manifest: tabs is optional only (asking later does not disable installed copies), and no host access was added", () => {
+test("manifest: tabs and YouTube access are optional only", () => {
   const m = JSON.parse(read("manifest.json"));
   assert.deepEqual(m.optional_permissions, ["tabs"]);
   assert.ok(!(m.permissions || []).includes("tabs"));
   assert.equal(m.host_permissions, undefined);
-  assert.ok(!(m.optional_host_permissions || []).some((h) => /youtube|\*:\/\/\*|<all_urls>|https:\/\/\*\/\*/.test(h)));
+  assert.deepEqual((m.optional_host_permissions || []).filter((h) => /youtube/i.test(h)), ["https://www.youtube.com/*"]);
+  assert.ok(!(m.optional_host_permissions || []).some((h) => /\*:\/\/\*|<all_urls>|https:\/\/\*\/\*/.test(h)));
 });
 
 // ---- review fixes: a pending pin, a fresh panel's mode, and a pin message next to a running job ----

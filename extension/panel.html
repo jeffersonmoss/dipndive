@@ -18,6 +18,13 @@
     <a id="title" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
   </header>
   <div id="buttons" role="group" aria-label="Dip and hand-off actions"></div>
+  <div id="youtubeactions" role="group" aria-label="YouTube actions" hidden>
+    <button type="button" data-youtube-action="like" aria-label="Like video" title="Like video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v11H3V10h4Zm0 0 5-8c1.8 0 2.8 1.2 2.2 3.2L13 9h6.3c1.2 0 2 .9 1.8 2.1l-1.4 8a2.3 2.3 0 0 1-2.2 1.9H7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+    <button type="button" data-youtube-action="subscribe" aria-label="Subscribe to channel" title="Subscribe to channel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9ZM12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+    <button type="button" data-youtube-action="history" aria-label="Add to YouTube history" title="Add to history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8m0-5v5h5m4-2v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button type="button" data-youtube-action="watchThrough" aria-label="Watch through video" title="Watch through video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-13Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m10 8 5 4-5 4V8Z" fill="currentColor"/></svg></button>
+  </div>
+  <div id="youtubeactionnotice" class="muted" role="status" hidden></div>
   <div id="pinmsg" class="error" role="alert" hidden></div>
   <div id="codexnote" class="reason" hidden></div>
   <main id="result" aria-live="polite"></main>

@@ -8,6 +8,8 @@ import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { renderClipboardRow } from "./lib/clipboard-view.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
+import { youtubeActionVisible } from "./lib/youtube-actions.js";
+import { youtubeVideoId } from "./lib/watched.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
@@ -78,6 +80,34 @@ $("urlform").addEventListener("submit", async (e) => {
 });
 
 let shownResult = null;
+let panelIncognito = false;
+let youtubePremium = false;
+let winInfo = null;
+let shownYoutubeVideoId = null;
+const youtubeStates = {};
+const autoStartedJobs = new Set();
+
+function setYoutubeButton(action, state, title, percent) {
+  const b = document.querySelector(`[data-youtube-action="${action}"]`);
+  if (!b) return;
+  b.dataset.state = state;
+  b.disabled = action === "watchThrough" && !youtubePremium && state !== "working";
+  const labels = { like: "Like video", subscribe: "Subscribe to channel", history: "Add to history", watchThrough: "Watch through video" };
+  const completed = { like: "Liked", subscribe: "Subscribed", history: "Added to history", watchThrough: "Watched through" };
+  b.title = title || (action === "watchThrough" && !youtubePremium ? "Turn on 'I have YouTube Premium' in Settings" : state === "done" ? completed[action] : state === "working" && action === "watchThrough" && percent != null ? `Watching through: ${percent}% (click to cancel)` : state === "working" ? `${labels[action]} in progress` : labels[action]);
+  if (state === "working") b.setAttribute("aria-label", `${labels[action]} in progress${percent == null ? "" : `, ${percent}%`}. Click to cancel.`);
+  else b.setAttribute("aria-label", labels[action]);
+}
+
+async function startAutomaticYoutubeDefault(s) {
+  if (!s.jobId || autoStartedJobs.has(s.jobId) || !s.source || !youtubeActionVisible(s.source.url)) return;
+  if (!s.resultMode?.endsWith("-dip")) return;
+  autoStartedJobs.add(s.jobId);
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "youtube-action-default", jobId: s.jobId, url: s.source.url, panelWindowId: winInfo?.id, incognito: panelIncognito });
+    if (r?.notice) { $("youtubeactionnotice").textContent = r.notice; $("youtubeactionnotice").hidden = false; }
+  } catch { /* no background response */ }
+}
 
 function render(s) {
   for (const [id, b] of Object.entries(buttons)) {
@@ -112,6 +142,20 @@ function render(s) {
   $("error").textContent = s.error || "";
   $("status").textContent = s.status || "";
   renderSave(s);
+  const videoId = s.source ? youtubeVideoId(s.source.url) : null;
+  if (videoId !== shownYoutubeVideoId) {
+    shownYoutubeVideoId = videoId;
+    for (const action of ["like", "subscribe", "history", "watchThrough"]) youtubeStates[action] = { status: "idle" };
+    $("youtubeactionnotice").textContent = "";
+  }
+  const showYoutube = !panelIncognito && !!s.source && youtubeActionVisible(s.source.url);
+  $("youtubeactions").hidden = !showYoutube;
+  if (!showYoutube) $("youtubeactionnotice").hidden = true;
+  for (const action of ["like", "subscribe", "history", "watchThrough"]) {
+    const state = youtubeStates[action] || {};
+    setYoutubeButton(action, state.status || "idle", state.reason, state.percent);
+  }
+  if (s.jobState === "done" && s.result) void startAutomaticYoutubeDefault(s);
   renderClipboardRow({ button: $("clipbutton"), status: $("clipstatus"), inputs: document.querySelectorAll("[data-machine]") }, s);
   document.body.classList.toggle("busy", !!s.busy);
 }
@@ -338,6 +382,51 @@ for (const input of document.querySelectorAll("[data-machine]")) input.addEventL
 // Keep this call on the button click path so navigator.clipboard.writeText has the user gesture.
 $("clipbutton").addEventListener("click", () => ctl.sendToClipboard((url) => navigator.clipboard.writeText(url)));
 
+for (const b of document.querySelectorAll("[data-youtube-action]")) b.addEventListener("click", async () => {
+  const action = b.dataset.youtubeAction;
+  const current = youtubeStates[action] || {};
+  if (current.status === "working") {
+    try { await chrome.runtime.sendMessage({ type: "youtube-action-cancel", actionId: current.actionId }); } catch {}
+    return;
+  }
+  const allowed = await chrome.permissions.request({ origins: ["https://www.youtube.com/*"] });
+  if (!allowed) {
+    youtubeStates[action] = { status: "failed", reason: "YouTube access permission was declined" };
+    setYoutubeButton(action, "failed", youtubeStates[action].reason);
+    return;
+  }
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "youtube-action", action, url: ctl.s.source?.url, panelWindowId: winInfo?.id, incognito: panelIncognito });
+    if (!r?.ok) {
+      youtubeStates[action] = { status: "failed", reason: r?.reason || "YouTube action could not start" };
+      setYoutubeButton(action, "failed", youtubeStates[action].reason);
+    } else {
+      const latest = youtubeStates[action];
+      if (latest?.actionId !== r.actionId || !["done", "failed", "cancelled"].includes(latest?.status)) {
+        youtubeStates[action] = { status: "working", actionId: r.actionId };
+        setYoutubeButton(action, "working");
+      }
+    }
+  } catch (error) {
+    youtubeStates[action] = { status: "failed", reason: String(error?.message || error) };
+    setYoutubeButton(action, "failed", youtubeStates[action].reason);
+  }
+});
+
+chrome.runtime.onMessage?.addListener((message) => {
+  if (message?.type !== "youtube-action-progress" || message.status === "finished") return;
+  if (message.videoId && message.videoId !== shownYoutubeVideoId) return;
+  const status = message.status;
+  const prior = youtubeStates[message.action] || {};
+  youtubeStates[message.action] = { ...prior, ...message, actionId: message.actionId };
+  if (["done", "failed", "cancelled"].includes(status)) {
+    youtubeStates[message.action].status = status === "cancelled" ? "idle" : status;
+    const labels = { like: "Already liked", subscribe: "Already subscribed" };
+    youtubeStates[message.action].reason = message.reason || (message.already ? labels[message.action] || "Already done" : null);
+  }
+  setYoutubeButton(message.action, youtubeStates[message.action].status, youtubeStates[message.action].reason, message.percent);
+});
+
 // ---------- History: its own tab (history.html), reused when one is already open ----------
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
 // The service worker does the lookup-or-create (one at a time for every panel), so two quick clicks open one tab. Only when
@@ -355,6 +444,18 @@ $("options").addEventListener("click", () => {
 });
 chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));
 
-const win = await chrome.windows.getCurrent();
-await ctl.init(win.id);
+winInfo = await chrome.windows.getCurrent();
+panelIncognito = !!winInfo.incognito;
+const youtubePrefs = await chrome.storage.local.get("youtubePremium");
+youtubePremium = youtubePrefs.youtubePremium === true;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.youtubePremium) {
+    youtubePremium = changes.youtubePremium.newValue === true;
+    for (const action of ["like", "subscribe", "history", "watchThrough"]) {
+      const state = youtubeStates[action] || {};
+      setYoutubeButton(action, state.status || "idle", state.reason, state.percent);
+    }
+  }
+});
+await ctl.init(winInfo.id);
 if (!ctl.s.source) $("urlinput").focus(); // nothing pending: empty field, focused, with the hint showing

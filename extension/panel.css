@@ -4,7 +4,7 @@
   --claude: #D97757; --claude-edge: #A9502F; --claude-pale: #F6D6C9; --claude-pale-edge: #D9A895; --on-claude: #ffffff;
   --codex: #2B6CF6; --codex-edge: #1A47B0; --codex-pale: #CFE0FF; --codex-pale-edge: #9DB8F0; --on-codex: #ffffff;
   --light-btn: #ffffff; --light-btn-edge: #b9b5ab; --on-pale: #2a2724;
-  --err-bg: #fde8e6; --err-fg: #8c1d13; --link: #1a55c4;
+  --err-bg: #fde8e6; --err-fg: #8c1d13; --link: #1a55c4; --success: #278443;
   --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff; --q-bg: #ebe8e1;
   --mode-bg: #000000; --mode-border: #000000; --mode-ledge: #48453f;
 }
@@ -14,7 +14,7 @@
     /* Dip squares stay pale (pale orange, pale blue, dark text) in dark mode too; only the edges deepen */
     --claude-pale-edge: #9a6a58; --codex-pale-edge: #6e8ac0;
     --light-btn: #e9e8e4; --light-btn-edge: #8b877d;
-    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --link: #8ab4ff;
+    --err-bg: #4a1f1b; --err-fg: #ffb4ab; --link: #8ab4ff; --success: #82c995;
     --rec: #c62a1c; --rec-edge: #8f150c; --q-bg: #34322e;
     --mode-border: #34322e; --mode-ledge: #5a5750;
   }
@@ -37,6 +37,16 @@ body {
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
 #buttons { --u: calc((100% - 32px) / 5); display: grid; grid-template-columns: repeat(5, var(--u)); justify-content: center; gap: 8px; }
+#youtubeactions { display: flex; justify-content: center; gap: 7px; margin-top: -4px; }
+#youtubeactions button { width: 34px; height: 30px; padding: 5px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); cursor: pointer; }
+#youtubeactions button svg { width: 17px; height: 17px; }
+#youtubeactions button:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
+#youtubeactions button[data-state="working"] { color: var(--link); }
+#youtubeactions button[data-state="done"] { color: var(--success); }
+#youtubeactions button[data-state="failed"] { color: var(--err-fg); }
+#youtubeactions button:disabled { opacity: .45; cursor: not-allowed; }
+#youtubeactions button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+#youtubeactionnotice { text-align: center; margin-top: -6px; }
 /* Three black buttons: the pin action is the old square (one fifth of the row, less the gaps, --u) in the center, and each
    provider (Claude, Codex) is 1.5 times that width at the same height, with its logo at full strength. Unpressed they stand
    on a ledge; a pressed mode sinks, loses the ledge, takes inset shading and a rim and glow in the provider's colour (--rim),

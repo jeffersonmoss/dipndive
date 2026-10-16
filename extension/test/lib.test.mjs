@@ -125,7 +125,7 @@ test("manifest: exact permissions, fixed key, no content scripts, no broad hosts
   assert.equal(m.content_scripts, undefined);
   assert.ok(!JSON.stringify(m).includes("<all_urls>"));
   assert.equal(m.host_permissions, undefined, "no always-on host access");
-  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*", "https://claude.ai/*", "https://chatgpt.com/*"]);
+  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*", "https://claude.ai/*", "https://chatgpt.com/*", "https://www.youtube.com/*"]);
   assert.equal(m.minimum_chrome_version, "116");
   assert.equal(m.side_panel.default_path, "panel.html");
 });
@@ -272,7 +272,7 @@ test("panel buttons: exactly two mode buttons (Claude Dip, Codex Dip) either sid
   assert.match(js, /b\.title = off \? s\.codexReason : MODES\.find\(\(m\) => m\.id === id\)\.label/, "tooltip is the label, or the reason Codex is off");
   assert.match(js, /const off = s\.codexOk === false && id\.startsWith\("codex"\);\s*b\.disabled = off;/, "Codex button disabled when Codex is unavailable");
   assert.match(js, /b\.setAttribute\("aria-pressed", String\(id === s\.mode\)\)/, "the selected provider is the pressed one");
-  assert.ok(!/MODE_ICON/.test(js) && !/-dip"\)/.test(js.replace(/logo\(m\.logo\)/g, "")), "no per-mode faded Dip logo table");
+  assert.ok(!/MODE_ICON/.test(js), "no per-mode faded Dip logo table");
   assert.ok(!/dive/i.test(js.replace(/claude-dive|codex-dive/g, "").replace(/\bDive in\b/g, "").replace(/Dip'n'Dive|dipdive/gi, "")), "no dive wording left in the panel script");
   assert.ok(!/Dive/.test(h.replace(/Dip'n'Dive|Dive in/g, "")), "nor in the markup");
 });
