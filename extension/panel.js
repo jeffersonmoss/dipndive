@@ -7,6 +7,7 @@ import { MIC } from "./lib/voice.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
+import { creatorView } from "./lib/urls.js";
 import { HistoryRow, rowStatus, rowsVisible } from "./lib/history-row.js";
 
 installShim();
@@ -128,6 +129,7 @@ function render(s) {
   t.textContent = s.title || (s.source ? s.source.url : "");
   t.hidden = !(s.title || s.source);
   if (href) t.href = href; else t.removeAttribute("href");
+  renderCreator(s);
   // The field keeps showing the current URL, unless the user is mid-edit.
   if (!urlDirty && s.source && $("urlinput").value !== s.source.url) $("urlinput").value = s.source.url;
   $("hint").hidden = !!s.source || !!s.error;
@@ -150,6 +152,24 @@ function render(s) {
   document.body.classList.toggle("busy", !!s.busy);
 }
 
+// ---------- the creator line under the title ----------
+// The channel name (or the article's site name) from the companion. A link to the channel's /videos page only when the companion
+// named a YouTube channel page; otherwise plain text. Built with textContent, never innerHTML.
+function renderCreator(s) {
+  const el = $("creator");
+  const { name, href } = creatorView(s);
+  el.replaceChildren();
+  el.hidden = !name;
+  if (!name) return;
+  if (!href) { el.textContent = name; return; }
+  const a = document.createElement("a");
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.textContent = name;
+  el.appendChild(a);
+}
+
 // ---------- the Saved checkbox ----------
 // Shown only for a finished Dip that has an entry in the companion's history log.
 function renderSave(s) {
@@ -159,6 +179,7 @@ function renderSave(s) {
   $("savehist").checked = s.saved;
   $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
   $("savehist").disabled = !!s.savingSaved;
+  $("savelabel").textContent = s.saved ? "Summary saved" : "Summary deleted";
 }
 
 // ---------- question box ----------

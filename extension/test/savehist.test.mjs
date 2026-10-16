@@ -171,10 +171,10 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   const [gw, gh] = size("\\.iconbtn");
   assert.ok(gw >= 28 && gh >= 28, "the gear is small but clickable");
   for (const sel of ["\\.rowbtn", "#mic"]) { const [w, h] = size(sel); assert.ok(w >= 36 && h >= 36, `${sel} ${w}x${h}`); }
-  assert.match(html, /<label id="saveline" class="savebox check" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Saved<\/span><\/label>/);
+  assert.match(html, /<label id="saveline" class="savebox check" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Summary saved<\/span><\/label>/);
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /\$\("savehist"\)\.addEventListener\("change", \(\) => ctl\.setSaved\(\$\("savehist"\)\.checked\)\)/);
-  assert.ok(!/savelabel"\)\.textContent/.test(js), "the label is always just Saved");
+  assert.match(js, /\$\("savelabel"\)\.textContent = s\.saved \? "Summary saved" : "Summary deleted";/, "the label follows the box: Summary saved when ticked, Summary deleted when unticked");
   assert.ok(!/Dive/.test(html.replace(/Dip'n'Dive|Dive in/g, "")), "no dive wording left in the panel markup");
   assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
   const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");

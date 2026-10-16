@@ -55,7 +55,7 @@ export class Controller {
     this.micBaseText = "";
     this.pendingMicAsk = false;
     this.s = {
-      configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null,
+      configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null, channel: null, channelUrl: null,
       result: null, resultMode: null, error: null, status: "", busy: false, pinError: null,
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
@@ -274,7 +274,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, result: null, resultMode: null, error: null, pinError: null,
+    this.emit({ jobId: null, jobState: null, title: null, channel: null, channelUrl: null, result: null, resultMode: null, error: null, pinError: null,
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
@@ -410,7 +410,10 @@ export class Controller {
     if (r.status === 404) { this.emit({ error: "That result is gone (history was cleared). Press the button again.", status: "", busy: false }); return; }
     if (r.status >= 400) { this.emit({ error: describeError(r.json.error_code, r.json.error_message), status: "", busy: false }); return; }
     const j = r.json;
-    this.emit({ title: j.title || this.s.title, source: { url: j.url || this.slot.url }, jobState: j.state });
+    // The creator (channel, and its page for YouTube) comes from the companion's job JSON, kept like the title and cleared with it.
+    const channel = typeof j.channel === "string" && j.channel.trim() ? j.channel.trim() : null;
+    this.emit({ title: j.title || this.s.title, channel: channel || this.s.channel,
+                channelUrl: channel ? (typeof j.channel_url === "string" ? j.channel_url : null) : this.s.channelUrl, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
       this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: "Done.", busy: false,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });

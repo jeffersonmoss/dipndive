@@ -44,6 +44,10 @@ body {
 #go:active { transform: translateY(1px); }
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
+/* The creator under the title: black in light mode, white in dark (--fg), a link only when the channel page is known. */
+header #creator { margin-top: 3px; font-size: 13px; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+header #creator a { color: var(--fg); text-decoration: none; }
+header #creator a:hover { text-decoration: underline; }
 #buttons { --u: calc((100% - 32px) / 5); display: grid; grid-template-columns: repeat(5, var(--u)); justify-content: center; gap: 8px; }
 #youtubeactionnotice { text-align: center; margin-top: -6px; }
 /* Three buttons (black in dark mode, white in light mode): the pin action is the old square (one fifth of the row, less the gaps, --u) in the center, and each

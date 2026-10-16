@@ -37,6 +37,10 @@ def _sha(*parts) -> str:
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
+def _text_or_none(v):
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
 def norm_source_id(url: str) -> str:
     """Cheap normalized source id for dedupe and the source cache (no network)."""
     u = unwrap(url.strip())
@@ -443,7 +447,10 @@ class Service:
         return bool(src and src["hash"] == j.get("source_hash"))
 
     def public(self, j):
-        return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"],
+        # The creator, stored on the job when its source was read (never re-read here). channel_url exists only for YouTube
+        # sources fetched with one; a source cached before it was kept answers with the channel alone.
+        creator = {k: j[k] for k in ("channel", "channel_url") if j.get(k)}
+        return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"], **creator,
                 "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
                 "error_message": j["error_message"], "clear_generation": self.generation,
                 # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
@@ -585,7 +592,9 @@ class Service:
         try:
             self._set(j, state="fetching")
             s = self._get_source(j)
-            self._set(j, title=s["title"], source_ready=True, source_hash=s["hash"])
+            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+            self._set(j, title=s["title"], source_ready=True, source_hash=s["hash"],
+                      channel=_text_or_none(meta.get("channel")), channel_url=_text_or_none(meta.get("channel_url")))
             if j["mode"] == "source":
                 self._set(j, state="done")
                 return

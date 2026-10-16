@@ -188,6 +188,18 @@ class Channel(unittest.TestCase):
         self.assertEqual(self._youtube(dict(base, uploader="Only Uploader")).meta["channel"], "Only Uploader")
         self.assertEqual(self._youtube(dict(base)).meta["channel"], "")
 
+    def test_youtube_source_carries_channel_url_only_when_it_is_a_youtube_channel_page(self):
+        base = {"title": "Vid", "language": "en", "subtitles": {"en": [{"url": "https://x/a", "ext": "json3"}]},
+                "automatic_captions": {}}
+        h, c = "https://www.youtube.com/@TEDx", "https://www.youtube.com/channel/UCsT0YIqwnpJCM-mx7-gSA4Q"
+        self.assertEqual(self._youtube(dict(base, uploader_url=h, channel_url=c)).meta["channel_url"], h)
+        self.assertEqual(self._youtube(dict(base, uploader_url="https://example.com/@x", channel_url=c)).meta["channel_url"], c)
+        self.assertEqual(self._youtube(dict(base, uploader_url=h + "/")).meta["channel_url"], h)
+        for bad in ({}, {"uploader_url": "http://www.youtube.com/@x"}, {"uploader_url": "https://evil.test/@x"},
+                    {"channel_url": "https://www.youtube.com/user/old"}, {"channel_url": "javascript:alert(1)"},
+                    {"uploader_url": 5, "channel_url": ["x"]}):
+            self.assertNotIn("channel_url", self._youtube(dict(base, **bad)).meta, bad)
+
     def _article(self, head):
         page = ARTICLE_PAGE % (head, "".join(f"<p>Paragraph {i} about topic {i*7919} with distinct words and more filler text here.</p>" for i in range(40)))
         real = acquire._fetch_html
@@ -300,6 +312,35 @@ class Server(FakeModels):
         self.assertEqual(len(es), 2)
         for e in es:
             self.assertRegex(e, r"^## Cached Vid\n\nChannel: TEDx Talks\n\n\d{4}-")
+
+    def _job_with_source(self, rid, meta):
+        real = service.acquire
+        service.acquire = lambda url: acquire.Source("youtube", "abcdefghijk", "Cached Vid", url, "text " * 200, meta)
+        try:
+            return self.run_job("claude-dip", rid)
+        finally:
+            service.acquire = real
+
+    def test_job_json_carries_channel_and_channel_url(self):
+        j = self._job_with_source("cu1", {"channel": "TEDx Talks", "channel_url": "https://www.youtube.com/@TEDx"})
+        self.assertEqual((j["channel"], j["channel_url"]), ("TEDx Talks", "https://www.youtube.com/@TEDx"))
+        # a later read of the job answers from the job itself (the stored fields), not from the source file
+        self.assertEqual(self.req("GET", "/jobs/" + j["job_id"])[1]["channel_url"], "https://www.youtube.com/@TEDx")
+
+    def test_source_cached_without_channel_url_returns_channel_only(self):
+        j = self._job_with_source("cu2", {"channel": "Old Cache"})
+        self.assertEqual(j["channel"], "Old Cache")
+        self.assertNotIn("channel_url", j)
+
+    def test_article_job_carries_the_site_name_and_no_channel_url(self):
+        j = self._job_with_source("cu3", {"channel": "The Daily Test"})
+        self.assertEqual(j["channel"], "The Daily Test")
+        self.assertNotIn("channel_url", j)
+
+    def test_job_without_a_channel_omits_both_fields(self):
+        j = self._job_with_source("cu4", {"channel": ""})
+        self.assertNotIn("channel", j)
+        self.assertNotIn("channel_url", j)
 
     def test_source_without_channel_omits_the_line(self):
         self.run_job("claude-dip", "n1")                       # the local article has no site name

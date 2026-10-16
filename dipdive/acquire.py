@@ -194,6 +194,21 @@ def channel_name(info) -> str:
     return ""
 
 
+_CHANNEL_URL_RE = re.compile(r"^https://www\.youtube\.com/(@[^/?#\s]+|channel/UC[A-Za-z0-9_-]+)/?$")
+
+
+def channel_url(info) -> str:
+    """The channel's page from yt-dlp metadata: `uploader_url` when it is an https://www.youtube.com/@handle URL, else
+    `channel_url` when it is an https://www.youtube.com/channel/UC... URL, else empty (never raises)."""
+    for k, prefix in (("uploader_url", "@"), ("channel_url", "channel/")):
+        v = info.get(k)
+        if isinstance(v, str):
+            v = v.strip()
+            if _CHANNEL_URL_RE.match(v) and v[len("https://www.youtube.com/"):].startswith(prefix):
+                return v.rstrip("/")
+    return ""
+
+
 def fetch_youtube(url: str, vid: str) -> Source:
     canon = f"https://www.youtube.com/watch?v={vid}"
     with tempdir("yt-dlp metadata and one caption track") as d:
@@ -224,10 +239,13 @@ def fetch_youtube(url: str, vid: str) -> Source:
         text = _parse_json3(raw) if path.endswith(".json3") else _parse_vtt(raw)
     if not text.strip():
         raise DipDiveError("no_captions", "caption track was empty")
-    return Source("youtube", vid, info.get("title") or vid, canon, text,
-                  {"duration": info.get("duration"), "track": lang, "auto": is_auto,
-                   "language": info.get("language"), "channel": channel_name(info),
-                   "live_status": info.get("live_status")})
+    meta = {"duration": info.get("duration"), "track": lang, "auto": is_auto,
+            "language": info.get("language"), "channel": channel_name(info),
+            "live_status": info.get("live_status")}
+    curl = channel_url(info)
+    if curl:
+        meta["channel_url"] = curl
+    return Source("youtube", vid, info.get("title") or vid, canon, text, meta)
 
 
 # ---------- 3.3.6 articles ----------

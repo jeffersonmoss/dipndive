@@ -43,11 +43,12 @@ test("Row A: YouTube logo, bold History:, a Watched checkbox, a thumbs-up and a 
   for (const gone of ["subscribe", "Subscribe", "data-youtube-action", "watchThrough", "Add to history"]) assert.ok(!html().includes(gone), `no ${gone}`);
 });
 
-test("Row B: Dip'n'Dive icon, bold History:, the Saved checkbox, then at the far right the status and the Settings gear", () => {
+test("Row B: Dip'n'Dive icon, bold Logged:, the Summary saved checkbox, then at the far right the status and the Settings gear", () => {
   const row = between(html(), '<div id="saverow"', "</main>");
-  const order = [...row.matchAll(/src="icons\/48\.png"|<b>History:<\/b>|id="savehist"|class="spacer"|id="status"|id="options"/g)].map((m) => m[0]);
-  assert.deepEqual(order, ['src="icons/48.png"', "<b>History:</b>", 'id="savehist"', 'class="spacer"', 'id="status"', 'id="options"']);
-  assert.match(row, /<span id="savelabel">Saved<\/span>/);
+  const order = [...row.matchAll(/src="icons\/48\.png"|<b>Logged:<\/b>|id="savehist"|class="spacer"|id="status"|id="options"/g)].map((m) => m[0]);
+  assert.deepEqual(order, ['src="icons/48.png"', "<b>Logged:</b>", 'id="savehist"', 'class="spacer"', 'id="status"', 'id="options"']);
+  assert.match(row, /<span id="savelabel">Summary saved<\/span>/);
+  assert.ok(!row.includes("<b>History:</b>"), "Row B no longer says History:");
   assert.match(row, /<button id="options" class="iconbtn" type="button" aria-label="Settings" title="Settings">/);
   assert.ok(fs.existsSync(new URL("../icons/48.png", import.meta.url)));
   // the faint outline: four 0.6 px drop-shadows, dark in light mode and white in dark mode

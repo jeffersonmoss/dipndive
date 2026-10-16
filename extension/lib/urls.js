@@ -65,3 +65,28 @@ export function normalizeTyped(text) {
   if (!/^[a-z][a-z0-9+.-]*:/i.test(t) && /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]|$)/.test(t)) t = "https://" + t;
   return isHttp(t) ? t : null;
 }
+
+// The creator link under the title: the channel page plus "/videos", only for a YouTube channel page the companion named
+// (https://www.youtube.com/@handle or /channel/UC...). Anything else gives null and the name shows as plain text. The address
+// is rebuilt from the parsed parts, never passed through, and the name never comes from model output.
+export function creatorVideosUrl(channelUrl) {
+  if (typeof channelUrl !== "string") return null;
+  let url;
+  try {
+    url = new URL(channelUrl.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.hostname !== "www.youtube.com" || url.port || url.username || url.password) return null;
+  if (url.search || url.hash) return null;
+  const path = url.pathname.replace(/\/+$/, "");
+  if (!/^\/(@[^/\s]+|channel\/UC[A-Za-z0-9_-]+)$/.test(path)) return null;
+  return `https://www.youtube.com${path}/videos`;
+}
+
+// What the creator line shows for a controller state: { name, href }. Hidden (name "") when there is no name; href is null for
+// plain text (articles, and any channel page that is not a YouTube @handle or /channel/UC... address).
+export function creatorView(s) {
+  const name = typeof s?.channel === "string" ? s.channel.trim() : "";
+  return { name, href: name ? creatorVideosUrl(s.channelUrl) : null };
+}
