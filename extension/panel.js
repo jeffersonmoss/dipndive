@@ -61,15 +61,11 @@ $("buttons").appendChild(pin);
 MODES.slice(1).forEach(addButton);
 const chatgptHandoff = addHandoff("chatgpt", "Continue in ChatGPT");
 
-function setHandoffIcons() {
-  const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-  for (const [id, b] of [["left", claudeHandoff], ["right", chatgptHandoff]]) {
-    b.querySelector("img").src = `icons/handoff/handoff-${id}-${dark ? "light" : "ink"}-36.png`;
-    b.querySelector("img").srcset = `icons/handoff/handoff-${id}-${dark ? "light" : "ink"}-72.png 2x`;
-  }
+// The buttons are black in both color schemes, so the arrow is always the light one (the ink version vanished on black).
+for (const [id, b] of [["left", claudeHandoff], ["right", chatgptHandoff]]) {
+  b.querySelector("img").src = `icons/handoff/handoff-${id}-light-36.png`;
+  b.querySelector("img").srcset = `icons/handoff/handoff-${id}-light-72.png 2x`;
 }
-setHandoffIcons();
-window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", setHandoffIcons);
 
 let urlDirty = false;
 $("urlinput").addEventListener("input", () => { urlDirty = true; });
