@@ -26,12 +26,6 @@ export function modeLabel(id) {
   return MODES.find((m) => m.id === normalizeMode(id)).label;
 }
 
-export function saveHistoryLabel(resultMode) {
-  return typeof resultMode === "string" && resultMode.endsWith("-dive")
-    ? "Save this summary to history"
-    : "Save this Dip to history";
-}
-
 // The word "and", not "&": a single "&" becomes a keyboard-mnemonic marker in Windows menus.
 export function menuLabel(id) {
   return "Dip'n'Dive";

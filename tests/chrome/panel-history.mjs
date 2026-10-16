@@ -28,8 +28,8 @@ try {
     const row = await q(`[...document.querySelectorAll("#askrow button, #askrow input")].map((e) => e.getAttribute("aria-label") || e.textContent.trim())`);
     check("bottom row reads History, question, Speak, Ask", JSON.stringify(row) === JSON.stringify(["History", "Your question", "Speak", "Ask"]), row);
     check("the bottom row's buttons are 36 px or taller", await q(`[...document.querySelectorAll("#askrow button")].every((b) => { const r = b.getBoundingClientRect(); return r.width >= 36 && r.height >= 36; })`));
-    const foot = await q(`[...document.querySelectorAll("footer .links > *")].filter((e) => !e.hidden).map((e) => e.getAttribute("aria-label") || e.textContent.trim())`);
-    check("status line has Save this Dip to history and Settings", JSON.stringify(foot) === JSON.stringify(["Save this Dip to history", "Settings"]), foot);
+    const foot = await q(`[...document.querySelectorAll("#saverow label, #saverow button")].filter((e) => !e.hidden).map((e) => e.getAttribute("aria-label") || e.textContent.trim())`);
+    check("the Saved row has Saved and Settings", JSON.stringify(foot) === JSON.stringify(["Saved", "Settings"]), foot);
     check("no Clear history and no in-panel history view", await q(`!document.getElementById("clear") && !document.getElementById("historyview") && !document.body.textContent.includes("Clear history")`));
     check("the gear is at least 28 px square", await q(`(() => { const r = document.getElementById("options").getBoundingClientRect(); return r.width >= 28 && r.height >= 28; })()`));
     const names = await q(`[...document.querySelectorAll("#buttons button")].map((b) => [b.getAttribute("aria-label") || b.textContent.trim(), b.title, !!b.querySelector("img, svg")])`);

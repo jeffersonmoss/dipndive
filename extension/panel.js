@@ -1,15 +1,13 @@
 import { Controller } from "./lib/controller.js";
-import { MODES, saveHistoryLabel } from "./lib/modes.js";
+import { MODES } from "./lib/modes.js";
 import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
-import { renderClipboardRow } from "./lib/clipboard-view.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
-import { youtubeActionVisible } from "./lib/youtube-actions.js";
-import { youtubeVideoId } from "./lib/watched.js";
+import { HistoryRow, rowStatus, rowsVisible } from "./lib/history-row.js";
 
 installShim();
 const $ = (id) => document.getElementById(id);
@@ -17,8 +15,9 @@ const $ = (id) => document.getElementById(id);
 // The logos (icons/modes/, made by tools/mode_icons.py), always at full strength: each mode names its logo file in lib/modes.js.
 // Decorative: the button's name is its hidden label.
 const logo = (name) => `<img src="icons/modes/${name}-36.png" srcset="icons/modes/${name}-72.png 2x" width="34" height="34" alt="">`;
-// The center button is an action, not a mode: a white map pin (a round head tapering to a point, with a small round hole), solid.
-const PIN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#ffffff" fill-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7ZM12 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>';
+// The center button is an action, not a mode: a white map pin (a round head tapering to a point, with a small round hole), solid,
+// with a thin black outline so it shows on the white buttons of light mode too (on the black buttons of dark mode it blends in).
+const PIN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#ffffff" stroke="#000" stroke-width="1.3" paint-order="stroke" fill-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7ZM12 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>';
 
 // Buttons are built once; state changes only flip aria-pressed and classes.
 const buttons = {};
@@ -61,10 +60,11 @@ $("buttons").appendChild(pin);
 MODES.slice(1).forEach(addButton);
 const chatgptHandoff = addHandoff("chatgpt", "Continue in ChatGPT");
 
-// The buttons are black in both color schemes, so the arrow is always the light one (the ink version vanished on black).
+// One outlined arrow for both color schemes (white with a thin black outline, made by tools/handoff_icons.py): it shows on the
+// white buttons of light mode and on the black buttons of dark mode.
 for (const [id, b] of [["left", claudeHandoff], ["right", chatgptHandoff]]) {
-  b.querySelector("img").src = `icons/handoff/handoff-${id}-light-36.png`;
-  b.querySelector("img").srcset = `icons/handoff/handoff-${id}-light-72.png 2x`;
+  b.querySelector("img").src = `icons/handoff/handoff-${id}-outline-36.png`;
+  b.querySelector("img").srcset = `icons/handoff/handoff-${id}-outline-72.png 2x`;
 }
 
 let urlDirty = false;
@@ -77,32 +77,36 @@ $("urlform").addEventListener("submit", async (e) => {
 
 let shownResult = null;
 let panelIncognito = false;
-let youtubePremium = false;
 let winInfo = null;
-let shownYoutubeVideoId = null;
-const youtubeStates = {};
-const autoStartedJobs = new Set();
 
-function setYoutubeButton(action, state, title, percent) {
-  const b = document.querySelector(`[data-youtube-action="${action}"]`);
-  if (!b) return;
-  b.dataset.state = state;
-  b.disabled = action === "watchThrough" && !youtubePremium && state !== "working";
-  const labels = { like: "Like video", subscribe: "Subscribe to channel", history: "Add to history", watchThrough: "Watch through video" };
-  const completed = { like: "Liked", subscribe: "Subscribed", history: "Added to history", watchThrough: "Watched through" };
-  b.title = title || (action === "watchThrough" && !youtubePremium ? "Turn on 'I have YouTube Premium' in Settings" : state === "done" ? completed[action] : state === "working" && action === "watchThrough" && percent != null ? `Watching through: ${percent}% (click to cancel)` : state === "working" ? `${labels[action]} in progress` : labels[action]);
-  if (state === "working") b.setAttribute("aria-label", `${labels[action]} in progress${percent == null ? "" : `, ${percent}%`}. Click to cancel.`);
-  else b.setAttribute("aria-label", labels[action]);
-}
-
-async function startAutomaticYoutubeDefault(s) {
-  if (!s.jobId || autoStartedJobs.has(s.jobId) || !s.source || !youtubeActionVisible(s.source.url)) return;
-  if (!s.resultMode?.endsWith("-dip")) return;
-  autoStartedJobs.add(s.jobId);
-  try {
-    const r = await chrome.runtime.sendMessage({ type: "youtube-action-default", jobId: s.jobId, url: s.source.url, panelWindowId: winInfo?.id, incognito: panelIncognito });
-    if (r?.notice) { $("youtubeactionnotice").textContent = r.notice; $("youtubeactionnotice").hidden = false; }
-  } catch { /* no background response */ }
+// The YouTube row (Watched, Like, Dislike): a DOM-free class does the thinking, this draws what it says.
+const historyRow = new HistoryRow({
+  send: (m) => chrome.runtime.sendMessage(m),  // (rejects in the dev shim, which has no runtime: the row shows the reason)
+  storage: { get: (k) => chrome.storage.local.get(k) },
+  requestAccess: () => chrome.permissions.request({ origins: ["https://www.youtube.com/*"] }),
+  windowId: () => winInfo?.id,
+  now: () => Date.now(),
+  setTimer: (f, ms) => setTimeout(f, ms),
+  clearTimer: (id) => clearTimeout(id),
+  onChange: drawYoutubeRow,
+});
+function drawYoutubeRow(v) {
+  $("ytrow").hidden = !v.visible;
+  const w = v.watched;
+  $("watched").checked = w.checked;
+  $("watched").disabled = w.disabled;
+  $("watchedlabel").textContent = w.label;
+  $("watched").closest("label").title = w.title;
+  for (const kind of ["like", "dislike"]) {
+    const b = $(kind), t = v[kind];
+    b.setAttribute("aria-pressed", String(t.pressed));
+    b.dataset.state = t.busy ? "working" : "";
+    b.disabled = t.disabled;
+    b.title = t.title;
+    b.setAttribute("aria-label", t.label);
+  }
+  $("youtubeactionnotice").textContent = v.notice;
+  $("youtubeactionnotice").hidden = !v.visible || !v.notice;
 }
 
 function render(s) {
@@ -130,40 +134,29 @@ function render(s) {
   // Re-set only when the text changed: an emit happens on every interim speech result, and rebuilding the summary three
   // times a second would drop a text selection and make a screen reader re-read it.
   const shown = s.result || "";
-  if (shown !== shownResult) { shownResult = shown; $("result").innerHTML = shown ? renderMarkdown(shown) : ""; }
+  if (shown !== shownResult) { shownResult = shown; $("resulttext").innerHTML = shown ? renderMarkdown(shown) : ""; }
   renderAsk(s);
   $("pinmsg").hidden = !s.pinError;  // the pin's own line: it never replaces the status or error of a job
   $("pinmsg").textContent = s.pinError || "";
   $("error").hidden = !s.error;
   $("error").textContent = s.error || "";
-  $("status").textContent = s.status || "";
+  // The two rows close the summary card. The status text beside the gear is there only while a Dip is in progress.
+  $("status").textContent = rowStatus(s);
+  const showRows = rowsVisible(s);
+  $("hist").hidden = !showRows;
+  $("result").hidden = !shown && !showRows;
   renderSave(s);
-  const videoId = s.source ? youtubeVideoId(s.source.url) : null;
-  if (videoId !== shownYoutubeVideoId) {
-    shownYoutubeVideoId = videoId;
-    for (const action of ["like", "subscribe", "history", "watchThrough"]) youtubeStates[action] = { status: "idle" };
-    $("youtubeactionnotice").textContent = "";
-  }
-  const showYoutube = !panelIncognito && !!s.source && youtubeActionVisible(s.source.url);
-  $("youtubeactions").hidden = !showYoutube;
-  if (!showYoutube) $("youtubeactionnotice").hidden = true;
-  for (const action of ["like", "subscribe", "history", "watchThrough"]) {
-    const state = youtubeStates[action] || {};
-    setYoutubeButton(action, state.status || "idle", state.reason, state.percent);
-  }
-  if (s.jobState === "done" && s.result) void startAutomaticYoutubeDefault(s);
-  renderClipboardRow({ button: $("clipbutton"), status: $("clipstatus"), inputs: document.querySelectorAll("[data-machine]") }, s);
+  historyRow.setSource(s.source ? s.source.url : null, panelIncognito);
   document.body.classList.toggle("busy", !!s.busy);
 }
 
-// ---------- "Save this Dip to history" ----------
-// Shown only next to a finished Dip that has an entry in the companion's history log.
+// ---------- the Saved checkbox ----------
+// Shown only for a finished Dip that has an entry in the companion's history log.
 function renderSave(s) {
   const show = s.configured && !!s.result && typeof s.saved === "boolean";  // also while unknown
   $("saveline").hidden = !show;
   if (!show) return;
   $("savehist").checked = s.saved;
-  $("savelabel").textContent = saveHistoryLabel(s.resultMode);
   $("savehist").indeterminate = !!s.savedUnknown;  // the companion's answer was lost: not known until it is asked again
   $("savehist").disabled = !!s.savingSaved;
 }
@@ -372,56 +365,12 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) ctl.p
 window.addEventListener("pagehide", () => ctl.pauseMic());
 if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "dipdive-mic-granted") ctl.refreshMic(); });
 $("savehist").addEventListener("change", () => ctl.setSaved($("savehist").checked));
-for (const input of document.querySelectorAll("[data-machine]")) input.addEventListener("change", () => {
-  ctl.setClipboardMachines([...document.querySelectorAll("[data-machine]:checked")].map((el) => el.dataset.machine));
-});
-// Keep this call on the button click path so navigator.clipboard.writeText has the user gesture.
-$("clipbutton").addEventListener("click", () => ctl.sendToClipboard((url) => navigator.clipboard.writeText(url)));
-
-for (const b of document.querySelectorAll("[data-youtube-action]")) b.addEventListener("click", async () => {
-  const action = b.dataset.youtubeAction;
-  const current = youtubeStates[action] || {};
-  if (current.status === "working") {
-    try { await chrome.runtime.sendMessage({ type: "youtube-action-cancel", actionId: current.actionId }); } catch {}
-    return;
-  }
-  const allowed = await chrome.permissions.request({ origins: ["https://www.youtube.com/*"] });
-  if (!allowed) {
-    youtubeStates[action] = { status: "failed", reason: "YouTube access permission was declined" };
-    setYoutubeButton(action, "failed", youtubeStates[action].reason);
-    return;
-  }
-  try {
-    const r = await chrome.runtime.sendMessage({ type: "youtube-action", action, url: ctl.s.source?.url, panelWindowId: winInfo?.id, incognito: panelIncognito });
-    if (!r?.ok) {
-      youtubeStates[action] = { status: "failed", reason: r?.reason || "YouTube action could not start" };
-      setYoutubeButton(action, "failed", youtubeStates[action].reason);
-    } else {
-      const latest = youtubeStates[action];
-      if (latest?.actionId !== r.actionId || !["done", "failed", "cancelled"].includes(latest?.status)) {
-        youtubeStates[action] = { status: "working", actionId: r.actionId };
-        setYoutubeButton(action, "working");
-      }
-    }
-  } catch (error) {
-    youtubeStates[action] = { status: "failed", reason: String(error?.message || error) };
-    setYoutubeButton(action, "failed", youtubeStates[action].reason);
-  }
-});
-
-chrome.runtime.onMessage?.addListener((message) => {
-  if (message?.type !== "youtube-action-progress" || message.status === "finished") return;
-  if (message.videoId && message.videoId !== shownYoutubeVideoId) return;
-  const status = message.status;
-  const prior = youtubeStates[message.action] || {};
-  youtubeStates[message.action] = { ...prior, ...message, actionId: message.actionId };
-  if (["done", "failed", "cancelled"].includes(status)) {
-    youtubeStates[message.action].status = status === "cancelled" ? "idle" : status;
-    const labels = { like: "Already liked", subscribe: "Already subscribed" };
-    youtubeStates[message.action].reason = message.reason || (message.already ? labels[message.action] || "Already done" : null);
-  }
-  setYoutubeButton(message.action, youtubeStates[message.action].status, youtubeStates[message.action].reason, message.percent);
-});
+// Watched: ticking starts the countdown, unticking cancels or stops (lib/history-row.js decides which). The permission prompt
+// for YouTube is the first thing awaited inside the click.
+$("watched").addEventListener("change", () => { void historyRow.toggleWatched($("watched").checked); });
+$("like").addEventListener("click", () => { void historyRow.toggleThumb("like"); });
+$("dislike").addEventListener("click", () => { void historyRow.toggleThumb("dislike"); });
+chrome.runtime?.onMessage?.addListener((message) => historyRow.onProgress(message));
 
 // ---------- History: its own tab (history.html), reused when one is already open ----------
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
@@ -438,20 +387,9 @@ $("historylink").addEventListener("click", async () => {
 $("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
 });
-chrome.storage.onChanged.addListener((c, a) => ctl.onStorageChange(c, a));
+chrome.storage.onChanged.addListener((c, a) => { ctl.onStorageChange(c, a); historyRow.onStorageChange(c, a); });
 
 winInfo = await chrome.windows.getCurrent();
 panelIncognito = !!winInfo.incognito;
-const youtubePrefs = await chrome.storage.local.get("youtubePremium");
-youtubePremium = youtubePrefs.youtubePremium === true;
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.youtubePremium) {
-    youtubePremium = changes.youtubePremium.newValue === true;
-    for (const action of ["like", "subscribe", "history", "watchThrough"]) {
-      const state = youtubeStates[action] || {};
-      setYoutubeButton(action, state.status || "idle", state.reason, state.percent);
-    }
-  }
-});
 await ctl.init(winInfo.id);
 if (!ctl.s.source) $("urlinput").focus(); // nothing pending: empty field, focused, with the hint showing

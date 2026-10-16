@@ -171,10 +171,10 @@ test("markup: the Settings gear is an icon button with an accessible name; the b
   const [gw, gh] = size("\\.iconbtn");
   assert.ok(gw >= 28 && gh >= 28, "the gear is small but clickable");
   for (const sel of ["\\.rowbtn", "#mic"]) { const [w, h] = size(sel); assert.ok(w >= 36 && h >= 36, `${sel} ${w}x${h}`); }
-  assert.match(html, /<label id="saveline" class="savebox" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Save this Dip to history<\/span><\/label>/);
+  assert.match(html, /<label id="saveline" class="savebox check" hidden><input id="savehist" type="checkbox" checked><span id="savelabel">Saved<\/span><\/label>/);
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   assert.match(js, /\$\("savehist"\)\.addEventListener\("change", \(\) => ctl\.setSaved\(\$\("savehist"\)\.checked\)\)/);
-  assert.ok(!/Save this \$\{/.test(js) && /savelabel"\)\.textContent/.test(js), "the label follows the result mode");
+  assert.ok(!/savelabel"\)\.textContent/.test(js), "the label is always just Saved");
   assert.ok(!/Dive/.test(html.replace(/Dip'n'Dive|Dive in/g, "")), "no dive wording left in the panel markup");
   assert.match(js, /const show = s\.configured && !!s\.result && typeof s\.saved === "boolean";/);
   const opts = fs.readFileSync(new URL("../options.html", import.meta.url), "utf8");
@@ -196,12 +196,24 @@ test("layout: five equal square buttons and a compact bottom row (36 px controls
   assert.match(css, /#mic \{[^}]*height: 36px/);
 });
 
-test("colours: the mode, History and Ask buttons are black and Speak is white, in both themes; the new page and controls use the theme's tokens", () => {
+test("colours: the mode, History and Ask buttons are white in light mode and black in dark mode (dark exactly as before), Speak is white in both; the new page and controls use the theme's tokens", () => {
   const css = fs.readFileSync(new URL("../panel.css", import.meta.url), "utf8");
   const page = fs.readFileSync(new URL("../history.css", import.meta.url), "utf8");
-  assert.match(css, /--mode-bg: #000000;/);
-  assert.match(css, /button\.mode \{[^}]*background: var\(--mode-bg\)/);
-  assert.match(css, /\.rowbtn \{[^}]*background: var\(--mode-bg\); color: #ffffff/);
+  const root = css.match(/:root \{([^}]*)\}/)[1];
+  const dark = css.match(/@media \(prefers-color-scheme: dark\) \{([\s\S]*?)\n\}/)[1];
+  // light mode: white buttons on a light-grey border and ledge, dark icons
+  assert.match(root, /--mode-bg: #ffffff; --mode-border: #c9c5bc; --mode-ledge: #b9b5ab; --on-mode: #111111;/);
+  assert.match(root, /--mode-pressed-bg: radial-gradient\(circle at 50% 58%, #ffffff 0, #f1efea 72%\)/);
+  // dark mode: black buttons, white icons, the same borders, ledge and pressed shading as before this change
+  assert.match(dark, /--mode-bg: #000000; --mode-border: #34322e; --mode-ledge: #5a5750; --on-mode: #ffffff;/);
+  assert.match(dark, /--mode-pressed-bg: radial-gradient\(circle at 50% 58%, #161616 0, #000 72%\)/);
+  assert.match(dark, /--mode-pressed-inset: inset 0 4px 10px rgba\(0, 0, 0, \.9\), inset 0 0 0 1px rgba\(255, 255, 255, \.06\)/);
+  assert.match(css, /button\.mode \{[^}]*background: var\(--mode-bg\); color: var\(--on-mode\)/);
+  assert.match(css, /\.rowbtn \{[^}]*background: var\(--mode-bg\); color: var\(--on-mode\)/);
+  // the hourglass and send buttons are the .rowbtn ones, and so is the mic, which has its own solid white rule after them
+  const html = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
+  for (const id of ["historylink", "askgo"]) assert.match(html, new RegExp(`id="${id}" class="rowbtn"`));
+  assert.match(css, /button\.mode\[aria-pressed="true"\] \{[^}]*background: var\(--mode-pressed-bg\)/);
   assert.match(css, /#mic \{[^}]*background: #ffffff; color: #111111/);
   // the pressed button is obvious on black: it sinks and gets a rim and glow in the provider's colour
   const pressed = css.match(/button\.mode\[aria-pressed="true"\] \{([^}]*)\}/)[1];

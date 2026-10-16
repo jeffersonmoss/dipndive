@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pickUrl, knownVideo, normalizeTyped } from "../lib/urls.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { MODES, MODE_IDS, DEFAULT_MODE, menuLabel, normalizeMode, migrateMode, saveHistoryLabel } from "../lib/modes.js";
+import { MODES, MODE_IDS, DEFAULT_MODE, menuLabel, normalizeMode, migrateMode } from "../lib/modes.js";
 
 test("url precedence: linkUrl, then known-video srcUrl, then frameUrl, then pageUrl", () => {
   const base = { pageUrl: "https://a.test/page", frameUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ", srcUrl: "blob:https://www.youtube.com/xyz" };
@@ -67,13 +67,6 @@ test("stored dive modes migrate to their Dip; anything else invalid falls back t
   }
 });
 
-test("the history save label follows the result's original mode", () => {
-  assert.equal(saveHistoryLabel("claude-dip"), "Save this Dip to history");
-  assert.equal(saveHistoryLabel("codex-dip"), "Save this Dip to history");
-  assert.equal(saveHistoryLabel("claude-dive"), "Save this summary to history");
-  assert.equal(saveHistoryLabel("codex-dive"), "Save this summary to history");
-});
-
 test("the five buttons are built in order and nothing reorders them, so the Tab order is the visual order", () => {
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const h = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
@@ -100,7 +93,9 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
   const svg = js.match(/const PIN_ICON = '(<svg[^']*<\/svg>)'/)[1];
   assert.match(svg, /fill="#ffffff"/);
   assert.match(svg, /fill-rule="evenodd"/);
-  assert.ok(!/stroke|<image|<img|href=/.test(svg), "solid, inline, nothing external");
+  assert.ok(!/<image|<img|href=/.test(svg), "inline, nothing external");
+  // a thin black outline painted under the white fill, so the pin shows on the white buttons of light mode
+  assert.match(svg, /stroke="#000" stroke-width="1\.3" paint-order="stroke"/);
   // one outer outline (a round head, a pointed foot) and one small round hole (an arc pair of radius 2.5), cut out by evenodd
   assert.equal((svg.match(/M/g) || []).length, 2, "two subpaths: the pin and its hole");
   assert.match(svg, /a2\.5 2\.5 0 1 1 0-5 2\.5 2\.5 0 0 1 0 5Z/);
@@ -109,7 +104,7 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
   assert.ok(!/pin\.setAttribute\("aria-pressed"/.test(js), "the pin is never marked pressed");
   assert.match(js, /pin\.className = "mode action"/);
   assert.match(js, /pin\.addEventListener\("click", \(\) => \{ ctl\.summarizePage\(\); \}\)/);
-  // the pressed look belongs to [aria-pressed="true"], which the pin never has; it is the same black square as the modes
+  // the pressed look belongs to [aria-pressed="true"], which the pin never has; it is the same square as the modes (white in light mode, black in dark mode)
   assert.ok(!/button\.action[^{]*\{[^}]*(translateY\(3px\)|inset 0 4px)/.test(css));
   assert.match(css, /button\.mode \{[^}]*background: var\(--mode-bg\)/);
 });

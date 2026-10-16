@@ -123,15 +123,16 @@ test("the History button reuses an open History tab, else opens one", async () =
   assert.equal(await openHistoryTab({ tabs: { create: async (o) => calls.push(["create", o]) } }, url), "opened", "the dev shim has no runtime");
 });
 
-test("panel.html: History is the first button of the bottom row; the status line has the save box and the Settings gear (no Clear history); panel.js opens the History tab", () => {
+test("panel.html: History is the first button of the bottom row; the Saved row has the save box, the status and the Settings gear (no Clear history); panel.js opens the History tab", () => {
   const html = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const row = html.match(/<div id="askrow">([\s\S]*?)<\/form>/)[1];
   const order = [...row.matchAll(/\bid="(historylink|askinput|mic|askgo)"/g)].map((m) => m[1]);
   assert.deepEqual(order, ["historylink", "askinput", "mic", "askgo"], "History, the question box, Speak, Ask");
   assert.match(row, /<button id="historylink" class="rowbtn" type="button" aria-label="History" title="History"><svg[^>]*aria-hidden="true"/);
-  const foot = html.match(/<footer>([\s\S]*?)<\/footer>/)[1];
-  assert.deepEqual([...foot.matchAll(/\bid="(status|saveline|options)"/g)].map((m) => m[1]), ["status", "saveline", "options"]);
+  assert.ok(!/<footer/.test(html), "the old footer is gone");
+  const saveRow = html.match(/<div id="saverow"[^>]*>([\s\S]*?)<\/button>\s*<\/div>/)[1];
+  assert.deepEqual([...saveRow.matchAll(/\bid="(saveline|status|options)"/g)].map((m) => m[1]), ["saveline", "status", "options"], "Saved, then the status and the gear at the far right");
   assert.ok(!/id="clear"|Clear history|historyview/.test(html), "no Clear history and no in-panel history view");
   const ids = [...html.matchAll(/\bid="(\w+)"/g)].map((m) => m[1]);
   assert.equal(new Set(ids).size, ids.length, "ids are unique");

@@ -25,6 +25,9 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
   const swallow = () => void chrome.runtime.lastError;
   registerWatchedRecorder(chrome);
   registerYoutubeActions(chrome);
+  // Settings that older installs stored for features that are gone (clipboard sending, the YouTube default picker, Premium,
+  // playback speed) are forgotten.
+  try { chrome.storage.local.remove?.(["clipboardMachines", "computerName", "youtubeAfterDip", "youtubePremium", "youtubePlaybackSpeed"])?.catch?.(() => {}); } catch { /* storage unavailable */ }
 
   async function currentMode() {
     const { mode } = await chrome.storage.local.get("mode");

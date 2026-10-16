@@ -6,7 +6,12 @@
   --light-btn: #ffffff; --light-btn-edge: #b9b5ab; --on-pale: #2a2724;
   --err-bg: #fde8e6; --err-fg: #8c1d13; --link: #1a55c4; --success: #278443;
   --rec: #d1281b; --rec-edge: #8f150c; --on-rec: #ffffff; --q-bg: #ebe8e1;
-  --mode-bg: #000000; --mode-border: #000000; --mode-ledge: #48453f;
+  /* Light mode: the five big buttons and the hourglass and send buttons are white, on a light-grey rim and ledge. Dark mode
+     (below) keeps them black exactly as before. */
+  --mode-bg: #ffffff; --mode-border: #c9c5bc; --mode-ledge: #b9b5ab; --on-mode: #111111; --action-rim: #9a958a;
+  --mode-pressed-bg: radial-gradient(circle at 50% 58%, #ffffff 0, #f1efea 72%);
+  --mode-pressed-inset: inset 0 3px 8px rgba(0, 0, 0, .18);
+  --fav-outline: rgba(0, 0, 0, .45);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -16,7 +21,10 @@
     --light-btn: #e9e8e4; --light-btn-edge: #8b877d;
     --err-bg: #4a1f1b; --err-fg: #ffb4ab; --link: #8ab4ff; --success: #82c995;
     --rec: #c62a1c; --rec-edge: #8f150c; --q-bg: #34322e;
-    --mode-border: #34322e; --mode-ledge: #5a5750;
+    --mode-bg: #000000; --mode-border: #34322e; --mode-ledge: #5a5750; --on-mode: #ffffff; --action-rim: #e9e6df;
+    --mode-pressed-bg: radial-gradient(circle at 50% 58%, #161616 0, #000 72%);
+    --mode-pressed-inset: inset 0 4px 10px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .06);
+    --fav-outline: rgba(255, 255, 255, .5);
   }
 }
 * { box-sizing: border-box; }
@@ -37,23 +45,14 @@ body {
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
 #buttons { --u: calc((100% - 32px) / 5); display: grid; grid-template-columns: repeat(5, var(--u)); justify-content: center; gap: 8px; }
-#youtubeactions { display: flex; justify-content: center; gap: 7px; margin-top: -4px; }
-#youtubeactions button { width: 34px; height: 30px; padding: 5px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); cursor: pointer; }
-#youtubeactions button svg { width: 17px; height: 17px; }
-#youtubeactions button:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
-#youtubeactions button[data-state="working"] { color: var(--link); }
-#youtubeactions button[data-state="done"] { color: var(--success); }
-#youtubeactions button[data-state="failed"] { color: var(--err-fg); }
-#youtubeactions button:disabled { opacity: .45; cursor: not-allowed; }
-#youtubeactions button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 #youtubeactionnotice { text-align: center; margin-top: -6px; }
-/* Three black buttons: the pin action is the old square (one fifth of the row, less the gaps, --u) in the center, and each
+/* Three buttons (black in dark mode, white in light mode): the pin action is the old square (one fifth of the row, less the gaps, --u) in the center, and each
    provider (Claude, Codex) is 1.5 times that width at the same height, with its logo at full strength. Unpressed they stand
    on a ledge; a pressed mode sinks, loses the ledge, takes inset shading and a rim and glow in the provider's colour (--rim),
    in both themes. The pin (button.action) is not a mode: it never takes the pressed look. */
 button.mode {
   aspect-ratio: 1; min-height: 56px; border-radius: 12px; border: 2px solid var(--mode-border); cursor: pointer; padding: 0;
-  display: flex; align-items: center; justify-content: center; background: var(--mode-bg); color: #ffffff;
+  display: flex; align-items: center; justify-content: center; background: var(--mode-bg); color: var(--on-mode);
   box-shadow: 0 4px 0 var(--mode-ledge); transition: transform .06s, box-shadow .06s;
 }
 button.mode img, button.mode svg { width: 34px; height: 34px; display: block; pointer-events: none; }
@@ -61,20 +60,19 @@ button.handoff img { width: 28px; height: 28px; }
 button.handoff:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 button.claude-dip { --rim: #D97757; --glow: rgba(217, 119, 87, .55); }
 button.codex-dip  { --rim: #5B8CFF; --glow: rgba(91, 140, 255, .55); }
-button.action                         { --rim: #e9e6df; }
+button.action                         { --rim: var(--action-rim); }
 button.mode:hover:not(:disabled):not([aria-pressed="true"]) { border-color: var(--rim); }
 /* physically pressed: sunk by its ledge, inset shading, and a rim and glow in the provider's colour */
 button.mode[aria-pressed="true"] {
   transform: translateY(3px);
   border-color: var(--rim);
-  background: radial-gradient(circle at 50% 58%, #161616 0, #000 72%);
-  box-shadow: inset 0 4px 10px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .06), 0 0 9px 1px var(--glow);
+  background: var(--mode-pressed-bg);
+  box-shadow: var(--mode-pressed-inset), 0 0 9px 1px var(--glow);
 }
 button.mode:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; filter: grayscale(.6); }
 button.mode:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 button.action:active { border-color: var(--rim); }
 #result { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; overflow-wrap: anywhere; }
-#result:empty { display: none; }
 #result a { color: var(--link); }
 #result code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
 #result pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
@@ -83,10 +81,10 @@ button.action:active { border-color: var(--rim); }
 #ask { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 5px 12px 6px; border-top: 1px solid var(--line); background: var(--bg); }
 #askrow { display: flex; gap: 6px; align-items: stretch; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-/* History and Ask: black buttons with white icons, in both themes (Speak is the white one) */
+/* History and Ask: black with white icons in dark mode, white with dark icons in light mode (Speak is white in both) */
 .rowbtn {
   flex: none; display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0;
-  border-radius: 10px; border: 1px solid var(--mode-border); background: var(--mode-bg); color: #ffffff; cursor: pointer;
+  border-radius: 10px; border: 1px solid var(--mode-border); background: var(--mode-bg); color: var(--on-mode); cursor: pointer;
 }
 .rowbtn:active:not(:disabled) { transform: translateY(1px); }
 #historylink:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
@@ -124,21 +122,32 @@ button.action:active { border-color: var(--rim); }
 .reason { font-size: 12px; color: var(--muted); margin-top: -4px; }
 .error { padding: 10px 12px; border-radius: 8px; font-size: 13px; }
 .error { background: var(--err-bg); color: var(--err-fg); }
-/* the status line also carries the save box and the Settings gear, so they add no row */
-footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: auto; }
-footer #status { flex: 1 1 auto; min-width: 0; }
-footer .links { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-size: 12px; }
-.clipline { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px 8px; }
-.clipline > button { padding: 4px 8px; font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
-.clipline > button:disabled { opacity: .45; cursor: not-allowed; }
-.clipline label { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; cursor: pointer; }
-.clipline input { margin: 0; width: 14px; height: 14px; accent-color: var(--link); }
-.clipline input:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-.clipline #clipstatus { max-width: 220px; text-align: right; }
-.savebox { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--fg); }
-.savebox input { width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--link); }
+/* The two rows that close the summary card, so they scroll with the summary: the YouTube row (Watched, Like, Dislike) and the
+   Saved row (Saved, the status while a Dip runs, the Settings gear). Always two lines; at very narrow widths the contents wrap. */
+#hist { margin: 10px 0 6px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.hrow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 30px; }
+.hrow .yt { width: 22px; height: 16px; flex: none; }
+.hrow img.fav { width: 18px; height: 18px; object-fit: contain; flex: none; filter: drop-shadow(0.6px 0 0 var(--fav-outline)) drop-shadow(-0.6px 0 0 var(--fav-outline)) drop-shadow(0 0.6px 0 var(--fav-outline)) drop-shadow(0 -0.6px 0 var(--fav-outline)); }
+.hrow b { white-space: nowrap; }
+.hrow .spacer { flex: 1 1 0; }
+.hrow #status { text-align: right; min-width: 0; }
+.check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; color: var(--fg); }
+.check input { width: 14px; height: 14px; margin: 0; cursor: pointer; accent-color: var(--link); }
+.check input:disabled { cursor: default; }
+.check input:disabled + span { color: var(--muted); }
+.check input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 .savebox input:disabled { cursor: progress; }
-.savebox input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+/* Thumbs, like YouTube's: outlined when off, filled when on; busy while the hidden window works */
+.thumb { width: 30px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); cursor: pointer; }
+.thumb svg { width: 17px; height: 17px; }
+.thumb:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
+.thumb[aria-pressed="true"] { color: var(--fg); }
+.thumb[aria-pressed="true"] svg path { fill: currentColor; }
+.thumb[data-state="working"] { color: var(--link); animation: working 1s ease-in-out infinite; }
+.thumb:disabled:not([data-state="working"]) { opacity: .45; cursor: not-allowed; }
+.thumb:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+@keyframes working { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+#options { margin: 0; }
 .iconbtn {
   display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 8px;
   border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer;
@@ -147,5 +156,5 @@ footer .links { display: flex; flex-direction: column; align-items: flex-end; ga
 .iconbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 body.busy #status::after { content: ""; display: inline-block; width: 10px; height: 10px; margin-left: 6px; border: 2px solid var(--muted); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { button.mode { transition: none; } body.busy #status::after { animation: none; } #mic[data-state="listening"], #mic[data-state="starting"] { animation: none; } }
+@media (prefers-reduced-motion: reduce) { button.mode { transition: none; } .thumb[data-state="working"] { animation: none; } body.busy #status::after { animation: none; } #mic[data-state="listening"], #mic[data-state="starting"] { animation: none; } }
 [hidden] { display: none !important; }

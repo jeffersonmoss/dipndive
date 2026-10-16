@@ -7,20 +7,11 @@ installShim();  // inert inside the extension; lets the page run as a plain page
 const $ = (id) => document.getElementById(id);
 const say = (t) => { $("msg").textContent = t; };
 
-const st = await chrome.storage.local.get(["base", "token", HANDOFF_SITES.claude.urlKey, HANDOFF_SITES.chatgpt.urlKey, "youtubeAfterDip", "youtubePremium", "youtubePlaybackSpeed"]);
+const st = await chrome.storage.local.get(["base", "token", HANDOFF_SITES.claude.urlKey, HANDOFF_SITES.chatgpt.urlKey]);
 $("base").value = st.base || "";
 $("token").value = st.token || "";
 $("handoffClaude").value = st[HANDOFF_SITES.claude.urlKey] || HANDOFF_SITES.claude.defaultUrl;
 $("handoffChatgpt").value = st[HANDOFF_SITES.chatgpt.urlKey] || HANDOFF_SITES.chatgpt.defaultUrl;
-$("youtubeAfterDip").value = ["leave", "history", "watchThrough"].includes(st.youtubeAfterDip) ? st.youtubeAfterDip : "leave";
-$("youtubePremium").checked = st.youtubePremium === true;
-$("youtubeSpeed").value = [1, 1.5, 2].includes(st.youtubePlaybackSpeed) ? String(st.youtubePlaybackSpeed) : "2";
-$("youtubeAfterDip").addEventListener("change", () => chrome.storage.local.set({ youtubeAfterDip: $("youtubeAfterDip").value }));
-$("youtubePremium").addEventListener("change", () => chrome.storage.local.set({ youtubePremium: $("youtubePremium").checked }));
-$("youtubeSpeed").addEventListener("change", () => chrome.storage.local.set({ youtubePlaybackSpeed: Number($("youtubeSpeed").value) }));
-const computer = await chrome.storage.local.get("computerName");
-$("computer").value = ["thing-1", "thing-2", "imac", "win"].includes(computer.computerName) ? computer.computerName : "";
-$("computer").addEventListener("change", () => chrome.storage.local.set({ computerName: $("computer").value }));
 const watchedSetting = await chrome.storage.local.get("recordWatchedVideos");
 $("recordWatched").checked = watchedSetting.recordWatchedVideos !== false;
 // The recorder only runs with the optional "tabs" permission, which the background never requests itself; ask for it

@@ -14,7 +14,7 @@ test("five equal hand-off and Dip squares have the requested accessible labels a
   assert.match(panel, /b\.title = label/);
   assert.match(css, /grid-template-columns: repeat\(5, var\(--u\)\)/);
   assert.match(css, /button\.mode\s*\{[^}]*aspect-ratio: 1/);
-  assert.match(panel, /handoff-\$\{id\}-light-36\.png/);  // light arrow on the black buttons in both color schemes
+  assert.match(panel, /handoff-\$\{id\}-outline-36\.png/);  // the outlined arrow (white, black outline) in both color schemes
 });
 
 test("handoff arrows enable only for a finished visible Dip result", () => {

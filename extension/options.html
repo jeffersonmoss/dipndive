@@ -50,28 +50,10 @@
   <div><button id="save" type="button">Save and test</button></div>
   <div id="msg" role="status"></div>
 
-  <label for="computer">This computer is</label>
-  <select id="computer" style="width:100%;padding:8px;font:inherit;border-radius:6px;border:1px solid #888;background:Canvas;color:CanvasText">
-    <option value="">Not set</option><option value="thing-1">Thing 1</option><option value="thing-2">Thing 2</option><option value="imac">iMac</option><option value="win">Win</option>
-  </select>
-  <small>Used to write to this computer's clipboard directly when selected.</small>
-
-  <h2>Watched videos</h2>
-  <label style="font-weight:400"><input id="recordWatched" type="checkbox" style="width:auto;margin-right:8px">Record watched YouTube videos</label>
-  <small>Transcripts are fetched when a video opens and saved only if you stay on it for 2 minutes. Shorts and live streams are skipped. Incognito tabs are ignored.</small>
-  <p id="watchedAccess" hidden><small>Recording needs permission to see which tab is showing which video.</small> <button id="watchedAllow" type="button">Allow tab access</button></p>
-
   <h2>YouTube</h2>
-  <label for="youtubeAfterDip">After a Dip, by default</label>
-  <select id="youtubeAfterDip" style="width:100%;padding:8px;font:inherit;border-radius:6px;border:1px solid #888;background:Canvas;color:CanvasText">
-    <option value="leave">Leave no trace</option><option value="history">Add to history</option><option value="watchThrough">Watch through (Premium only)</option>
-  </select>
-  <label style="font-weight:400"><input id="youtubePremium" type="checkbox" style="width:auto;margin-right:8px">I have YouTube Premium</label>
-  <label for="youtubeSpeed">Playback speed for Watch through</label>
-  <select id="youtubeSpeed" style="width:100%;padding:8px;font:inherit;border-radius:6px;border:1px solid #888;background:Canvas;color:CanvasText">
-    <option value="1">1x</option><option value="1.5">1.5x</option><option value="2">2x</option>
-  </select>
-  <small>Like and Subscribe record your own opinion. Add to history and Watch through really play the video, muted, in a minimized background window.</small>
+  <label style="font-weight:400"><input id="recordWatched" type="checkbox" style="width:auto;margin-right:8px">Save transcripts of videos I watch</label>
+  <small>A video's transcript goes into your monthly transcripts file when you stay on it for 2 minutes, or when a background watch finishes. Shorts, live streams and incognito tabs are skipped.</small>
+  <p id="watchedAccess" hidden><small>Saving needs permission to see which tab is showing which video.</small> <button id="watchedAllow" type="button">Allow tab access</button></p>
 
   <h2>History</h2>
   <p><small>Clear history makes the iMac forget every summary, fetched source and question thread, and every open side panel starts fresh. The history log file (Dip'n'Dive Log.md) is kept; delete it by hand if you want it gone.</small></p>
