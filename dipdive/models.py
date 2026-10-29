@@ -42,6 +42,8 @@ CODEX_ALLOWED_ITEMS = {"agent_message", "reasoning", "todo_list", "error"}
 # the gate for command execution; whether the model can still run commands through unified_exec is
 # decided by the post-login injection test. Everything else we disable must read false, or we fail closed.
 CODEX_CANNOT_DISABLE = {"unified_exec": "reads true even when disabled; shell_tool=false is the gate (to be proven by injection test)"}
+# A feature whose stage column reads "removed" no longer exists in that Codex build, so its true/false value means
+# nothing (0.165.0-alpha lists `worktrees  removed  true` and ignores --disable). shell_tool is never excused this way.
 
 _AUTH = re.compile(r"\b(not logged in|please run /login|invalid (api key|authentication)|unauthorized|401)\b", re.I)
 _QUOTA = re.compile(r"\b(usage limit|quota|limit reached|credit balance)\b", re.I)
@@ -101,16 +103,18 @@ def verify_codex_features(force=False):
     r = run(args, 30, env=dict(os.environ, CODEX_HOME=CODEX_HOME), max_bytes=200_000)
     if r.rc != 0:
         raise DipDiveError("codex_isolation_unverified", f"codex features list failed: {r.err_text.strip()[-200:]}")
-    state = {}
+    state, removed = {}, set()
     for line in r.text.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[-1] in ("true", "false"):
             state[parts[0]] = parts[-1] == "true"
+            if len(parts) >= 3 and parts[-2] == "removed":
+                removed.add(parts[0])
     problems = []
     for f in CODEX_DISABLED_FEATURES:
         if f not in state:
             problems.append(f"unknown feature name {f}")
-        elif state[f] and f not in CODEX_CANNOT_DISABLE:
+        elif state[f] and f not in CODEX_CANNOT_DISABLE and f not in removed:
             problems.append(f"{f} still enabled")
     if state.get("shell_tool", True):
         problems.append("shell_tool still enabled")

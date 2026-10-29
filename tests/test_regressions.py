@@ -323,7 +323,8 @@ class FeatureVerify(unittest.TestCase):  # round 2 finding 2
         models._features_verified = self.saved[2]
 
     def fake(self, rows, rc=0):
-        lines = "\n".join(f"{n:<30} stable             {v}" for n, v in rows.items())
+        lines = "\n".join(f"{n:<30} {(v if isinstance(v, tuple) else ('stable', v))[0]:<18} "
+                          f"{(v if isinstance(v, tuple) else ('stable', v))[1]}" for n, v in rows.items())
         models.CODEX = fake_bin(f"import sys\nprint({lines!r})\nsys.exit({rc})")
 
     def test_all_disabled_passes_and_unified_exec_exception(self):
@@ -345,6 +346,17 @@ class FeatureVerify(unittest.TestCase):  # round 2 finding 2
             models.verify_codex_features(True)
         models.CODEX_DISABLED_FEATURES[:] = ["shell_tool"]
         self.fake({"shell_tool": "true"})
+        with self.assertRaises(DipDiveError):
+            models.verify_codex_features(True)
+
+    def test_removed_feature_reading_true_is_ignored_but_shell_tool_is_not(self):
+        models.CODEX_DISABLED_FEATURES[:] = ["shell_tool", "worktrees", "plugins"]
+        self.fake({"shell_tool": "false", "worktrees": ("removed", "true"), "plugins": "false"})
+        self.assertTrue(models.verify_codex_features(True))
+        self.fake({"shell_tool": ("removed", "true"), "worktrees": ("removed", "true"), "plugins": "false"})
+        with self.assertRaises(DipDiveError):
+            models.verify_codex_features(True)
+        self.fake({"shell_tool": "false", "worktrees": ("under development", "true"), "plugins": "false"})
         with self.assertRaises(DipDiveError):
             models.verify_codex_features(True)
 
