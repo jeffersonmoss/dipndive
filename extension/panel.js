@@ -329,7 +329,7 @@ async function handoff(id) {
   try {
     const originPermission = { origins: ["https://claude.ai/*", "https://chatgpt.com/*"] };
     const allowed = await chrome.permissions.request(originPermission);
-    const sourceRes = await request((...args) => fetch(...args), ctl.cfg, "GET", `/source?job=${encodeURIComponent(s.jobId)}`, null, 5000).catch(() => null);
+    const sourceRes = await request((...args) => fetch(...args), ctl.cfg, "GET", `/source?job=${encodeURIComponent(s.jobId)}`, null, 10000).catch(() => null);
     const sourceText = sourceRes?.status === 200 && typeof sourceRes.json?.text === "string" ? sourceRes.json.text : "";
     payload = buildHandoffText({
       title: sourceText && sourceRes.json.title ? sourceRes.json.title : s.title,

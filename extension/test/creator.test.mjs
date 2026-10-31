@@ -96,6 +96,6 @@ test("panel.js: the creator is drawn with textContent and a link carrying noopen
   assert.match(js, /renderCreator\(s\);/, "render() calls it");
 });
 
-test("manifest version is 1.3", () => {
-  assert.equal(JSON.parse(read("manifest.json")).version, "1.3");
+test("manifest version is 1.3.1", () => {
+  assert.equal(JSON.parse(read("manifest.json")).version, "1.3.1");
 });

@@ -44,7 +44,7 @@ $("save").addEventListener("click", async () => {
   await chrome.storage.local.set({ base, token, [HANDOFF_SITES.claude.urlKey]: claudeUrl.value, [HANDOFF_SITES.chatgpt.urlKey]: chatgptUrl.value });
   say("Saved. Testing...");
   try {
-    const r = await request((...a) => fetch(...a), { base, token }, "GET", "/health", null, 5000);
+    const r = await request((...a) => fetch(...a), { base, token }, "GET", "/health", null, 10000);
     if (r.status === 401) say("Saved, but the companion rejected the token.");
     else if (r.status === 200) say("Saved. The companion answered.");
     else say(`Saved, but the companion returned HTTP ${r.status}.`);

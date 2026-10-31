@@ -9,6 +9,11 @@ import { DEFAULT_MODE, migrateMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
+// A busy iMac can miss a status check now and then. Only this many misses in a row (each after its own 10 s wait)
+// end a running summary or answer with "Cannot reach the companion"; one success resets the count.
+export const POLL_RETRIES = 3;
+const WAITING = "Waiting for the iMac...";
+const retryable = (e) => !(e instanceof ApiError && e.kind === "config");
 
 // The companion refuses a POST /jobs that carries an older clear generation than its own (409, no job made): another
 // machine pressed Clear history since this panel last heard from the companion.
@@ -90,7 +95,7 @@ export class Controller {
         ok = this.d.healthOverride === "codex-ready";
         reason = "Codex is unavailable on the iMac. Using Claude.";
       } else {
-        const r = await request(this.d.fetch, this.cfg, "GET", "/health", null, 5000);
+        const r = await request(this.d.fetch, this.cfg, "GET", "/health", null, 10000);
         const h = r.json || {};
         if (r.status === 200 && typeof h.codex_ready === "boolean") {
           ok = h.codex_ready;
@@ -358,7 +363,7 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url: this.slot.url, mode, requestId, force: !!force, ...this.genField() }, 5000);
+        { url: this.slot.url, mode, requestId, force: !!force, ...this.genField() }, 10000);
     } catch (e) { this.failure(gen, e); return; }
     if (gen !== this.selGen) return;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json); return; }
@@ -369,7 +374,7 @@ export class Controller {
       let recovered;
       try {
         recovered = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-          { url: this.slot.url, mode: recoveryMode, requestId, force: !!force, ...this.genField() }, 5000);
+          { url: this.slot.url, mode: recoveryMode, requestId, force: !!force, ...this.genField() }, 10000);
       } catch (e) { this.failure(gen, e); return; }
       if (gen !== this.selGen || !this.accept(gen, recovered.json)) return;
       if (recovered.status < 400 && recovered.json.job_id) {
@@ -400,12 +405,20 @@ export class Controller {
     return this.poll(jobId, gen);
   }
 
-  async poll(jobId, gen) {
+  async poll(jobId, gen, misses = 0) {
     if (gen !== this.selGen) return;
     let r;
     try {
-      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 5000);
-    } catch (e) { this.failure(gen, e); return; }
+      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 10000);
+    } catch (e) {
+      if (gen !== this.selGen) return;
+      if (retryable(e) && misses < POLL_RETRIES) {  // the job keeps running on the iMac: ask again instead of giving up
+        this.emit({ status: WAITING });
+        this.timer = this.d.setTimer(() => this.poll(jobId, gen, misses + 1), POLL_MS);
+        return;
+      }
+      this.failure(gen, e); return;
+    }
     if (!this.accept(gen, r.json)) return;
     if (r.status === 404) { this.emit({ error: "That result is gone (history was cleared). Press the button again.", status: "", busy: false }); return; }
     if (r.status >= 400) { this.emit({ error: describeError(r.json.error_code, r.json.error_message), status: "", busy: false }); return; }
@@ -564,7 +577,7 @@ export class Controller {
     const gen = this.selGen, seq = this.savedSeq || 0;
     let r;
     try {
-      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 5000);
+      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${encodeURIComponent(jobId)}`, null, 10000);
     } catch { return null; }
     if (gen !== this.selGen || this.s.jobId !== jobId) return null;
     if (busy) {
@@ -731,7 +744,7 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false, ...this.genField() }, 5000);
+        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false, ...this.genField() }, 10000);
     } catch (e) { this.askFailure(gen, q, e); return false; }
     if (gen !== this.askGen) return false;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json, q); return false; }
@@ -742,12 +755,20 @@ export class Controller {
     return true;
   }
 
-  async pollAsk(jobId, gen, q) {
+  async pollAsk(jobId, gen, q, misses = 0) {
     if (gen !== this.askGen) return;
     let r;
     try {
-      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 5000);
-    } catch (e) { this.askFailure(gen, q, e); return; }
+      r = await request(this.d.fetch, this.cfg, "GET", `/jobs/${jobId}`, null, 10000);
+    } catch (e) {
+      if (gen !== this.askGen) return;
+      if (retryable(e) && misses < POLL_RETRIES) {
+        this.emit({ asking: { q, label: WAITING } });
+        this.askTimer = this.d.setTimer(() => { this.askTimer = null; return this.pollAsk(jobId, gen, q, misses + 1); }, ASK_POLL_MS);
+        return;
+      }
+      this.askFailure(gen, q, e); return;
+    }
     if (!this.acceptAsk(gen, r.json, q)) return;
     if (r.status === 404) { this.restoreDraft(q, "That answer is gone (history was cleared). Ask again."); return; }
     if (r.status >= 400) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return; }

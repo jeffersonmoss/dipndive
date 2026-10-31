@@ -12,7 +12,7 @@ import { request } from "./api.js";
 // `onGeneration(n)` runs before anything is written to storage, so a panel that cleared can adopt the new generation
 // before its own storage listener hears it (and does not take its own clear for one made elsewhere).
 export async function clearCompanion({ fetch, cfg, storage, onGeneration }) {
-  const r = await request(fetch, cfg, "POST", "/clear", {}, 5000);
+  const r = await request(fetch, cfg, "POST", "/clear", {}, 10000);
   const cg = r.json && typeof r.json.clear_generation === "number" ? r.json.clear_generation : null;
   if (cg !== null && onGeneration) onGeneration(cg);
   let localError = null;
