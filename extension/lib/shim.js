@@ -41,6 +41,16 @@ export function installShim() {
     // no tab), ?perm=denied answers the tabs permission request with false. window.__permAsks counts the requests.
     tabs: { create: ({ url }) => { window.__lastTab = url; }, query: async () => (window.__devTab ? [{ id: 1, url: window.__devTab }] : []) },
     permissions: { request: async () => { window.__permAsks = (window.__permAsks || 0) + 1; return q.get("perm") !== "denied"; } },
+    // Development-only recovery bridge. Never installed inside the real extension.
+    runtime: {
+      getPlatformInfo: async () => ({ os: q.get("platform") || (/Mac/i.test(navigator.platform) ? "mac" : "win") }),
+      getManifest: () => ({ version: "dev" }),
+      sendNativeMessage: async (_host, message) => {
+        window.__devNativeMessages = [...(window.__devNativeMessages || []), message];
+        return { ok: true, phase: "done", message: message.action === "repair"
+          ? `Development preview: repair in ${message.provider}.` : "Development preview: companion recovery checked." };
+      },
+    },
     __dev: true,
   };
   if (q.get("base")) localStorage.setItem(PREFIX + "base", JSON.stringify(q.get("base")));

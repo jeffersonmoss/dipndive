@@ -1,3 +1,4 @@
+import { repairAvailable, recoveryContext, launchRecovery, RECOVERY_HOST } from "./lib/recovery.js";
 import { Controller } from "./lib/controller.js";
 import { MODES } from "./lib/modes.js";
 import { renderMarkdown, safeHref } from "./lib/markdown.js";
@@ -79,6 +80,10 @@ $("urlform").addEventListener("submit", async (e) => {
 let shownResult = null;
 let panelIncognito = false;
 let winInfo = null;
+let recoveryPlatform = "";
+let recoveryLaunching = false;
+let recoveryTimer = null;
+let recoveryClosed = false;
 
 // The YouTube row (Watched, Like, Dislike): a DOM-free class does the thinking, this draws what it says.
 const historyRow = new HistoryRow({
@@ -118,10 +123,17 @@ function render(s) {
     b.title = off ? s.codexReason : MODES.find((m) => m.id === id).label;
   }
   const ready = handoffEnabled(s);
-  for (const b of [claudeHandoff, chatgptHandoff]) {
-    b.disabled = !ready;
-    b.title = ready ? b.getAttribute("aria-label") : "Available when a Dip has finished and its result is on screen.";
+  const repair = repairAvailable(s, recoveryPlatform);
+  for (const [b, normal, fixing] of [
+    [claudeHandoff, "Continue in Claude", "Repair in Claude Code"],
+    [chatgptHandoff, "Continue in ChatGPT", "Repair in Codex"],
+  ]) {
+    b.disabled = recoveryLaunching || (!ready && !repair);
+    b.setAttribute("aria-label", repair ? fixing : normal);
+    b.title = repair ? fixing : ready ? normal : (recoveryPlatform === "mac" ? "Available after a finished Dip or a failed summary attempt." : "Available when a Dip has finished and its result is on screen.");
   }
+  $("recover").hidden = !repair;
+  $("recover-btn").disabled = recoveryLaunching;
   $("codexnote").hidden = !(s.codexOk === false);
   $("codexnote").textContent = s.codexOk === false ? s.codexReason : "";
   const t = $("title");
@@ -361,8 +373,41 @@ async function handoff(id) {
     button.disabled = !handoffEnabled(ctl.s);
   }
 }
-claudeHandoff.addEventListener("click", () => handoff("claude"));
-chatgptHandoff.addEventListener("click", () => handoff("chatgpt"));
+async function recoverOrRepair(provider = null) {
+  if (recoveryLaunching || !repairAvailable(ctl.s, recoveryPlatform)) return;
+  recoveryLaunching = true;
+  render(ctl.s);
+  const context = recoveryContext(ctl.s, chrome.runtime.getManifest().version, ctl.cfg?.token);
+  $("recover-status").textContent = "Opening Terminal. Enter passwords there or in Screen Sharing.";
+  try {
+    const answer = await launchRecovery(chrome, provider ? "repair" : "recover", provider, context);
+    $("recover-status").textContent = answer?.message || "The recovery helper did not answer.";
+    if (answer?.ok) pollRecovery(Date.now() + 20 * 60 * 1000);
+  } catch {
+    $("recover-status").textContent = "Could not launch recovery. Try again.";
+  } finally {
+    recoveryLaunching = false;
+    render(ctl.s);
+  }
+}
+function pollRecovery(deadline) {
+  clearTimeout(recoveryTimer);
+  if (recoveryClosed) return;
+  recoveryTimer = setTimeout(async () => {
+    try {
+      const answer = await chrome.runtime.sendNativeMessage(RECOVERY_HOST, { action: "status" });
+      if (recoveryClosed) return;
+      $("recover-status").textContent = answer?.message || "";
+      if (answer?.ok && !["done", "error", "idle"].includes(answer.phase) && Date.now() < deadline) pollRecovery(deadline);
+    } catch {
+      if (!recoveryClosed) $("recover-status").textContent = "Recovery status is unavailable. Check its Terminal window.";
+    }
+  }, 2500);
+}
+$("recover-btn").addEventListener("click", () => recoverOrRepair());
+claudeHandoff.addEventListener("click", () => repairAvailable(ctl.s, recoveryPlatform) ? recoverOrRepair("claude") : handoff("claude"));
+chatgptHandoff.addEventListener("click", () => repairAvailable(ctl.s, recoveryPlatform) ? recoverOrRepair("codex") : handoff("chatgpt"));
+window.addEventListener("pagehide", () => { recoveryClosed = true; clearTimeout(recoveryTimer); });
 
 for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () => ctl.selectMode(id));
 pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click
@@ -410,6 +455,7 @@ $("options").addEventListener("click", () => {
 });
 chrome.storage.onChanged.addListener((c, a) => { ctl.onStorageChange(c, a); historyRow.onStorageChange(c, a); });
 
+try { recoveryPlatform = (await chrome.runtime.getPlatformInfo()).os === "mac" ? "mac" : ""; } catch { /* dev harness / unsupported platform */ }
 winInfo = await chrome.windows.getCurrent();
 panelIncognito = !!winInfo.incognito;
 await ctl.init(winInfo.id);

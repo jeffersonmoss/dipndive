@@ -160,3 +160,7 @@ Codex isolation re-test (2 real Codex calls): `.venv/bin/python -m tests.codex_i
     dipdive-transcript --sync     copy new Dips and exit
 
 The LaunchAgent `com.jeffersonmoss.dipdive-transcripts` on Thing 2 runs `--sync --quiet` every 5 minutes, and every lookup syncs first (4-second limit). The token is Thing 2's copy at `~/Library/Application Support/DipDive/token` (0600), never printed. Tests: `.venv/bin/python -m unittest tests.test_transcripts_archive` (fake companion, temp folder).
+
+## Mac recovery (version 1.4)
+
+After an unsuccessful summary with no result loaded, Macs show **Recover iMac** below the five actions. The left/right arrows become **Repair in Claude Code** and **Repair in Codex**. With a loaded summary, normal transcript handoff remains. See [Mac recovery and repair](recovery-helper/README.md) for installation, password handling, limits, and checks.

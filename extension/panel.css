@@ -162,3 +162,15 @@ body.busy #status::after { content: ""; display: inline-block; width: 10px; heig
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { button.mode { transition: none; } .thumb[data-state="working"] { animation: none; } body.busy #status::after { animation: none; } #mic[data-state="listening"], #mic[data-state="starting"] { animation: none; } }
 [hidden] { display: none !important; }
+
+/* Recovery appears under the five existing actions only after an unsuccessful summary. */
+#recover[hidden] { display: none; }
+#recover-btn {
+  display: block; width: 100%; padding: 14px;
+  background: var(--card); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px;
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+#recover-btn:hover, #recover-btn:focus-visible { border-color: var(--link); color: var(--link); }
+#recover-btn:disabled { opacity: .6; cursor: default; }
+#recover-status:not(:empty) { margin-top: 8px; font-size: 12px; color: var(--fg); }

@@ -114,7 +114,7 @@ test("manifest: exact permissions, fixed key, no content scripts, no broad hosts
   assert.equal(m.manifest_version, 3);
   assert.deepEqual([...m.permissions].sort(), ["alarms", "clipboardWrite", "contextMenus", "scripting", "sidePanel", "storage"]);
   // the pin button reads the active tab's address through "tabs", asked for once, in a click, never at install
-  assert.deepEqual(m.optional_permissions, ["tabs"]);
+  assert.deepEqual(m.optional_permissions, ["tabs", "nativeMessaging"]);
   assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab"));
   assert.ok(m.key && m.key.length > 300);
   assert.equal(m.content_scripts, undefined);

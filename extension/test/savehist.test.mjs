@@ -230,7 +230,7 @@ test("every logo in use is at full strength and stands out from its black button
     }
   }
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
-  assert.ok(!/temp/i.test(js.replace(/template/gi, "")), "no Temp chat leftovers in the panel");
+  assert.ok(!/\bTemp(?:orary)? chat\b/i.test(js), "no Temp chat leftovers in the panel");
   assert.match(js, /<span class="sr-only">\$\{m\.label\}<\/span>/, "each button keeps its name");
 });
 

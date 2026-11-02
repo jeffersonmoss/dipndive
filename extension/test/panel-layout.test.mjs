@@ -94,7 +94,7 @@ test("panel.js: the YouTube row only for YouTube sources outside Incognito; the 
 
 test("the clipboard feature is gone from the extension: no row, no setting, no sending code, no tests, no helper module", () => {
   const h = html(), o = read("options.html");
-  for (const gone of ["Send to clipboard", "clipbutton", "clipstatus", "clipline", "data-machine", "Thing 2", "iMac", "Win"]) assert.ok(!h.includes(gone), `panel.html: ${gone}`);
+  for (const gone of ["Send to clipboard", "clipbutton", "clipstatus", "clipline", "data-machine", "data-clipboard-machine"]) assert.ok(!h.includes(gone), `panel.html: ${gone}`);
   assert.ok(!/id="computer"|This computer is/.test(o));
   assert.ok(!/clip/i.test(css().replace(/clip: rect/, "")), "no clipboard CSS");
   assert.ok(!/clipboard/i.test(js().replace(/navigator\.clipboard\.writeText\(payload\.fullText\)/, "").replace(/on your clipboard/g, "")), "panel.js has no clipboard code but the hand-off fallback");

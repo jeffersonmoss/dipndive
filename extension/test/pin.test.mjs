@@ -171,7 +171,7 @@ test("wiring: the panel asks for the optional tabs permission inside the click a
 
 test("manifest: tabs and YouTube access are optional only", () => {
   const m = JSON.parse(read("manifest.json"));
-  assert.deepEqual(m.optional_permissions, ["tabs"]);
+  assert.deepEqual(m.optional_permissions, ["tabs", "nativeMessaging"]);
   assert.ok(!(m.permissions || []).includes("tabs"));
   assert.equal(m.host_permissions, undefined);
   assert.deepEqual((m.optional_host_permissions || []).filter((h) => /youtube/i.test(h)), ["https://www.youtube.com/*"]);
