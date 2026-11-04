@@ -175,7 +175,8 @@ test("manifest: tabs and YouTube access are optional only", () => {
   assert.ok(!(m.permissions || []).includes("tabs"));
   assert.equal(m.host_permissions, undefined);
   assert.deepEqual((m.optional_host_permissions || []).filter((h) => /youtube/i.test(h)), ["https://www.youtube.com/*"]);
-  assert.ok(!(m.optional_host_permissions || []).some((h) => /\*:\/\/\*|<all_urls>|https:\/\/\*\/\*/.test(h)));
+  // the only broad grant is the mic's optional <all_urls> (pausing other tabs); the pin never asks for it
+  assert.deepEqual((m.optional_host_permissions || []).filter((h) => /\*:\/\/\*|<all_urls>|https:\/\/\*\/\*/.test(h)), ["<all_urls>"]);
 });
 
 // ---- review fixes: a pending pin, a fresh panel's mode, and a pin message next to a running job ----

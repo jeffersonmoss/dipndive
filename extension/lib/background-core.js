@@ -4,6 +4,7 @@ import { OPEN_HISTORY, createHistoryOpener } from "./history.js";
 import { pickUrl } from "./urls.js";
 import { registerWatchedRecorder } from "./watched.js";
 import { registerYoutubeActions } from "./youtube-actions.js";
+import { registerMediaHush } from "./media-hush.js";
 
 export const MENU_ID = "dipdive-run";
 export const slotKey = (windowId) => `slot:${windowId}`;
@@ -25,6 +26,7 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
   const swallow = () => void chrome.runtime.lastError;
   registerWatchedRecorder(chrome);
   registerYoutubeActions(chrome);
+  registerMediaHush(chrome);
   // Settings that older installs stored for features that are gone (clipboard sending, the YouTube default picker, Premium,
   // playback speed) are forgotten.
   try { chrome.storage.local.remove?.(["clipboardMachines", "computerName", "youtubeAfterDip", "youtubePremium", "youtubePlaybackSpeed"])?.catch?.(() => {}); } catch { /* storage unavailable */ }

@@ -109,7 +109,7 @@ test("the pin: an inline white SVG drop pin with a round hole, label and tooltip
   assert.match(css, /button\.mode \{[^}]*background: var\(--mode-bg\)/);
 });
 
-test("manifest: exact permissions, fixed key, no content scripts, no broad hosts", () => {
+test("manifest: exact permissions, fixed key, no content scripts, broad hosts optional only", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
   assert.equal(m.manifest_version, 3);
   assert.deepEqual([...m.permissions].sort(), ["alarms", "clipboardWrite", "contextMenus", "scripting", "sidePanel", "storage"]);
@@ -118,9 +118,10 @@ test("manifest: exact permissions, fixed key, no content scripts, no broad hosts
   assert.ok(!m.permissions.includes("tabs") && !m.permissions.includes("activeTab"));
   assert.ok(m.key && m.key.length > 300);
   assert.equal(m.content_scripts, undefined);
-  assert.ok(!JSON.stringify(m).includes("<all_urls>"));
+  // <all_urls> only as an optional grant, asked once by the mic to pause other tabs' media (lib/media-hush.js)
+  assert.ok(!m.permissions.includes("<all_urls>"));
   assert.equal(m.host_permissions, undefined, "no always-on host access");
-  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*", "https://claude.ai/*", "https://chatgpt.com/*", "https://www.youtube.com/*"]);
+  assert.deepEqual(m.optional_host_permissions, ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*", "https://claude.ai/*", "https://chatgpt.com/*", "https://www.youtube.com/*", "<all_urls>"]);
   assert.equal(m.minimum_chrome_version, "116");
   assert.equal(m.side_panel.default_path, "panel.html");
 });

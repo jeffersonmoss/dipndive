@@ -59,6 +59,8 @@ export class Controller {
     this.slot = null;
     this.micBaseText = "";
     this.pendingMicAsk = false;
+    this.media = deps.media || null;  // { askAccess, hush, restore }: quiets other tabs while the mic listens
+    this.hushed = false;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null, channel: null, channelUrl: null,
       result: null, resultMode: null, error: null, status: "", busy: false, pinError: null,
@@ -630,6 +632,10 @@ export class Controller {
 
   onMic(m) {
     const live = m.state !== MIC.IDLE;
+    if (this.media && live !== this.hushed) {
+      this.hushed = live;
+      try { if (live) this.media.hush(); else this.media.restore(); } catch { /* media control never blocks dictation */ }
+    }
     const patch = { mic: m };
     if (live) {
       const shown = this.appendVoiceText(this.micBaseText, m.text);
@@ -653,7 +659,11 @@ export class Controller {
       return;
     }
     this.emit({ askError: null });
-    if (this.s.mic.state === MIC.IDLE) this.micBaseText = this.s.draft;
+    if (this.s.mic.state === MIC.IDLE) {
+      this.micBaseText = this.s.draft;
+      // The one-time site-access prompt for pausing other tabs: it must be the first thing awaited in the click.
+      if (this.media) { try { await this.media.askAccess(); } catch { /* the mute fallback still works */ } }
+    }
     await this.voice.toggle();
   }
 

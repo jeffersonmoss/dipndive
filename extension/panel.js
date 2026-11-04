@@ -5,6 +5,7 @@ import { renderMarkdown, safeHref } from "./lib/markdown.js";
 import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
+import { createMediaClient } from "./lib/media-hush.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
@@ -302,6 +303,7 @@ const ctl = new Controller({
   speech: speech && speech.SpeechRecognition,
   permissions: speech && speech.permissions,
   micSetupUrl,
+  media: createMediaClient(chrome),
   onState: render,
 });
 
