@@ -90,3 +90,18 @@ export function creatorView(s) {
   const name = typeof s?.channel === "string" ? s.channel.trim() : "";
   return { name, href: name ? creatorVideosUrl(s.channelUrl) : null };
 }
+
+// The title link opens the summarized page in the tab he is looking at (the active tab of the panel's window), not a new
+// tab. Only a plain left click: Cmd/Ctrl/Shift/Alt or a middle click keep the browser's own new-tab or new-window behavior.
+export const isPlainClick = (e) => !!e && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+
+// No "tabs" permission is needed: the active tab's id is visible without it, and tabs.update may set any http(s) url.
+// When there is no tab to reuse, or Chrome refuses, it falls back to a new tab so the click never does nothing.
+export async function openInCurrentTab(tabsApi, windowId, url) {
+  try {
+    const [tab] = await tabsApi.query({ active: true, windowId });
+    if (tab && tab.id !== undefined) { await tabsApi.update(tab.id, { url }); return "current"; }
+  } catch { /* fall through */ }
+  await tabsApi.create({ url, windowId });
+  return "new";
+}

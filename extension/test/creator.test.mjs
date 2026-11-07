@@ -96,6 +96,42 @@ test("panel.js: the creator is drawn with textContent and a link carrying noopen
   assert.match(js, /renderCreator\(s\);/, "render() calls it");
 });
 
-test("manifest version is 1.5", () => {
-  assert.equal(JSON.parse(read("manifest.json")).version, "1.5");
+test("manifest version is 1.6", () => {
+  assert.equal(JSON.parse(read("manifest.json")).version, "1.6");
+});
+
+// ---- 1.6: the title opens the page in the current tab ----
+import { isPlainClick, openInCurrentTab } from "../lib/urls.js";
+
+const fakeTabs = (active, { failUpdate = false } = {}) => {
+  const log = [];
+  return { log, query: async (q) => { log.push(["query", q]); return active ? [active] : []; },
+           update: async (id, o) => { log.push(["update", id, o]); if (failUpdate) throw new Error("refused"); },
+           create: async (o) => { log.push(["create", o]); } };
+};
+
+test("title click navigates the active tab of the panel's window", async () => {
+  const t = fakeTabs({ id: 42 });
+  assert.equal(await openInCurrentTab(t, 7, "https://a.test/x"), "current");
+  assert.deepEqual(t.log, [["query", { active: true, windowId: 7 }], ["update", 42, { url: "https://a.test/x" }]]);
+});
+
+test("title click falls back to a new tab when there is no tab or Chrome refuses", async () => {
+  const none = fakeTabs(null);
+  assert.equal(await openInCurrentTab(none, 7, "https://a.test/x"), "new");
+  assert.deepEqual(none.log.at(-1), ["create", { url: "https://a.test/x", windowId: 7 }]);
+  const refused = fakeTabs({ id: 1 }, { failUpdate: true });
+  assert.equal(await openInCurrentTab(refused, 7, "https://a.test/y"), "new");
+});
+
+test("only a plain left click is taken over; modified and middle clicks keep the browser's behavior", () => {
+  assert.equal(isPlainClick({ button: 0 }), true);
+  for (const e of [{ button: 1 }, { button: 0, metaKey: true }, { button: 0, ctrlKey: true }, { button: 0, shiftKey: true }, { button: 0, altKey: true }, null]) {
+    assert.equal(isPlainClick(e), false);
+  }
+});
+
+test("panel.js wires the title to openInCurrentTab for plain clicks only", () => {
+  const js = read("panel.js");
+  assert.match(js, /\$\("title"\)\.addEventListener\("click", \(e\) => \{[\s\S]*?if \(!isPlainClick\(e\)[\s\S]*?e\.preventDefault\(\);[\s\S]*?openInCurrentTab\(chrome\.tabs, winInfo\?\.id/);
 });

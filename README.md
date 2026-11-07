@@ -156,6 +156,10 @@ From the moment the mic starts until it stops, every tab that is playing sound i
 
 Pausing needs an optional all-sites grant (`<all_urls>`, never required, so updates do not disable installs). The first mic click ever shows Chrome's prompt, as the first await inside the click; the answer is remembered (`mediaAccessAsked`) and the prompt never comes back. Declining leaves the mute fallback, which needs no permission. The grant can be given or taken back later on the extension's card at `chrome://extensions` (Site access). Unlike the pin (where `<all_urls>` was rejected because `tabs` was enough), pausing a page's player has no narrower route.
 
+### The title opens in the current tab (version 1.6)
+
+A plain click on the summarized page's title in the panel loads it in the active tab of the panel's window (`openInCurrentTab` in `lib/urls.js`: `tabs.query` for the active tab's id, then `tabs.update` with the url, neither needing the `tabs` permission). Cmd, Ctrl, Shift or Alt clicks and middle clicks keep Chrome's own new-tab or new-window behavior; if there is no tab to reuse or Chrome refuses, a new tab opens instead. The creator line, history rows and links inside the summary still open new tabs.
+
 ## Thing 2's transcript archive and "get my latest transcript" (version 1.3)
 
 `tools/transcripts_archive.py`, installed on Thing 2 as `~/.local/bin/dipdive-transcript` (a copy; reinstall after editing). It reads the history log through `GET /history` and copies each Dip's summary and full transcript (`GET /transcript?url=`) into `~/Documents/Dip'n'Dive Transcripts` on Thing 2, one Markdown file per Dip (`<title> - <Claude Dip> - <16 October 2026>.md`) plus `index.json`. Nothing there is ever deleted, and lookups work with the iMac off. A Dip copied before its transcript was available is completed on a later sync.

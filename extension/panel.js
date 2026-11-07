@@ -9,7 +9,7 @@ import { createMediaClient } from "./lib/media-hush.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
-import { creatorView } from "./lib/urls.js";
+import { creatorView, isPlainClick, openInCurrentTab } from "./lib/urls.js";
 import { HistoryRow, rowStatus, rowsVisible } from "./lib/history-row.js";
 
 installShim();
@@ -412,7 +412,14 @@ chatgptHandoff.addEventListener("click", () => repairAvailable(ctl.s, recoveryPl
 window.addEventListener("pagehide", () => { recoveryClosed = true; clearTimeout(recoveryTimer); });
 
 for (const [id, b] of Object.entries(buttons)) b.addEventListener("click", () => ctl.selectMode(id));
-pin.addEventListener("click", () => { ctl.summarizePage(); });  // calls tabs.requestAccess() first, inside this click
+pin.addEventListener("click", () => { ctl.summarizePage(); });
+// The title opens the summarized page in the current tab (lib/urls.js); modified clicks keep Chrome's own behavior.
+$("title").addEventListener("click", (e) => {
+  const href = $("title").getAttribute("href");
+  if (!isPlainClick(e) || !href || href === "#") return;
+  e.preventDefault();
+  void openInCurrentTab(chrome.tabs, winInfo?.id, $("title").href);
+});  // calls tabs.requestAccess() first, inside this click
 $("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion(); });
 $("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
 document.addEventListener("keydown", (e) => {
