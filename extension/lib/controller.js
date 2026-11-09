@@ -5,6 +5,7 @@ import { makeSlot, pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, pickUrl, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
 import { MIC, VoiceInput } from "./voice.js";
+import { MIC_DEVICE, micWarning } from "./micdevice.js";
 import { DEFAULT_MODE, migrateMode, normalizeMode } from "./modes.js";
 
 export const POLL_MS = 1500;
@@ -61,6 +62,9 @@ export class Controller {
     this.pendingMicAsk = false;
     this.media = deps.media || null;  // { askAccess, hush, restore }: quiets other tabs while the mic listens
     this.hushed = false;
+    // { current(): Promise<{name, none}|null>, watch(fn) }: which microphone dictation uses (lib/micdevice.js)
+    this.micDev = deps.micDevices || null;
+    this.micSeq = 0;
     this.s = {
       configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null, channel: null, channelUrl: null,
       result: null, resultMode: null, error: null, status: "", busy: false, pinError: null,
@@ -72,6 +76,8 @@ export class Controller {
       // controller, not the user, writes it), and the microphone state
       thread: [], asking: null, askError: null, draft: "", draftSeq: 0,
       mic: null,
+      // the microphone he marked as his on this computer ("" for none) and the warning when dictation uses another
+      preferredMic: "", micWarn: "",
     };
     this.voice = new VoiceInput({
       SpeechRecognition: deps.speech || null,
@@ -79,8 +85,31 @@ export class Controller {
       setTimer: deps.setVoiceTimer || deps.setTimer,
       clearTimer: deps.clearVoiceTimer || deps.clearTimer,
       onChange: (m) => this.onMic(m),
+      ...(deps.voiceNow ? { now: deps.voiceNow } : {}),
     });
     this.s.mic = this.voice.snapshot();
+    // A microphone plugged in or dropping out: look again while listening, or while a warning is up (so it clears).
+    try { this.micDev?.watch?.(() => { if (this.s.mic.state !== MIC.IDLE || this.s.micWarn) void this.checkMicDevice(); }); } catch { /* no events */ }
+  }
+
+  async checkMicDevice() {
+    const seq = ++this.micSeq;
+    let warn = "";
+    if (this.micDev && this.s.preferredMic) {
+      let cur = null;
+      try { cur = await this.micDev.current(); } catch { cur = null; }
+      if (seq !== this.micSeq) return;
+      warn = micWarning(cur, this.s.preferredMic);
+    }
+    if (warn !== this.s.micWarn) this.emit({ micWarn: warn });
+  }
+
+  // From the mic button's right-click popup: "" forgets the marked microphone.
+  async setPreferredMic(name) {
+    const v = String(name || "");
+    this.emit({ preferredMic: v });
+    try { if (v) await this.d.storage.set({ [MIC_DEVICE.preferredKey]: v }); else await this.d.storage.remove(MIC_DEVICE.preferredKey); } catch { /* kept for this panel */ }
+    await this.checkMicDevice();
   }
 
   emit(patch = {}) {
@@ -117,6 +146,7 @@ export class Controller {
     this.windowId = windowId;
     const all = await this.d.storage.get(null);
     this.cfg = { base: all.base, token: all.token };
+    if (typeof all[MIC_DEVICE.preferredKey] === "string") this.emit({ preferredMic: all[MIC_DEVICE.preferredKey] });
     // A stored retired Dive mode becomes its Dip (so every window and the menu agree); anything else invalid, such as the
     // removed "temp" mode, is forgotten and falls back to the default.
     if (all.mode !== undefined && migrateMode(all.mode) !== all.mode) {
@@ -241,6 +271,8 @@ export class Controller {
 
   onStorageChange(changes, area) {
     if (area !== "local") return;
+    const pm = changes[MIC_DEVICE.preferredKey];
+    if (pm && (pm.newValue || "") !== this.s.preferredMic) { this.emit({ preferredMic: pm.newValue || "" }); void this.checkMicDevice(); }
     // A mode change made in another window must not alter this panel's own selection or its pressed button.
     const k = slotKey(this.windowId);
     if (changes[k] && changes[k].newValue) this.onSlot(changes[k].newValue);
@@ -619,9 +651,14 @@ export class Controller {
     this.emit({ thread: [], asking: null, askError: null, draft: "", draftSeq: this.s.draftSeq + 1 });
   }
 
-  // The user typed in the box (no re-render: the field already shows it).
+  // The user typed in the box (no re-render: the field already shows it). While the mic is on, his edit becomes the new
+  // start of the box and only words heard after it are added.
   typed(text) {
     this.s.draft = String(text ?? "");
+    if (this.s.mic && this.s.mic.state !== MIC.IDLE) {
+      this.micBaseText = this.s.draft;
+      this.voice.commit();
+    }
   }
 
   appendVoiceText(base, spoken) {
@@ -637,6 +674,7 @@ export class Controller {
       try { if (live) this.media.hush(); else this.media.restore(); } catch { /* media control never blocks dictation */ }
     }
     const patch = { mic: m };
+    if (live && this.s.mic && this.s.mic.state === MIC.IDLE) void this.checkMicDevice();  // a recording begins
     if (live) {
       const shown = this.appendVoiceText(this.micBaseText, m.text);
       if (shown !== this.s.draft) { patch.draft = shown; patch.draftSeq = this.s.draftSeq + 1; }

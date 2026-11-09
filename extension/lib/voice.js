@@ -3,6 +3,8 @@
 //
 // States: idle -> starting -> listening -> stopping -> idle. Click once to start, click again to pause; the recognized
 // text stays in the question box until the user explicitly asks. Errors become one actionable line (message).
+// Chrome ends a recording by itself after a pause or about a minute; while he has not clicked Pause, a new recognizer
+// takes over at once and the words carry on, until nothing has been heard for silenceMs.
 import { SYSTEM_BLOCK_HELP } from "./micerrors.js";
 
 export const MIC = Object.freeze({ IDLE: "idle", STARTING: "starting", LISTENING: "listening", STOPPING: "stopping" });
@@ -26,9 +28,9 @@ export const MIC_MESSAGES = Object.freeze({
 
 export class VoiceInput {
   // deps: SpeechRecognition (constructor or null), permissions ({query} or null), onChange(snapshot),
-  //       setTimer(fn, ms), clearTimer(id)
+  //       setTimer(fn, ms), clearTimer(id), now() (optional clock)
   constructor(deps) {
-    this.d = { lang: "en-US", startTimeoutMs: 10000, stopTimeoutMs: 3000, ...deps };
+    this.d = { lang: "en-US", startTimeoutMs: 10000, stopTimeoutMs: 3000, silenceMs: 60_000, now: () => Date.now(), ...deps };
     this.SR = deps.SpeechRecognition || null;
     this.state = MIC.IDLE;
     this.text = "";          // live text: final results so far plus the current interim guess
@@ -45,6 +47,12 @@ export class VoiceInput {
     this.permAtStart = null; // what the permission said when this recording began
     this.deliberateAbort = false;
     this.pauseMessage = "";
+    this.carried = "";       // words from earlier recognizers in this recording (Chrome ended them, listening went on)
+    this.heard = false;      // anything heard in this recording, even if he has since edited it into the box
+    this.lastHeard = 0;
+    this.rows = [];          // this recognizer's results as last reported: full text and whether final
+    this.rowFinal = [];
+    this.skip = null;        // set by commit(): results already in the box
     if (!this.SR) { this.message = MIC_MESSAGES.unavailable; this.kind = "info"; }
   }
 
@@ -113,6 +121,8 @@ export class VoiceInput {
     this._set({ state: MIC.STARTING, text: "", message: "", kind: "", needPermission: false });
     this.finalText = "";
     this.interimText = "";
+    this.carried = "";
+    this.heard = false;
     if (!this.SR) { this._set({ state: MIC.IDLE, message: MIC_MESSAGES.unavailable, kind: "info" }); return; }
     // Chrome cannot show a permission prompt inside a side panel, so a missing grant must go through the setup tab.
     const p = await this._permission();
@@ -123,6 +133,13 @@ export class VoiceInput {
                   message: p === "denied" ? MIC_MESSAGES.blocked : MIC_MESSAGES.needPermission });
       return;
     }
+    this.err = null;
+    this._open(sid, false);
+  }
+
+  // A new recognizer for this recording. `restart`: Chrome ended the previous one while he was still dictating.
+  _open(sid, restart) {
+    const failed = () => restart ? this._end(sid, { message: MIC_MESSAGES.paused, kind: "info" }) : this._fail(sid, "start-failed");
     let rec;
     try {
       rec = new this.SR();
@@ -130,22 +147,41 @@ export class VoiceInput {
       rec.interimResults = true;
       rec.continuous = true;   // keep listening through pauses; the second click pauses the recording
       rec.maxAlternatives = 1;
-    } catch { this._fail(sid, "start-failed"); return; }
+    } catch { failed(); return; }
     this.rec = rec;
-    this.results = [];
-    this.err = null;
+    this.rows = [];
+    this.rowFinal = [];
+    this.skip = null;
     rec.onaudiostart = () => { if (sid === this.sid && this.state === MIC.STARTING) this._listening(); };
     rec.onresult = (e) => this._onResult(sid, e);
     rec.onerror = (e) => this._onError(sid, e);
     rec.onend = () => this._finish(sid);
     // Gave up waiting: abort the recognizer too, or a slow audio device could still start it and Chrome would go on
     // sending the room's sound to the speech service with nobody listening.
-    this._timer("start", () => { if (sid === this.sid && this.state === MIC.STARTING) { this._abort(); this._fail(sid, "start-failed"); } }, this.d.startTimeoutMs);
-    try { rec.start(); } catch { this._fail(sid, "start-failed"); }
+    if (!restart) this._timer("start", () => { if (sid === this.sid && this.state === MIC.STARTING) { this._abort(); this._fail(sid, "start-failed"); } }, this.d.startTimeoutMs);
+    try { rec.start(); } catch { failed(); }
+  }
+
+  // He edited the box while listening: everything heard so far is now his text. Listening goes on, and only words heard
+  // after this are added. A guess still being worked on adds only what goes beyond what was showing.
+  commit() {
+    if (this.state === MIC.IDLE) return;
+    const partial = {};
+    this.rows.forEach((t, i) => { if (!this.rowFinal[i]) partial[i] = t; });
+    this.skip = { count: this.rows.length, partial };
+    this.carried = "";
+    this.text = this.finalText = this.interimText = "";
+  }
+
+  _restart() {
+    this.carried = this.text;
+    this._detach();
+    this._open(++this.sid, true);
   }
 
   _listening() {
     this._untimer("start");
+    this.lastHeard = this.d.now();
     this._set({ state: MIC.LISTENING });
   }
 
@@ -153,13 +189,23 @@ export class VoiceInput {
     if (sid !== this.sid) return;
     if (this.state === MIC.STARTING) this._listening();
     // e.results is the whole list for this recording (continuous mode): rebuild the text from it every time.
-    const finals = [], interim = [];
+    const finals = [], interim = [], rows = [], rowFinal = [];
+    const sk = this.skip;
     for (let i = 0; i < e.results.length; i++) {
       const r = e.results[i];
-      const t = String((r[0] && r[0].transcript) || "").trim();
+      let t = String((r[0] && r[0].transcript) || "").trim();
+      rows.push(t); rowFinal.push(!!r.isFinal);
+      if (sk && i < sk.count) {
+        const was = sk.partial[i];
+        if (was === undefined || !t.toLowerCase().startsWith(was.toLowerCase())) continue;  // already in the box
+        t = t.slice(was.length).trim();
+      }
       if (t) (r.isFinal ? finals : interim).push(t);
     }
-    this.finalText = finals.join(" ").trim();
+    this.rows = rows;
+    this.rowFinal = rowFinal;
+    if (rows.some(Boolean)) { this.heard = true; this.lastHeard = this.d.now(); }
+    this.finalText = [this.carried, ...finals].filter(Boolean).join(" ").trim();
     this.interimText = interim.join(" ").trim();
     this._set({ text: [this.finalText, this.interimText].filter(Boolean).join(" ") });
   }
@@ -168,6 +214,7 @@ export class VoiceInput {
     if (sid !== this.sid) return;
     const code = (e && e.error) || "unknown";
     if (code === "aborted" && this.deliberateAbort) return;
+    if (code === "no-speech" && this.state === MIC.LISTENING) return;  // a quiet stretch: the end that follows restarts
     this._fail(sid, code);
   }
 
@@ -232,7 +279,8 @@ export class VoiceInput {
   _finish(sid) {
     if (sid !== this.sid || this.state === MIC.IDLE) return;
     const byChrome = this.state === MIC.LISTENING;
-    if (!this.text && !this.err) this.pauseMessage = MIC_MESSAGES.nothing;
+    if (byChrome && !this.err && this.d.now() - this.lastHeard < this.d.silenceMs) { this._restart(); return; }
+    if (!this.heard && !this.err) this.pauseMessage = MIC_MESSAGES.nothing;
     else if (byChrome && !this.err) this.pauseMessage = MIC_MESSAGES.paused;
     this._end(sid, { message: this.pauseMessage || (this.err ? this.message : ""), kind: this.err ? this.kind : (this.pauseMessage ? "info" : "") });
   }

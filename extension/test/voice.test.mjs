@@ -4,7 +4,7 @@ import { MIC, MIC_MESSAGES, VoiceInput } from "../lib/voice.js";
 import { makePermissions, makeSpeech } from "./rig.mjs";
 
 // VoiceInput on its own, with a scripted SpeechRecognition and manual timers.
-function voice({ permission = "granted", noSpeech = false, noPermissions = false } = {}) {
+function voice({ permission = "granted", noSpeech = false, noPermissions = false, clock = { t: 0 } } = {}) {
   const speech = makeSpeech();
   const permissions = makePermissions(permission);
   const log = { changes: [], finals: [] };
@@ -15,9 +15,10 @@ function voice({ permission = "granted", noSpeech = false, noPermissions = false
     onChange: (m) => log.changes.push(m),
     setTimer: (f, ms) => { timers.push({ f, ms }); return timers.length; },
     clearTimer: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+    now: () => clock.t,
   });
   const fire = async (ms) => { const t = timers.find((x) => x.ms === ms && !x.cleared); assert.ok(t, `no live ${ms} ms timer`); t.cleared = true; await t.f(); };
-  return { v, speech, permissions, log, timers, fire };
+  return { v, speech, permissions, log, timers, fire, clock };
 }
 const R = (t, final = false) => ({ t, final });
 
@@ -108,6 +109,7 @@ test("Chrome ending the session by itself (a long pause) keeps what was heard bu
   const rec = x.speech.last;
   rec.fire("audiostart");
   rec.result([R("took a long pause", true)]);
+  x.clock.t = 60_000;  // a full minute with nothing heard
   rec.fire("end");  // the person never clicked Stop
   assert.equal(x.v.text, "took a long pause");
   assert.equal(x.log.finals.length, 0);
@@ -364,4 +366,84 @@ test("a recognizer that has finished cannot change a later recording", async () 
   assert.equal(x.v.text, "");
   now.result([R("fresh")]);
   assert.equal(x.v.text, "fresh");
+});
+
+test("Chrome ending a recording while he is still dictating starts a new recognizer and the words carry on", async () => {
+  const x = voice();
+  await x.v.toggle();
+  const first = x.speech.last;
+  first.fire("audiostart");
+  first.result([R("the first part", true)]);
+  x.clock.t = 20_000;
+  first.fire("error", { error: "no-speech" });  // a quiet stretch is not an error while listening
+  first.fire("end");
+  assert.equal(x.speech.recs.length, 2, "a new recognizer took over");
+  assert.equal(x.v.state, MIC.LISTENING);
+  assert.equal(x.v.message, "");
+  const second = x.speech.last;
+  assert.deepEqual(second.calls, ["start"]);
+  assert.ok(!x.timers.some((t) => t.ms === 10000 && !t.cleared), "no start timeout on a restart");
+  second.result([R("and the second")]);
+  assert.equal(x.v.text, "the first part and the second");
+  first.result([R("ghost", true)]);  // the old recognizer cannot change anything now
+  assert.equal(x.v.text, "the first part and the second");
+  await x.v.toggle();
+  second.finish([R("and the second", true)]);
+  assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.text, "the first part and the second");
+  assert.equal(x.v.message, "");
+});
+
+test("a minute with nothing heard ends the recording; nothing heard at all says so", async () => {
+  const x = voice();
+  await x.v.toggle();
+  x.speech.last.fire("audiostart");
+  x.clock.t = 30_000;
+  x.speech.last.fire("end");
+  assert.equal(x.speech.recs.length, 2);
+  x.clock.t = 60_000;
+  x.speech.last.fire("end");
+  assert.equal(x.speech.recs.length, 2);
+  assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.message, MIC_MESSAGES.nothing);
+});
+
+test("a restart whose recognizer cannot start ends the recording and keeps the words", async () => {
+  const x = voice();
+  await x.v.toggle();
+  x.speech.last.fire("audiostart");
+  x.speech.last.result([R("keep these", true)]);
+  const orig = x.speech.SR.prototype.start;
+  x.speech.SR.prototype.start = function () { throw new Error("busy"); };
+  try { x.speech.last.fire("end"); } finally { x.speech.SR.prototype.start = orig; }
+  assert.equal(x.v.state, MIC.IDLE);
+  assert.equal(x.v.text, "keep these");
+  assert.equal(x.v.message, MIC_MESSAGES.paused);
+});
+
+test("commit (he edited the box) drops what was heard; only later words come through, a running guess adds only new words", async () => {
+  const x = voice();
+  await x.v.toggle();
+  const rec = x.speech.last;
+  rec.fire("audiostart");
+  rec.result([R("what is the whether", true), R("in new")]);
+  x.v.commit();
+  assert.equal(x.v.text, "");
+  rec.result([R("what is the whether", true), R("in new york today")]);
+  assert.equal(x.v.text, "york today");
+  rec.result([R("what is the whether", true), R("in new york today", true), R("please")]);
+  assert.equal(x.v.text, "york today please");
+  x.v.commit();
+  rec.result([R("what is the whether", true), R("in new york today", true), R("please hurry", true)]);
+  assert.equal(x.v.text, "hurry");
+  await x.v.toggle();
+  rec.fire("end");
+  assert.equal(x.v.message, "", "he was heard, so no 'did not hear anything'");
+  assert.equal(x.v.text, "hurry");
+});
+
+test("commit while idle does nothing", () => {
+  const x = voice();
+  x.v.commit();
+  assert.equal(x.v.state, MIC.IDLE);
 });

@@ -424,7 +424,6 @@ test("answers are rendered by the safe renderer and questions are plain text in 
   assert.match(js, /e\.target === askInput \|\| e\.target === mic \|\| !otherTextField/);
   assert.match(js, /\$\("mic"\)\.addEventListener\("keydown", \(e\) => \{ if \(e\.key === "Enter"\) e\.preventDefault\(\); \}\)/);
   assert.match(js, /\$\("mic"\)\.addEventListener\("click", async \(\) => \{ \$\("askinput"\)\.focus\(\); await ctl\.toggleMic\(\); \}\)/);
-  assert.match(js, /box\.readOnly = live/);
   assert.match(js, /preserveSelection/);
   assert.ok(!/innerHTML = [^;]*\.q\b/.test(js), "a question is never put through innerHTML");
 });
@@ -660,12 +659,10 @@ test("mic: Ask after the recognizer starts but before audio cancels it and ignor
   assert.equal(r.state.last.mic.state, MIC.IDLE);
 });
 
-test("mic: the question box is read-only while recording", async () => {
+test("mic: Escape while recording empties the box", async () => {
   const { r, speech } = await micReady();
   await r.c.toggleMic();
   speech.last.fire("audiostart");
-  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
-  assert.match(js, /box\.readOnly = live/);
   assert.equal(r.state.last.mic.state, MIC.LISTENING);
   r.c.cancelQuestion();
   assert.equal(r.state.last.draft, "");
@@ -769,10 +766,12 @@ test("mic: nothing heard leaves the typed words in the box", async () => {
 });
 
 test("mic: a pause that Chrome ends keeps the words in the box unsent; Ask sends them, the mic adds more", async () => {
-  const { r, speech } = await micReady();
+  const clock = { t: 0 };
+  const { r, speech } = await micReady({ clock });
   await r.c.toggleMic();
   speech.last.fire("audiostart");
   speech.last.result([R("so what is the", true)]);
+  clock.t = 61_000;         // a minute with nothing heard
   speech.last.fire("end");  // Chrome gave up on the silence; nobody clicked Stop
   await flush();
   assert.equal(asks(r).length, 0, "half a question is not sent");
@@ -861,4 +860,27 @@ test("slots and storage are untouched by questions (nothing about them is persis
   assert.equal(JSON.stringify(r.store), before);
   assert.ok(!JSON.stringify(r.store).includes("private question"));
   assert.ok(r.store[slotKey(1)]);
+});
+
+test("mic: editing the box while listening keeps his edit and adds only later words", async () => {
+  const { r, speech } = await micReady();
+  r.c.typed("about the cake:");
+  await r.c.toggleMic();
+  const rec = speech.last;
+  rec.fire("audiostart");
+  rec.result([R("what is the whether", true), R("in")]);
+  assert.equal(r.state.last.draft, "about the cake: what is the whether in");
+  r.c.typed("about the cake: what is the weather");  // he fixed a word and deleted the guess, still listening
+  assert.equal(r.state.last.mic.state, MIC.LISTENING);
+  rec.result([R("what is the whether", true), R("in Paris")]);
+  assert.equal(r.state.last.draft, "about the cake: what is the weather Paris");
+  await r.c.askQuestion();
+  rec.finish([R("what is the whether", true), R("in Paris", true)]);
+  await flush();
+  assert.equal(asks(r)[0].body.question, "about the cake: what is the weather Paris");
+});
+
+test("mic: the question box is never read-only, so he can edit while the mic listens", () => {
+  const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
+  assert.ok(!/readOnly = live/.test(js));
 });

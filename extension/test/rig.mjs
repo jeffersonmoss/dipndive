@@ -35,7 +35,7 @@ export function makePermissions(state = "granted") {
 
 // Two panels can share one fake companion (`server`) and one storage (`shared`); with a `bus` array every storage write is
 // delivered to every controller on it (the writer included), the way chrome.storage.onChanged reaches every window.
-export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions, server: sharedServer, bus, tab, tabsGrant, media } = {}) {
+export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mode, slot, jobs = {}, shared, health, speech, permissions, server: sharedServer, bus, tab, tabsGrant, media, clock, micDevices } = {}) {
   const store = shared || { ...cfg, ...(mode ? { mode } : {}), ...(slot ? { [slotKey(1)]: slot } : {}) };
   const log = { fetches: [], tabs: [], order: [], tabAsks: 0, tabQueries: [] };
   const timers = [];
@@ -139,6 +139,8 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
     permissions: permissions || null,
     micSetupUrl: "chrome-extension://test/mic.html",
     media: media || null,
+    voiceNow: clock ? () => clock.t : undefined,
+    micDevices: micDevices || null,
     setVoiceTimer: (f, ms) => { vtimers.push({ f, ms }); return vtimers.length; },
     clearVoiceTimer: (id) => { if (vtimers[id - 1]) vtimers[id - 1].cleared = true; },
   });

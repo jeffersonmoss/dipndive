@@ -160,6 +160,12 @@ Pausing needs an optional all-sites grant (`<all_urls>`, never required, so upda
 
 A plain click on the summarized page's title in the panel loads it in the active tab of the panel's window (`openInCurrentTab` in `lib/urls.js`: `tabs.query` for the active tab's id, then `tabs.update` with the url, neither needing the `tabs` permission). Cmd, Ctrl, Shift or Alt clicks and middle clicks keep Chrome's own new-tab or new-window behavior; if there is no tab to reuse or Chrome refuses, a new tab opens instead. The creator line, history rows and links inside the summary still open new tabs.
 
+### Editable dictation and the microphone check (version 1.7)
+
+1. The question box can be edited at any time, including while the mic is listening. An edit becomes the new start of the box, and only words heard after it are added. A guess Chrome was still working on adds only the words beyond what was showing.
+2. Chrome ends a recording by itself after a pause or about a minute. While Pause recording has not been clicked, a new recognizer takes over at once and the words carry on. The recording ends by itself only after 60 seconds with nothing heard (`silenceMs` in `lib/voice.js`).
+3. Right-clicking the mic button shows which microphone dictation is using: Chrome's speech recognition listens to the computer's default input, which `enumerateDevices` names once the microphone is allowed. "This is my microphone" marks it on this computer only (`preferredMic` in `chrome.storage.local`, never synced). After that, a recording that starts on a different microphone, or a microphone dropping out mid-recording, shows a red line under the box. Windows' "2- " re-plug number does not count as a different microphone. Machines with no marked microphone (the Macs) never check or warn. "Stop checking" forgets the mark.
+
 ## Thing 2's transcript archive and "get my latest transcript" (version 1.3)
 
 `tools/transcripts_archive.py`, installed on Thing 2 as `~/.local/bin/dipdive-transcript` (a copy; reinstall after editing). It reads the history log through `GET /history` and copies each Dip's summary and full transcript (`GET /transcript?url=`) into `~/Documents/Dip'n'Dive Transcripts` on Thing 2, one Markdown file per Dip (`<title> - <Claude Dip> - <16 October 2026>.md`) plus `index.json`. Nothing there is ever deleted, and lookups work with the iMac off. A Dip copied before its transcript was available is completed on a later sync.

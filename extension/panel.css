@@ -121,6 +121,19 @@ button.action:active { border-color: var(--rim); }
 #askgo:disabled { opacity: .45; cursor: not-allowed; }
 #askgo:active:not(:disabled) { transform: translateY(1px); }
 .micmsg { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#ask { position: relative; }
+#micinfo { position: absolute; right: 12px; bottom: calc(100% - 4px); z-index: 5; width: min(300px, calc(100% - 24px)); box-sizing: border-box;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg);
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+#micinfo[hidden] { display: none; }
+.micinfo-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+#micinfo-name { font-weight: 600; overflow-wrap: anywhere; }
+#micinfo-name.ok::before { content: "\2713  "; color: var(--success); }
+#micinfo-name.off { color: var(--err-fg); }
+.micinfo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.micinfo-actions button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.micinfo-actions button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.micinfo-note { font-size: 11px; margin-top: 2px; }
 .micmsg.err { color: var(--err-fg); background: var(--err-bg); padding: 6px 10px; border-radius: 8px; font-size: 13px; }
 #micsetup { align-self: flex-start; padding: 8px 14px; font-family: inherit; font-weight: 600; font-size: 13px; line-height: 1.2; border-radius: 10px; cursor: pointer; background: var(--light-btn); color: #2a2724; border: 2px solid var(--light-btn-edge); box-shadow: 0 3px 0 var(--light-btn-edge); }
 .reason { font-size: 12px; color: var(--muted); margin-top: -4px; }

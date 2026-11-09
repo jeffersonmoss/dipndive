@@ -6,6 +6,7 @@ import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { createMediaClient } from "./lib/media-hush.js";
+import { currentMic, micInfo } from "./lib/micdevice.js";
 import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
@@ -260,12 +261,11 @@ function renderAsk(s) {
   mic.setAttribute("aria-label", micLabel);
   mic.title = micLabel;
   $("miclabel").textContent = micLabel;
-  const box = $("askinput");
-  box.readOnly = live;
+  const box = $("askinput");   // always editable, even while listening (typed() keeps his edits)
   if (s.draftSeq !== shownDraftSeq) {
     shownDraftSeq = s.draftSeq;
     if (box.value !== s.draft) {
-      const preserveSelection = document.activeElement === box && !box.readOnly;
+      const preserveSelection = document.activeElement === box;
       const start = preserveSelection ? box.selectionStart : null;
       const end = preserveSelection ? box.selectionEnd : null;
       box.value = s.draft;
@@ -282,7 +282,32 @@ function renderAsk(s) {
   $("micsetup").hidden = !m.needPermission;
   $("askerror").hidden = !s.askError;
   $("askerror").textContent = s.askError || "";
+  $("micwarn").hidden = !s.micWarn;
+  $("micwarn").textContent = s.micWarn || "";
+  if (!$("micinfo").hidden) void showMicInfo();  // the marked microphone changed while the popup is open
 }
+
+// ---------- right-click on the mic: which microphone dictation uses (lib/micdevice.js) ----------
+const mediaDevices = navigator.mediaDevices || null;
+let micInfoSeq = 0, micInfoName = "";
+async function showMicInfo() {
+  const seq = ++micInfoSeq;
+  const cur = await currentMic(mediaDevices);
+  if (seq !== micInfoSeq) return;
+  const info = micInfo(cur, ctl.s.preferredMic);
+  micInfoName = cur && cur.name ? cur.name : "";
+  $("micinfo-head").textContent = micInfoName ? "Dictation is using" : "Microphone";
+  const name = $("micinfo-name");
+  name.textContent = info.line;
+  name.classList.toggle("ok", info.mine);
+  name.classList.toggle("off", !!info.preferred && !info.mine);
+  $("micinfo-mine").textContent = info.mine ? "This is your microphone." : info.preferred ? `Your microphone: ${info.preferred}` : "";
+  $("micinfo-mine").hidden = !$("micinfo-mine").textContent;
+  $("micinfo-mark").hidden = !info.canMark;
+  $("micinfo-forget").hidden = !info.canForget;
+  $("micinfo").hidden = false;
+}
+function hideMicInfo() { micInfoSeq++; $("micinfo").hidden = true; }
 
 const speech = window.__devSpeech !== undefined ? window.__devSpeech : { SpeechRecognition: window.SpeechRecognition || window.webkitSpeechRecognition, permissions: navigator.permissions };
 const micSetupUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("mic.html") : new URL("mic.html", location.href).href;
@@ -304,6 +329,7 @@ const ctl = new Controller({
   permissions: speech && speech.permissions,
   micSetupUrl,
   media: createMediaClient(chrome),
+  micDevices: { current: () => currentMic(mediaDevices), watch: (fn) => mediaDevices?.addEventListener?.("devicechange", fn) },
   onState: render,
 });
 
@@ -432,6 +458,15 @@ document.addEventListener("keydown", (e) => {
 $("mic").addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
 $("mic").addEventListener("click", async () => { $("askinput").focus(); await ctl.toggleMic(); });
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
+$("mic").addEventListener("contextmenu", (e) => { e.preventDefault(); void showMicInfo().then(() => $("micinfo-close").focus()); });
+$("micinfo-mark").addEventListener("click", () => { if (micInfoName) void ctl.setPreferredMic(micInfoName); });
+$("micinfo-forget").addEventListener("click", () => { void ctl.setPreferredMic(""); });
+$("micinfo-close").addEventListener("click", () => { hideMicInfo(); $("mic").focus(); });
+// Escape closes the popup first (before the question box's own Escape); a click anywhere else closes it too.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("micinfo").hidden) { e.preventDefault(); e.stopPropagation(); hideMicInfo(); $("mic").focus(); }
+}, true);
+document.addEventListener("mousedown", (e) => { if (!$("micinfo").hidden && !$("micinfo").contains(e.target) && e.target !== $("mic") && !$("mic").contains(e.target)) hideMicInfo(); });
 // Coming back from the Enable microphone tab: look at the permission again (also reported by the tab itself).
 window.addEventListener("focus", () => { ctl.refreshMic(); ctl.refreshSaved(); });  // and whether the summary is still in the log
 // Chrome keeps a side panel that another panel replaced alive (and recognition with it), with no Stop button in sight:
