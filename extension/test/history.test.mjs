@@ -123,12 +123,13 @@ test("the History button reuses an open History tab, else opens one", async () =
   assert.equal(await openHistoryTab({ tabs: { create: async (o) => calls.push(["create", o]) } }, url), "opened", "the dev shim has no runtime");
 });
 
-test("panel.html: History is the first button of the bottom row; the Saved row has the save box, the status and the Settings gear (no Clear history); panel.js opens the History tab", () => {
+test("panel.html: History is the first button of the bottom row; the Saved row has the save box, the status and the Settings gear (no Clear history); History opens in the current tab", () => {
   const html = fs.readFileSync(new URL("../panel.html", import.meta.url), "utf8");
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
   const row = html.match(/<div id="askrow">([\s\S]*?)<\/form>/)[1];
-  const order = [...row.matchAll(/\bid="(historylink|askinput|mic|askgo)"/g)].map((m) => m[1]);
-  assert.deepEqual(order, ["historylink", "askinput", "mic", "askgo"], "History, the question box, Speak, Ask");
+  const order = [...row.matchAll(/\bid="(historylink|trailback|trailfwd|askspace|mic|askgo)"/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["historylink", "trailback", "trailfwd", "askspace", "mic", "askgo"], "History, Back, Forward, space, mic, Ask");
+  assert.ok(html.indexOf('id="askinput"') < html.indexOf('id="askrow"'), "the question field pops up above the row");
   assert.match(row, /<button id="historylink" class="rowbtn" type="button" aria-label="History" title="History"><svg[^>]*aria-hidden="true"/);
   assert.ok(!/<footer/.test(html), "the old footer is gone");
   const saveRow = html.match(/<div id="saverow"[^>]*>([\s\S]*?)<\/button>\s*<\/div>/)[1];
@@ -137,7 +138,7 @@ test("panel.html: History is the first button of the bottom row; the Saved row h
   const ids = [...html.matchAll(/\bid="(\w+)"/g)].map((m) => m[1]);
   assert.equal(new Set(ids).size, ids.length, "ids are unique");
   for (const id of [...js.matchAll(/\$\("(\w+)"\)/g)].map((m) => m[1])) assert.ok(ids.includes(id), `panel.js uses #${id}, which panel.html lacks`);
-  assert.match(js, /\$\("historylink"\)\.addEventListener\("click", async \(\) => \{[\s\S]*chrome\.runtime\.sendMessage\(\{ type: OPEN_HISTORY \}\)[\s\S]*openHistoryTab\(chrome, historyUrl\)/, "the panel asks the service worker; it opens the tab itself only when none answers");
+  assert.match(js, /\$\("historylink"\)\.addEventListener\("click", \(\) => \{ void openHistoryHere\(chrome, historyUrl, winInfo\?\.id\); \}\)/, "History opens in the current tab");
   assert.match(js, /chrome\.runtime\.getURL\("history\.html"\)/);
 });
 
@@ -355,4 +356,24 @@ test("review 4: the opener without the worker would race: two unserialized calls
   const open = createHistoryOpener(w2.chrome, url);
   await Promise.all([open(), open()]);
   assert.equal(w2.tabs.length, 1);
+});
+
+test("openHistoryHere: navigates the window's active tab, refreshes History already there, else opens a tab", async () => {
+  const { openHistoryHere, HISTORY_REFRESH } = await import("../lib/history.js");
+  const url = "chrome-extension://x/history.html";
+  const calls = [];
+  const api = (tabs) => ({ tabs: {
+    query: async (q) => { calls.push(["query", q]); return tabs; },
+    update: async (id, o) => calls.push(["update", id, o]),
+    sendMessage: async (id, m) => calls.push(["send", id, m]),
+    create: async (o) => calls.push(["create", o]),
+  } });
+  assert.equal(await openHistoryHere(api([{ id: 4, url: "https://www.youtube.com/watch?v=a" }]), url, 9), "here");
+  assert.deepEqual(calls, [["query", { active: true, windowId: 9 }], ["update", 4, { url }]]);
+  calls.length = 0;
+  assert.equal(await openHistoryHere(api([{ id: 5, url }]), url), "reused");
+  assert.deepEqual(calls, [["query", { active: true, currentWindow: true }], ["send", 5, { type: HISTORY_REFRESH }]]);
+  calls.length = 0;
+  assert.equal(await openHistoryHere(api([]), url, 9), "opened");
+  assert.deepEqual(calls.at(-1), ["create", { url }]);
 });

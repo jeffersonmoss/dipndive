@@ -26,7 +26,7 @@ test("ask: the question is sent about the current source, an answer lands in the
   assert.equal(r.state.last.result, "Summary for claude-dip");
   assert.equal(await r.c.askQuestion("okay, what is the deal with the chocolate?"), true);
   const [p] = asks(r);
-  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], summary: "Summary for claude-dip", force: false, clearGeneration: 0 });
+  assert.deepEqual(p.body, { url: "https://v.test/watch", mode: "claude-ask", requestId: p.body.requestId, question: "okay, what is the deal with the chocolate?", history: [], summary: "Summary for claude-dip", entry: "job1", force: false, clearGeneration: 0 });
   assert.ok(p.body.requestId.startsWith("uuid-"));
   assert.equal(p.auth, "Bearer " + "t".repeat(40));
   assert.equal(r.state.last.asking.q, "okay, what is the deal with the chocolate?");
@@ -430,7 +430,8 @@ test("answers are rendered by the safe renderer and questions are plain text in 
 
 test("Escape does not cancel the question draft while another text field has focus", () => {
   const js = fs.readFileSync(new URL("../panel.js", import.meta.url), "utf8");
-  const body = js.match(/document\.addEventListener\("keydown", \(e\) => \{([\s\S]*?)\n\}\);/)[1];
+  const body = [...js.matchAll(/document\.addEventListener\("keydown", \(e\) => \{([\s\S]*?)\n\}\);/g)]
+    .map((m) => m[1]).find((b) => b.includes("cancelQuestion"));
   const askInput = {}, mic = {};
   const urlInput = { matches: (selector) => selector.includes("input[type='url']") };
   const other = { matches: () => false };

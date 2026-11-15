@@ -476,3 +476,50 @@ def tearDownModule():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AskKeptWithEntry(AskServer):
+    """Questions asked about a history entry are kept with it (dipdive/qa.py) and come back on GET /qa and GET /history."""
+
+    def test_answer_is_kept_with_its_entry_and_listed_in_history(self):
+        _, s = self.submit("claude-dip", rid="dip1")
+        dip = self.wait(s["job_id"])
+        entry = dip["log_id"] or dip["job_id"]
+        self.assertEqual(dip["log_id"], dip["job_id"], "a fresh summary is filed under its own id")
+        c, r = self.ask("what about the chocolate?", rid="q1", entry=entry)
+        self.assertEqual(c, 202)
+        answer = self.wait(r["job_id"])["result_markdown"]
+        c, got = self.req("GET", "/qa?entry=" + entry)
+        self.assertEqual(c, 200)
+        self.assertEqual([(t["q"], t["a"], t["mode"], t["ask_job"]) for t in got["turns"]],
+                         [("what about the chocolate?", answer, "claude-ask", r["job_id"])])
+        c, page = self.req("GET", "/history")
+        self.assertEqual(c, 200)
+        self.assertEqual([t["q"] for t in page["entries"][0]["qa"]], ["what about the chocolate?"])
+
+    def test_a_reused_answer_is_kept_once_per_entry(self):
+        e1, e2 = "1" * 32, "2" * 32
+        _, a = self.ask("same?", rid="r1", entry=e1)
+        self.wait(a["job_id"])
+        _, b = self.ask("same?", rid="r2", entry=e2)        # the finished job is reused for another entry
+        self.assertEqual(b["job_id"], a["job_id"])
+        _, again = self.ask("same?", rid="r3", entry=e1)    # and asked again for the first: not stored twice
+        self.assertEqual(again["job_id"], a["job_id"])
+        self.assertEqual(len(self.req("GET", "/qa?entry=" + e1)[1]["turns"]), 1)
+        self.assertEqual(len(self.req("GET", "/qa?entry=" + e2)[1]["turns"]), 1)
+        self.assertEqual(len(calls(self.rec, "claude-")), 1)
+
+    def test_no_entry_keeps_nothing_and_bad_ids_are_refused(self):
+        _, a = self.ask("loose question", rid="n1")
+        self.wait(a["job_id"])
+        self.assertFalse(os.path.isdir(os.path.join(_SUP, "qa")) and os.listdir(os.path.join(_SUP, "qa")))
+        self.assertEqual(self.ask("x", rid="n2", entry="not-an-id")[0], 400)
+        self.assertEqual(self.req("GET", "/qa?entry=../etc")[0], 400)
+        self.assertEqual(self.req("GET", "/qa?entry=" + "3" * 32), (200, {"entry": "3" * 32, "turns": []}))
+
+    def test_clear_keeps_questions_like_the_log(self):
+        e = "4" * 32
+        _, a = self.ask("kept?", rid="c1", entry=e)
+        self.wait(a["job_id"])
+        self.req("POST", "/clear", {})
+        self.assertEqual(len(self.req("GET", "/qa?entry=" + e)[1]["turns"]), 1)

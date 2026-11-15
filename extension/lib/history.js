@@ -51,9 +51,15 @@ export async function loadAllHistory({ fetch, cfg, onProgress = () => {} }) {
   return { error: "The history kept changing while it was loading. Reload the page to try again." };
 }
 
-// The text a search looks in: title, channel and summary, lower case.
+// The text a search looks in: title, channel, summary and every question and answer kept with the entry, lower case.
 export function searchText(e) {
-  return [e.title, e.channel, e.summary].filter(Boolean).join("\n").toLowerCase();
+  const qa = (Array.isArray(e.qa) ? e.qa : []).flatMap((t) => [t && t.q, t && t.a]);
+  return [e.title, e.channel, e.summary, ...qa].filter(Boolean).join("\n").toLowerCase();
+}
+
+// One question and its answer, as on the panel (the question on the right, the answer in a bubble below).
+export function turnHtml(t) {
+  return `<div class="turn"><div class="q">${esc(t.q || "")}</div><div class="a">${renderMarkdown(t.a || "")}</div></div>`;
 }
 
 // Every word of the query must appear (case-insensitive, in any order). An empty query matches everything.
@@ -71,7 +77,8 @@ export function entryHtml(e) {
   const meta = [e.date && e.time ? `${e.date} ${e.time}` : e.date || "", e.mode_label || e.mode || ""].filter(Boolean).map(esc).join(" &middot; ");
   const ch = e.channel ? `<div class="hchannel">${esc(e.channel)}</div>` : "";
   const body = e.summary ? `<div class="hsummary">${renderMarkdown(e.summary)}</div>` : "";
-  return `${head}${ch}<div class="hmeta">${meta}</div>${body}`;
+  const qa = (Array.isArray(e.qa) ? e.qa : []).filter((t) => t && t.q).map(turnHtml).join("");
+  return `${head}${ch}<div class="hmeta">${meta}</div>${body}<div class="hthread">${qa}</div>`;
 }
 
 // Message that tells an open History page to load its data again (sent to a tab the History button brought forward).
@@ -126,6 +133,25 @@ export async function openHistoryTab(chromeApi, url, known = {}) {
   } catch { /* fall through: open a new one */ }
   const t = await chromeApi.tabs.create({ url });
   if (known && t && typeof t.id === "number") known.tabId = t.id;
+  return "opened";
+}
+
+// 1.8: History opens in the tab he is looking at (the panel's window's active tab), like following a link; Chrome's own
+// Back returns to the video. If that tab already shows History it is just refreshed. With no usable tab, a new one.
+export async function openHistoryHere(chromeApi, url, windowId) {
+  try {
+    const q = typeof windowId === "number" ? { active: true, windowId } : { active: true, currentWindow: true };
+    const tab = (await chromeApi.tabs.query(q))[0];
+    if (tab && typeof tab.id === "number") {
+      if ((tab.url || tab.pendingUrl) === url) {
+        try { await chromeApi.tabs.sendMessage(tab.id, { type: HISTORY_REFRESH }); } catch { /* still loading */ }
+        return "reused";
+      }
+      await chromeApi.tabs.update(tab.id, { url });
+      return "here";
+    }
+  } catch { /* fall through */ }
+  await chromeApi.tabs.create({ url });
   return "opened";
 }
 

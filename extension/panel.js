@@ -6,8 +6,8 @@ import { slotKey } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { createMediaClient } from "./lib/media-hush.js";
-import { currentMic, micInfo } from "./lib/micdevice.js";
-import { OPEN_HISTORY, openHistoryTab } from "./lib/history.js";
+import { listMics, micInfo } from "./lib/micdevice.js";
+import { openHistoryHere } from "./lib/history.js";
 import { request } from "./lib/api.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
 import { creatorView, isPlainClick, openInCurrentTab } from "./lib/urls.js";
@@ -241,14 +241,36 @@ function renderThread(s) {
   }
 }
 
+// The question field is shown while the mic is on, while it holds text, or once he starts typing or clicks the row's
+// empty space; sending (or Escape) closes it again.
+let fieldOpen = false;
+function sizeField() {
+  const box = $("askinput");
+  if (box.hidden) return;
+  box.style.height = "auto";
+  box.style.height = `${box.scrollHeight + 2}px`;  // grows upward: the row stays docked at the bottom (max-height in CSS)
+  box.style.overflowY = box.scrollHeight + 2 > window.innerHeight * 0.45 ? "auto" : "hidden";  // a scrollbar only at the cap
+}
+function openField() {
+  if (!ctl.s.configured || !ctl.s.source) return false;
+  fieldOpen = true;
+  render(ctl.s);
+  $("askinput").focus();
+  return true;
+}
+
 function renderAsk(s) {
-  // The bottom row is there whenever the companion is set up, so History is always one click away; the question box,
-  // Speak and Ask only once there is a source to ask about.
+  // The bottom row is there whenever the companion is set up, so History, Back and Forward are always one click away;
+  // the mic and Ask only once there is a source to ask about.
   $("ask").hidden = !s.configured;
+  $("askform").hidden = !s.configured;
+  $("trailback").disabled = !s.trailBack;
+  $("trailfwd").disabled = !s.trailForward;
   const show = s.configured && !!s.source;
-  $("askform").hidden = !show;
+  for (const id of ["mic", "askgo", "askspace"]) $(id).hidden = !show;
   if (!show) {
-    for (const id of ["micmsg", "micsetup", "askerror"]) $(id).hidden = true;
+    for (const id of ["micmsg", "micsetup", "askerror", "askinput"]) $(id).hidden = true;
+    fieldOpen = false;
     return;
   }
   renderThread(s);
@@ -272,7 +294,10 @@ function renderAsk(s) {
       if (preserveSelection) box.setSelectionRange(Math.min(start, box.value.length), Math.min(end, box.value.length));
     }
   }
-  if (live && document.activeElement !== box) box.scrollLeft = box.scrollWidth;  // show the newest words while they arrive
+  if (s.asking) fieldOpen = false;  // sent: the question moves into the thread
+  box.hidden = !(live || fieldOpen || !!s.draft.trim());
+  sizeField();
+  if (live && document.activeElement !== box) box.scrollTop = box.scrollHeight;  // show the newest words while they arrive
   box.placeholder = live ? "Listening..." : "Dive in...";
   $("askgo").disabled = !!s.asking;
   const line = m.state === MIC.LISTENING ? "Listening. Click Pause recording when you are done." : m.message;
@@ -287,24 +312,33 @@ function renderAsk(s) {
   if (!$("micinfo").hidden) void showMicInfo();  // the marked microphone changed while the popup is open
 }
 
-// ---------- right-click on the mic: which microphone dictation uses (lib/micdevice.js) ----------
+// ---------- right-click on the mic: pick the microphone dictation uses (lib/micdevice.js) ----------
 const mediaDevices = navigator.mediaDevices || null;
-let micInfoSeq = 0, micInfoName = "";
+let micInfoSeq = 0;
 async function showMicInfo() {
   const seq = ++micInfoSeq;
-  const cur = await currentMic(mediaDevices);
+  const list = await listMics(mediaDevices);
   if (seq !== micInfoSeq) return;
-  const info = micInfo(cur, ctl.s.preferredMic);
-  micInfoName = cur && cur.name ? cur.name : "";
-  $("micinfo-head").textContent = micInfoName ? "Dictation is using" : "Microphone";
-  const name = $("micinfo-name");
-  name.textContent = info.line;
-  name.classList.toggle("ok", info.mine);
-  name.classList.toggle("off", !!info.preferred && !info.mine);
-  $("micinfo-mine").textContent = info.mine ? "This is your microphone." : info.preferred ? `Your microphone: ${info.preferred}` : "";
-  $("micinfo-mine").hidden = !$("micinfo-mine").textContent;
-  $("micinfo-mark").hidden = !info.canMark;
-  $("micinfo-forget").hidden = !info.canForget;
+  const info = micInfo(list, ctl.s.preferredMic);
+  $("micinfo-line").textContent = info.line;
+  $("micinfo-line").hidden = !info.line;
+  const box = $("micinfo-list");
+  box.replaceChildren(...info.rows.map((row) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "micopt" + (row.missing ? " missing" : "");
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(row.chosen));
+    const tick = document.createElement("span");
+    tick.className = "tick";
+    tick.textContent = row.chosen ? "\u2713" : "";
+    const name = document.createElement("span");
+    name.textContent = row.label;   // device names are plain text
+    b.append(tick, name);
+    // The default row stores nothing; a device row stores its name (names survive re-plugging, device ids may not).
+    b.addEventListener("click", () => { if (!row.missing) void ctl.setPreferredMic(row.id ? row.label : ""); });
+    return b;
+  }));
   $("micinfo").hidden = false;
 }
 function hideMicInfo() { micInfoSeq++; $("micinfo").hidden = true; }
@@ -329,7 +363,8 @@ const ctl = new Controller({
   permissions: speech && speech.permissions,
   micSetupUrl,
   media: createMediaClient(chrome),
-  micDevices: { current: () => currentMic(mediaDevices), watch: (fn) => mediaDevices?.addEventListener?.("devicechange", fn) },
+  micDevices: { list: () => listMics(mediaDevices), watch: (fn) => mediaDevices?.addEventListener?.("devicechange", fn),
+                track: async (id) => (await mediaDevices.getUserMedia({ audio: { deviceId: { exact: id } } })).getAudioTracks()[0] },
   onState: render,
 });
 
@@ -447,7 +482,39 @@ $("title").addEventListener("click", (e) => {
   void openInCurrentTab(chrome.tabs, winInfo?.id, $("title").href);
 });  // calls tabs.requestAccess() first, inside this click
 $("askform").addEventListener("submit", (e) => { e.preventDefault(); ctl.askQuestion(); });
-$("askinput").addEventListener("input", () => ctl.typed($("askinput").value));
+$("askinput").addEventListener("input", () => { ctl.typed($("askinput").value); sizeField(); });
+// Enter sends, Shift+Enter starts a new line
+$("askinput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ctl.askQuestion(); }
+});
+$("askinput").addEventListener("blur", () => { if (!$("askinput").value.trim() && ctl.s.mic.state === MIC.IDLE && fieldOpen) { fieldOpen = false; render(ctl.s); } });
+$("askspace").addEventListener("click", () => { openField(); });
+window.addEventListener("resize", sizeField);  // a narrower panel wraps the question onto more lines
+// ---------- back and forward (lib/trail.js): buttons, Alt or Cmd + arrow keys, and a two-finger swipe ----------
+$("trailback").addEventListener("click", () => { void ctl.goTrail(-1); });
+$("trailfwd").addEventListener("click", () => { void ctl.goTrail(1); });
+document.addEventListener("keydown", (e) => {
+  if (!(e.altKey || e.metaKey) || e.ctrlKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+  const a = document.activeElement;
+  if (a && a.matches("input, textarea, select, [contenteditable='true']")) return;  // those keys move the cursor there
+  e.preventDefault();
+  void ctl.goTrail(e.key === "ArrowLeft" ? -1 : 1);
+});
+let swipeX = 0, swipeTimer = null, swipeDone = false;
+document.addEventListener("wheel", (e) => {
+  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5) return;
+  for (let el = e.target; el && el !== document.body; el = el.parentElement) {
+    if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== "visible") return;  // scrolls sideways itself
+  }
+  clearTimeout(swipeTimer);
+  swipeTimer = setTimeout(() => { swipeX = 0; swipeDone = false; }, 300);  // the gesture ended
+  if (swipeDone) return;  // one step per swipe
+  swipeX += e.deltaX;
+  if (Math.abs(swipeX) < 150) return;
+  swipeDone = true;
+  // fingers moving right scroll left (negative deltaX): back, as in Chrome's own swipe
+  void ctl.goTrail(swipeX < 0 ? -1 : 1);
+}, { passive: true });
 document.addEventListener("keydown", (e) => {
   const askInput = $("askinput"), mic = $("mic"), active = document.activeElement;
   const otherTextField = active && active !== askInput && active !== mic
@@ -455,12 +522,22 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && (e.target === askInput || e.target === mic || !otherTextField)
       && !ctl.s.asking && !$("askform").hidden) { e.preventDefault(); ctl.cancelQuestion(); }
 });
+// Typing a letter anywhere in the panel (outside other text fields) opens the field and types into it.
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.isComposing) return;
+  const a = document.activeElement;
+  if (a && a.matches("input, textarea, select, [contenteditable='true']")) return;
+  if (!$("askinput").hidden) { $("askinput").focus(); return; }
+  openField();
+});
+// Escape (handled above) also folds the question field away.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && fieldOpen && !ctl.s.asking) { fieldOpen = false; render(ctl.s); }
+});
 $("mic").addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
 $("mic").addEventListener("click", async () => { $("askinput").focus(); await ctl.toggleMic(); });
 $("micsetup").addEventListener("click", () => ctl.openMicSetup());
 $("mic").addEventListener("contextmenu", (e) => { e.preventDefault(); void showMicInfo().then(() => $("micinfo-close").focus()); });
-$("micinfo-mark").addEventListener("click", () => { if (micInfoName) void ctl.setPreferredMic(micInfoName); });
-$("micinfo-forget").addEventListener("click", () => { void ctl.setPreferredMic(""); });
 $("micinfo-close").addEventListener("click", () => { hideMicInfo(); $("mic").focus(); });
 // Escape closes the popup first (before the question box's own Escape); a click anywhere else closes it too.
 window.addEventListener("keydown", (e) => {
@@ -486,14 +563,8 @@ chrome.runtime?.onMessage?.addListener((message) => historyRow.onProgress(messag
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
 // The service worker does the lookup-or-create (one at a time for every panel), so two quick clicks open one tab. Only when
 // the worker cannot be reached does the panel do it itself.
-$("historylink").addEventListener("click", async () => {
-  try {
-    const r = await chrome.runtime.sendMessage({ type: OPEN_HISTORY });
-    if (r && r.ok) return;
-  } catch { /* no worker answered */ }
-  openHistoryTab(chrome, historyUrl);
-});
-// the gear: Settings (the Options page, where Clear history also lives)
+$("historylink").addEventListener("click", () => { void openHistoryHere(chrome, historyUrl, winInfo?.id); });
+// the gear: Settings (the Options page)
 $("options").addEventListener("click", () => {
   if (chrome.runtime && chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
 });

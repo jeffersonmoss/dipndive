@@ -1,7 +1,8 @@
-// Which microphone Chrome's dictation is using, and a warning when it is not the one he marked as his.
-// Chrome's speech recognition listens to the computer's default input; enumerateDevices names it (the "default" entry)
-// once the microphone is allowed for this extension. The marked microphone is kept in chrome.storage.local, which stays
-// on this computer, so marking the USB microphone on one machine changes nothing on the others.
+// Which microphone dictation uses, and switching it. Chrome's speech recognition listens to the computer's default
+// input unless it is handed an audio track (SpeechRecognition.start(track)); picking a microphone in the mic button's
+// right-click popup stores its name in chrome.storage.local, which stays on this computer, and each recording then
+// opens that microphone. "System default" stores nothing. A chosen microphone that is not connected shows a warning
+// and dictation falls back to the default input.
 
 export const MIC_DEVICE = Object.freeze({ preferredKey: "preferredMic" });
 
@@ -18,35 +19,43 @@ export function sameMic(a, b) {
   return !!a && !!b && norm(a) === norm(b);
 }
 
-// { name, none } for the input dictation uses; name is "" when Chrome hides names (microphone not allowed yet).
-// null when this browser cannot list devices.
-export async function currentMic(mediaDevices) {
+// { inputs: [{ id, label }], defaultName, none, named } or null when this browser cannot list devices. Names are ""
+// until the microphone is allowed for this extension (named false).
+export async function listMics(mediaDevices) {
   if (!mediaDevices || typeof mediaDevices.enumerateDevices !== "function") return null;
-  let list;
-  try { list = (await mediaDevices.enumerateDevices()).filter((d) => d && d.kind === "audioinput"); } catch { return null; }
-  if (!list.length) return { name: "", none: true };
-  const def = list.find((d) => d.deviceId === "default") || list.find((d) => !SPECIAL.has(d.deviceId)) || list[0];
-  return { name: displayName(def.label), none: false };
+  let all;
+  try { all = (await mediaDevices.enumerateDevices()).filter((d) => d && d.kind === "audioinput"); } catch { return null; }
+  if (!all.length) return { inputs: [], defaultName: "", none: true, named: false };
+  const real = all.filter((d) => !SPECIAL.has(d.deviceId));
+  const def = all.find((d) => d.deviceId === "default") || real[0] || all[0];
+  const inputs = (real.length ? real : all).map((d) => ({ id: d.deviceId, label: displayName(d.label) }));
+  return { inputs, defaultName: displayName(def.label), none: false, named: inputs.some((d) => d.label) };
+}
+
+// The input dictation uses: { use: {id,label} | null (the default input), missing: the chosen one is not connected }.
+export function resolveMic(list, preferred) {
+  if (!preferred || !list || !list.named) return { use: null, missing: false };
+  const hit = list.inputs.find((d) => sameMic(d.label, preferred));
+  return hit ? { use: hit, missing: false } : { use: null, missing: true };
 }
 
 // The warning line under the question box, "" when there is nothing to say.
-export function micWarning(current, preferred) {
-  if (!preferred || !current) return "";
-  if (current.none) return `No microphone found. ${preferred} may have dropped out: unplug it and plug it back in.`;
-  if (!current.name || sameMic(current.name, preferred)) return "";
-  return `Dictation is using ${current.name}, not ${preferred}. Unplug ${preferred} and plug it back in.`;
+export function micWarning(list, preferred) {
+  if (!preferred || !list) return "";
+  if (list.none) return `No microphone found. ${preferred} may have dropped out: unplug it and plug it back in.`;
+  if (!resolveMic(list, preferred).missing) return "";
+  const fallback = list.defaultName ? ` Dictation is using ${list.defaultName} instead.` : "";
+  return `${preferred} is not connected.${fallback} Unplug it and plug it back in.`;
 }
 
-// What the right-click popup on the mic button shows.
-export function micInfo(current, preferred) {
-  const out = { line: "", mine: false, canMark: false, canForget: !!preferred, preferred: preferred || "" };
-  if (!current) out.line = "Chrome cannot list microphones here.";
-  else if (current.none) out.line = "No microphone found.";
-  else if (!current.name) out.line = "Chrome shows the microphone's name once the microphone is allowed. Click the mic once, then right-click it again.";
-  else {
-    out.line = current.name;
-    out.mine = sameMic(current.name, preferred);
-    out.canMark = !out.mine;
-  }
-  return out;
+// What the right-click popup shows: a line when there is nothing to pick, otherwise one row per choice.
+export function micInfo(list, preferred) {
+  if (!list) return { line: "Chrome cannot list microphones here.", rows: [] };
+  if (list.none) return { line: "No microphone found.", rows: [] };
+  if (!list.named) return { line: "Chrome shows the microphones' names once the microphone is allowed. Click the mic once, then right-click it again.", rows: [] };
+  const { use, missing } = resolveMic(list, preferred);
+  const rows = [{ id: "", label: `System default${list.defaultName ? ` (${list.defaultName})` : ""}`, chosen: !preferred }];
+  for (const d of list.inputs) rows.push({ id: d.id, label: d.label || "Unnamed microphone", chosen: !!use && use.id === d.id });
+  if (missing) rows.push({ id: "", label: `${preferred} (not connected)`, chosen: true, missing: true, value: preferred });
+  return { line: "", rows };
 }

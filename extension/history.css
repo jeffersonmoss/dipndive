@@ -34,4 +34,24 @@ span.htitle { color: var(--fg); }
 .hsummary pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
 .htitle:focus-visible, .hsummary a:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 .error { background: var(--err-bg); color: var(--err-fg); padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+/* Q&A kept with an entry, and the row to ask more (1.8), styled like the panel's thread and bottom row */
+:root { --q-bg: #ebe8e1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --q-bg: #34322e; } }
+.hthread:empty { display: none; }
+.hthread { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+.turn { display: flex; flex-direction: column; gap: 4px; }
+.turn .q { align-self: flex-end; max-width: 88%; background: var(--q-bg); border-radius: 12px 12px 3px 12px; padding: 6px 12px; font-size: 14px; }
+.turn .a { background: var(--bg); border: 1px solid var(--line); border-radius: 3px 12px 12px 12px; padding: 2px 14px; }
+.turn .a.pending { color: var(--muted); padding: 8px 14px; font-size: 13px; }
+.turn .a a { color: var(--link); }
+.hask { display: flex; align-items: flex-end; gap: 6px; margin: 4px 0 10px; }
+.haskinput { flex: 1; min-height: 34px; max-height: 40vh; resize: none; padding: 6px 10px; font: inherit; font-size: 14px; line-height: 1.45;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); overflow-y: auto; }
+.haskinput:focus-visible, .hbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+.hbtn { flex: none; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+.hbtn:disabled { opacity: .45; cursor: default; }
+.hmic[data-state="listening"], .hmic[data-state="starting"], .hmic[data-state="stopping"] { background: #d1281b; border-color: #8f150c; color: #fff; }
+.hnote { margin: -4px 0 10px; }
+.hnote.err { color: var(--err-fg); }
 [hidden] { display: none !important; }

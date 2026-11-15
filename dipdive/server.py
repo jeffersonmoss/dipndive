@@ -163,6 +163,11 @@ def make_handler(svc: Service, token: str):
                     return self._send(200, item)
                 if u.path == "/history":
                     return self._history(u.query)
+                if u.path == "/qa":
+                    entry = (urllib.parse.parse_qs(u.query).get("entry") or [""])[0]
+                    if not re.fullmatch(r"[0-9a-f]{32}", entry):
+                        return self._send(400, {"error_code": "bad_request", "error_message": "entry must be a job id"})
+                    return self._send(200, {"entry": entry, "turns": svc.qa_for(entry)})
             except Exception as e:
                 return self._send(500, {"error_code": "internal_error", "error_message": type(e).__name__})
             self._send(404, {"error_code": "not_found"})
@@ -195,6 +200,8 @@ def make_handler(svc: Service, token: str):
                 return self._send(503, {"error_code": "log_unreadable", "error_message": f"the history log cannot be read ({e})"})
             except historylog.LockUnavailable:
                 return self._send(503, {"error_code": "log_locked", "error_message": "the history log's lock file cannot be used"})
+            for e in page.get("entries", []):
+                e["qa"] = svc.qa_for(e.get("job_id") or "")  # questions and answers kept with the entry
             self._send(200, page)
 
         def do_POST(self):
@@ -217,7 +224,10 @@ def make_handler(svc: Service, token: str):
                                                 "error_message": "need url (http/https), mode, requestId, optional force:boolean "
                                                                  "and clearGeneration:integer"})
                     try:
-                        return self._send(*svc.submit(url, mode, rid, force, question, history, summary, cgen))
+                        entry = d.get("entry")
+                        if entry is not None and not (isinstance(entry, str) and re.fullmatch(r"[0-9a-f]{32}", entry)):
+                            return self._send(400, {"error_code": "bad_request", "error_message": "entry must be a job id"})
+                        return self._send(*svc.submit(url, mode, rid, force, question, history, summary, cgen, entry))
                     except AskError as e:
                         return self._send(400, {"error_code": "bad_request", "error_message": str(e)})
                 if u.path == "/clipboard":

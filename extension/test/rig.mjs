@@ -66,7 +66,7 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         }
         const id = `job${++server.seq}`;
         if (server.postStatus) return respond(server.postStatus, { error_code: server.postError || "bad_request", error_message: null });
-        server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history,
+        server.jobs[id] = { state: "queued", mode: body.mode, url: body.url, polls: 0, question: body.question, history: body.history, entry: body.entry,
           logged: !server.noLog && /-(dip|dive)$/.test(body.mode), saved: true, ...(server.creator || {}) };
         server.requests[body.requestId] = { url: body.url, mode: body.mode, jobId: id };
         return respond(202, { job_id: id, clear_generation: server.clearGen });
@@ -92,11 +92,18 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         if (!j) return respond(404, { error_code: "no_such_job", clear_generation: server.clearGen });
         j.polls++;
         const done = j.polls >= 2;
+        // the companion keeps a finished answer with the history entry it was asked about (dipdive/qa.py)
+        if (done && !j.fail && j.mode.endsWith("-ask") && j.entry && !j.qaKept) {
+          j.qaKept = true;
+          (server.qa ||= {})[j.entry] ||= [];
+          server.qa[j.entry].push({ q: j.question, a: `Answer to: ${j.question} [${(j.history || []).length} earlier]`, mode: j.mode, ask_job: m[1] });
+        }
         return respond(200, { job_id: m[1], state: done ? (j.fail ? "error" : "done") : "summarizing", title: "A Title", url: j.url, mode: j.mode,
           result_markdown: done && !j.fail ? (j.mode.endsWith("-ask") ? `Answer to: ${j.question} [${(j.history || []).length} earlier]` : `Summary for ${j.mode}`) : null, error_code: done && j.fail ? j.fail : null, error_message: null, clear_generation: server.clearGen,
-          history_saved: done && !j.fail && j.logged ? j.saved : null, history_rev: server.rev || 0,
+          history_saved: done && !j.fail && j.logged ? j.saved : null, history_rev: server.rev || 0, log_id: done && j.logged ? (j.logId || m[1]) : null,
           ...(j.channel ? { channel: j.channel } : {}), ...(j.channel_url ? { channel_url: j.channel_url } : {}) });
       }
+      if ((m = path.match(/^\/qa\?entry=(.+)$/))) return respond(200, { entry: m[1], turns: (server.qa || {})[decodeURIComponent(m[1])] || [] });
       if ((m = path.match(/^\/source\?job=(.+)$/))) return respond(200, { title: "A Title", url: "https://v.test/x", text: server.sourceText || "source body", clear_generation: server.clearGen });
       return respond(404, {});
     };

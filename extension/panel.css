@@ -84,6 +84,9 @@ button.action:active { border-color: var(--rim); }
 /* the docked bottom row: History, the question box, Speak and Ask, about a third less tall than before (36 px controls) */
 #ask { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 5px 12px 6px; border-top: 1px solid var(--line); background: var(--bg); }
 #askrow { display: flex; gap: 6px; align-items: stretch; }
+#askspace { flex: 1; min-width: 8px; cursor: text; }
+.rowbtn.sq { width: 36px; }
+.rowbtn:disabled { opacity: .35; cursor: default; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* History and Ask: black with white icons in dark mode, white with dark icons in light mode (Speak is white in both) */
 .rowbtn {
@@ -101,10 +104,11 @@ button.action:active { border-color: var(--rim); }
 .turn .a a { color: var(--link); }
 .turn .a code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
 .turn .a pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
-#askform { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: stretch; }
-#askinput { flex: 1; min-width: 0; height: 36px; padding: 0 10px; font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+#askform { display: flex; flex-direction: column; gap: 6px; }
+/* the question field sits above the row and grows upward with the question (panel.js sets its height) */
+#askinput { box-sizing: border-box; width: 100%; min-height: 36px; max-height: 45vh; padding: 8px 10px; font: inherit; line-height: 1.35;
+  resize: none; overflow-y: auto; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 #askinput:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
-#askinput:read-only { border-style: dashed; }
 #mic {
   /* A solid white button with a black microphone in both themes. Fixed size and no transform in any state: it must not
      move or resize between the click that starts a recording and the click that pauses it. */
@@ -127,9 +131,15 @@ button.action:active { border-color: var(--rim); }
   box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
 #micinfo[hidden] { display: none; }
 .micinfo-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-#micinfo-name { font-weight: 600; overflow-wrap: anywhere; }
-#micinfo-name.ok::before { content: "\2713  "; color: var(--success); }
-#micinfo-name.off { color: var(--err-fg); }
+#micinfo-list { display: flex; flex-direction: column; gap: 2px; }
+.micopt { display: flex; gap: 8px; align-items: baseline; text-align: left; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 7px;
+  border: 1px solid transparent; background: none; color: var(--fg); cursor: pointer; overflow-wrap: anywhere; }
+.micopt:hover { background: var(--bg); }
+.micopt:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+.micopt .tick { flex: none; width: 1em; color: var(--success); }
+.micopt[aria-checked="true"] { font-weight: 600; border-color: var(--line); }
+.micopt.missing { color: var(--err-fg); }
+#micinfo-line { font-size: 12px; }
 .micinfo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .micinfo-actions button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
 .micinfo-actions button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }

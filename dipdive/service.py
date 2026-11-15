@@ -11,7 +11,7 @@ import time
 import tempfile
 import uuid
 
-from . import ask, historylog, joblog
+from . import ask, historylog, joblog, qa
 from .acquire import Source, acquire, unwrap, youtube_id
 from .errors import DipDiveError
 from .models import CLAUDE, CLAUDE_MODEL, CODEX, CODEX_HOME, CODEX_MODEL, call_model, ensure_codex_home
@@ -85,6 +85,7 @@ class Service:
         self.dir = support or SUPPORT
         self.jobs_dir, self.src_dir, self.res_dir = (os.path.join(self.dir, d) for d in ("jobs", "sources", "results"))
         self.removed_dir = os.path.join(self.dir, "history-removed")  # log entries unticked in the panel, kept to restore
+        self.qa_dir = os.path.join(self.dir, "qa")  # questions and answers per history entry (dipdive/qa.py); never cleared
         for d in (self.jobs_dir, self.src_dir, self.res_dir):
             os.makedirs(d, exist_ok=True)
         self.lock = threading.RLock()
@@ -392,13 +393,18 @@ class Service:
             empty[machine] = items if isinstance(items, list) else []
         return empty
 
-    def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None, clear_generation=None):
+    def submit(self, url, mode, request_id, force=False, question=None, history=None, summary=None, clear_generation=None,
+               entry=None):
         """Returns (http_status, body). Atomic check-and-enqueue under the lock. For the ask modes the question, the
         capped history and the summary shown are part of every key (raises ask.AskError on bad input).
 
         `clear_generation` is the generation the client last saw. One older than the current is refused with 409
         stale_clear_generation, and no job, history or log is made: the client's summary and thread were built on history
-        a /clear (from another machine, say) has since removed. None means the client has seen no generation yet."""
+        a /clear (from another machine, say) has since removed. None means the client has seen no generation yet.
+
+        `entry` (ask modes only): the history entry the question is about (its job id). The finished answer is kept with
+        that entry (dipdive/qa.py), also when an earlier identical answer is reused."""
+        entry = entry if mode in ask.ASK_MODES and qa.valid_id(entry) else None
         norm = norm_source_id(url)
         question, history, summary, qkey = ask.prepare(mode, question, history, summary)
         pre_key = _sha(norm, mode, model_id(mode), PROMPT_VERSION, *([qkey] if qkey else []))
@@ -419,6 +425,8 @@ class Service:
                 j = self.jobs.get(jid) if jid else None
                 if j and self._reusable(j):
                     self.by_request[request_id] = jid
+                    if entry:
+                        self._attach_entry(j, entry)
                     return 200, {"job_id": jid, "clear_generation": self.generation}
             if sum(1 for x in self.jobs.values() if x["state"] in ACTIVE) >= QUEUE_CAP:
                 return 429, {"error_code": "queue_full", "error_message": f"more than {QUEUE_CAP} jobs waiting"}
@@ -426,13 +434,38 @@ class Service:
                  "url": url, "mode": mode, "question": question, "history": history, "summary": summary, "qkey": qkey,
                  "state": "queued", "title": None, "result_markdown": None,
                  "error_code": None, "error_message": None, "force": bool(force),
-                 "generation": self.generation, "created": time.time(), "updated": time.time()}
+                 "generation": self.generation, "created": time.time(), "updated": time.time(),
+                 "entries": [entry] if entry else []}
             self.jobs[j["job_id"]] = j
             self.by_request[request_id] = j["job_id"]
             self.by_prekey[pre_key] = j["job_id"]
             self._save(j)
         self.q.put(j["job_id"])
         return 202, {"job_id": j["job_id"], "clear_generation": self.generation}
+
+    def _attach_entry(self, j, entry):
+        """A reused ask job now also answers for `entry`: recorded at once when it is done, else when it finishes."""
+        if entry not in j.setdefault("entries", []):
+            j["entries"].append(entry)
+            self._save(j)
+        if j.get("result_markdown"):  # already answered (qa.record skips a turn it already has)
+            self._record_qa(j)
+
+    def _record_qa(self, j):
+        """Keep a finished answer with every history entry it was asked about. Never raises."""
+        if j.get("mode") not in ask.ASK_MODES or not j.get("result_markdown"):
+            return
+        for entry in list(j.get("entries") or []):
+            try:
+                qa.record(self.qa_dir, entry, j.get("question") or "", j["result_markdown"], j["mode"], j["job_id"])
+            except Exception as e:
+                try:
+                    joblog.write({"qa_record_error": f"{type(e).__name__}: {e}", "entry": entry, "url": j.get("url")})
+                except BaseException:
+                    pass
+
+    def qa_for(self, entry):
+        return qa.read(self.qa_dir, entry)
 
     def _reusable(self, j):
         """Active jobs always; a done job only while its source is still cached and unchanged
@@ -450,7 +483,9 @@ class Service:
         # The creator, stored on the job when its source was read (never re-read here). channel_url exists only for YouTube
         # sources fetched with one; a source cached before it was kept answers with the channel alone.
         creator = {k: j[k] for k in ("channel", "channel_url") if j.get(k)}
+        # log_id: the history entry this summary's text is filed under (another job's id when the result was reused)
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"], **creator,
+                "log_id": j.get("log_id") if isinstance(j.get("log_id"), str) else None,
                 "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
                 "error_message": j["error_message"], "clear_generation": self.generation,
                 # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
@@ -643,6 +678,9 @@ class Service:
                                 _atomic_write(rp, {"result": cached, "created": time.time(), "log_id": log_id})
                             except OSError:
                                 pass
+            # questions are kept with their history entry before the job reads as done, so the panel can show them
+            j["result_markdown"] = cached
+            self._record_qa(j)
             self._set(j, state="done", result_markdown=cached,
                       log_id=log_id if isinstance(log_id, str) and len(log_id) == 32 else None)
         except DipDiveError as e:

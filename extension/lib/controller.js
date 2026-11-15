@@ -5,8 +5,9 @@ import { makeSlot, pruneSlots, slotKey } from "./background-core.js";
 import { normalizeTyped, pickUrl, sourceKey } from "./urls.js";
 import { ASK_LIMITS, askProvider, capHistory, capSummary, charCount, cleanQuestion } from "./ask.js";
 import { MIC, VoiceInput } from "./voice.js";
-import { MIC_DEVICE, micWarning } from "./micdevice.js";
+import { MIC_DEVICE, micWarning, resolveMic } from "./micdevice.js";
 import { DEFAULT_MODE, migrateMode, normalizeMode } from "./modes.js";
+import { TRAIL, canBack, canForward, normTrail, pushTrail, stepTrail } from "./trail.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
@@ -62,7 +63,8 @@ export class Controller {
     this.pendingMicAsk = false;
     this.media = deps.media || null;  // { askAccess, hush, restore }: quiets other tabs while the mic listens
     this.hushed = false;
-    // { current(): Promise<{name, none}|null>, watch(fn) }: which microphone dictation uses (lib/micdevice.js)
+    // { list(): Promise<listMics result>, watch(fn), track(deviceId): Promise<MediaStreamTrack> }: the microphones
+    // (lib/micdevice.js); the one he picked is opened for each recording
     this.micDev = deps.micDevices || null;
     this.micSeq = 0;
     this.s = {
@@ -78,13 +80,18 @@ export class Controller {
       mic: null,
       // the microphone he marked as his on this computer ("" for none) and the warning when dictation uses another
       preferredMic: "", micWarn: "",
+      // the history entry the summary on screen is filed under (questions are kept with it), and the back/forward buttons
+      entryId: null, trailBack: false, trailForward: false,
     };
+    this.trail = normTrail(null);
+    this.qaSeq = 0;
     this.voice = new VoiceInput({
       SpeechRecognition: deps.speech || null,
       permissions: deps.permissions || null,
       setTimer: deps.setVoiceTimer || deps.setTimer,
       clearTimer: deps.clearVoiceTimer || deps.clearTimer,
       onChange: (m) => this.onMic(m),
+      audioTrack: () => this.micTrack(),
       ...(deps.voiceNow ? { now: deps.voiceNow } : {}),
     });
     this.s.mic = this.voice.snapshot();
@@ -96,15 +103,24 @@ export class Controller {
     const seq = ++this.micSeq;
     let warn = "";
     if (this.micDev && this.s.preferredMic) {
-      let cur = null;
-      try { cur = await this.micDev.current(); } catch { cur = null; }
+      let list = null;
+      try { list = await this.micDev.list(); } catch { list = null; }
       if (seq !== this.micSeq) return;
-      warn = micWarning(cur, this.s.preferredMic);
+      warn = micWarning(list, this.s.preferredMic);
     }
     if (warn !== this.s.micWarn) this.emit({ micWarn: warn });
   }
 
-  // From the mic button's right-click popup: "" forgets the marked microphone.
+  // The audio track for a recording: the picked microphone when it is connected, else null (Chrome's default input).
+  async micTrack() {
+    if (!this.micDev || !this.s.preferredMic || typeof this.micDev.track !== "function") return null;
+    try {
+      const { use } = resolveMic(await this.micDev.list(), this.s.preferredMic);
+      return use ? await this.micDev.track(use.id) : null;
+    } catch { return null; }
+  }
+
+  // From the mic button's right-click popup: the picked microphone's name, "" for the system default.
   async setPreferredMic(name) {
     const v = String(name || "");
     this.emit({ preferredMic: v });
@@ -147,6 +163,7 @@ export class Controller {
     const all = await this.d.storage.get(null);
     this.cfg = { base: all.base, token: all.token };
     if (typeof all[MIC_DEVICE.preferredKey] === "string") this.emit({ preferredMic: all[MIC_DEVICE.preferredKey] });
+    this.setTrail(all[TRAIL.key], false);
     // A stored retired Dive mode becomes its Dip (so every window and the menu agree); anything else invalid, such as the
     // removed "temp" mode, is forgotten and falls back to the default.
     if (all.mode !== undefined && migrateMode(all.mode) !== all.mode) {
@@ -271,6 +288,7 @@ export class Controller {
 
   onStorageChange(changes, area) {
     if (area !== "local") return;
+    if (changes[TRAIL.key]) this.setTrail(changes[TRAIL.key].newValue, false);  // another window moved along the trail
     const pm = changes[MIC_DEVICE.preferredKey];
     if (pm && (pm.newValue || "") !== this.s.preferredMic) { this.emit({ preferredMic: pm.newValue || "" }); void this.checkMicDevice(); }
     // A mode change made in another window must not alter this panel's own selection or its pressed button.
@@ -313,7 +331,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, channel: null, channelUrl: null, result: null, resultMode: null, error: null, pinError: null,
+    this.emit({ jobId: null, jobState: null, title: null, channel: null, channelUrl: null, result: null, resultMode: null, error: null, pinError: null, entryId: null,
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
@@ -462,9 +480,13 @@ export class Controller {
     this.emit({ title: j.title || this.s.title, channel: channel || this.s.channel,
                 channelUrl: channel ? (typeof j.channel_url === "string" ? j.channel_url : null) : this.s.channelUrl, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
-      this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: "Done.", busy: false,
+      const entryId = typeof j.log_id === "string" && j.log_id ? j.log_id : jobId;
+      this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: "Done.", busy: false, entryId,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
       this.noteRev(j.history_rev);
+      await this.recordTrail({ url: j.url || this.slot.url, jobId, entryId, title: this.s.title, channel: this.s.channel,
+                               channelUrl: this.s.channelUrl, mode: j.mode || this.s.mode, result: j.result_markdown, ts: Date.now() });
+      if (!this.s.thread.length) await this.loadQa(entryId);  // questions asked about this entry before
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
     } else {
@@ -472,6 +494,58 @@ export class Controller {
       this.emit({ status: label });
       this.timer = this.d.setTimer(() => this.poll(jobId, gen), POLL_MS);
     }
+  }
+
+  // ---------- back and forward (lib/trail.js) ----------
+  setTrail(t, save = true) {
+    this.trail = normTrail(t);
+    const back = canBack(this.trail), fwd = canForward(this.trail);
+    if (back !== this.s.trailBack || fwd !== this.s.trailForward) this.emit({ trailBack: back, trailForward: fwd });
+    if (save) return this.d.storage.set({ [TRAIL.key]: this.trail }).catch(() => {});
+    return undefined;
+  }
+
+  async recordTrail(item) {
+    try {
+      const st = await this.d.storage.get([TRAIL.key]);  // another window may have moved it meanwhile
+      this.trail = normTrail(st[TRAIL.key]);
+    } catch { /* keep this panel's copy */ }
+    await this.setTrail(pushTrail(this.trail, item));
+  }
+
+  // Back (-1) or forward (+1): the stored summary is shown at once, with its questions, and nothing is resubmitted. The
+  // tab stays where it is. Returns true when it moved.
+  async goTrail(delta) {
+    try { this.trail = normTrail((await this.d.storage.get([TRAIL.key]))[TRAIL.key]); } catch { /* this panel's copy */ }
+    const step = stepTrail(this.trail, delta);
+    if (!step) { this.setTrail(this.trail, false); return false; }
+    if (this.s.mic.state !== MIC.IDLE) this.voice.cancel();
+    await this.setTrail(step.trail);
+    this.showStored(step.item);
+    return true;
+  }
+
+  showStored(item) {
+    this.selGen++;                 // a summary still on its way belongs to where the panel was
+    this.stopTimer();
+    this.resetAsk();               // its thread and draft go; this item's questions are loaded below
+    this.slot = { url: item.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: true, jobId: item.jobId, mode: item.mode };
+    this.resetView({ status: "", busy: false });
+    this.emit({ source: { url: item.url }, jobId: item.jobId, jobState: "done", title: item.title || null, channel: item.channel || null,
+                channelUrl: item.channelUrl || null, result: item.result, resultMode: item.mode, entryId: item.entryId || item.jobId });
+    void this.loadQa(item.entryId || item.jobId);
+    void this.refreshSaved();
+  }
+
+  // The questions and answers kept with a history entry on the companion (GET /qa), shown as this panel's thread.
+  async loadQa(entryId) {
+    if (!entryId || !this.cfg || !this.cfg.base) return;
+    const seq = ++this.qaSeq, gen = this.askGen;
+    let r;
+    try { r = await request(this.d.fetch, this.cfg, "GET", `/qa?entry=${encodeURIComponent(entryId)}`, null, 10000); } catch { return; }
+    if (seq !== this.qaSeq || gen !== this.askGen || this.s.entryId !== entryId || this.s.thread.length || this.s.asking) return;
+    const turns = r.status === 200 && r.json && Array.isArray(r.json.turns) ? r.json.turns : [];
+    if (turns.length) this.emit({ thread: turns.map((t) => ({ q: String(t.q || ""), a: String(t.a || "") })) });
   }
 
   // Clear history from this panel. The panel itself no longer shows the control (it lives on the Options page, behind a
@@ -792,7 +866,8 @@ export class Controller {
     let r;
     try {
       r = await request(this.d.fetch, this.cfg, "POST", "/jobs",
-        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}), force: false, ...this.genField() }, 10000);
+        { url, mode: `${provider}-ask`, requestId: this.d.uuid(), question: q, history, ...(summary ? { summary } : {}),
+          ...(this.s.entryId ? { entry: this.s.entryId } : {}), force: false, ...this.genField() }, 10000);
     } catch (e) { this.askFailure(gen, q, e); return false; }
     if (gen !== this.askGen) return false;
     if (isStaleRefusal(r)) { await this.staleRefused(r.json, q); return false; }

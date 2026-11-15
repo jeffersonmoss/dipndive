@@ -53,6 +53,7 @@ export class VoiceInput {
     this.rows = [];          // this recognizer's results as last reported: full text and whether final
     this.rowFinal = [];
     this.skip = null;        // set by commit(): results already in the box
+    this.track = null;       // the picked microphone's audio track for this recording (null: Chrome's default input)
     if (!this.SR) { this.message = MIC_MESSAGES.unavailable; this.kind = "info"; }
   }
 
@@ -133,6 +134,11 @@ export class VoiceInput {
                   message: p === "denied" ? MIC_MESSAGES.blocked : MIC_MESSAGES.needPermission });
       return;
     }
+    // The microphone picked in the popup (null: Chrome's default input). Kept for the whole recording, restarts too.
+    let track = null;
+    if (this.d.audioTrack) { try { track = await this.d.audioTrack(); } catch { track = null; } }
+    if (sid !== this.sid) { this._stopTrack(track); return; }
+    this.track = track;
     this.err = null;
     this._open(sid, false);
   }
@@ -159,7 +165,16 @@ export class VoiceInput {
     // Gave up waiting: abort the recognizer too, or a slow audio device could still start it and Chrome would go on
     // sending the room's sound to the speech service with nobody listening.
     if (!restart) this._timer("start", () => { if (sid === this.sid && this.state === MIC.STARTING) { this._abort(); this._fail(sid, "start-failed"); } }, this.d.startTimeoutMs);
-    try { rec.start(); } catch { failed(); }
+    try {
+      if (this.track) {
+        try { rec.start(this.track); } catch { rec.start(); }  // a Chrome without track support: the default input
+      } else rec.start();
+    } catch { failed(); }
+  }
+
+  _stopTrack(t = this.track) {
+    try { if (t && typeof t.stop === "function") t.stop(); } catch { /* already stopped */ }
+    if (t === this.track) this.track = null;
   }
 
   // He edited the box while listening: everything heard so far is now his text. Listening goes on, and only words heard
@@ -253,6 +268,7 @@ export class VoiceInput {
     this.sid++;   // anything the old recognizer still says is ignored
     this._abort();
     this._detach();
+    this._stopTrack();
     this.deliberateAbort = false;  // its events are ignored by the session token now; the next recording starts clean
     this._set({ state: MIC.IDLE, text: "", message: "", kind: "" });
   }
@@ -290,6 +306,7 @@ export class VoiceInput {
     const failed = this.err !== null && this.err !== undefined;
     const text = this.text;
     this._detach();
+    this._stopTrack();
     this.sid++;  // late events from this recognizer are ignored from here on
     this.err = null;
     this.deliberateAbort = false;
