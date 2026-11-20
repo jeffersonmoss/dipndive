@@ -222,6 +222,7 @@ class Classify(unittest.TestCase):
         self.assertEqual(c("Not logged in - Please run /login"), "auth")
         self.assertEqual(c("stream disconnected"), "provider_unavailable")  # an outage since 1.9: Claude stands in
         self.assertEqual(c("empty result"), "model_failed")
+        self.assertEqual(c("Failed to authenticate: OAuth session expired and could not be refreshed"), "auth")
 
     def test_token_count_is_not_401(self):  # finding 5
         self.assertNotEqual(models._classify_error_message('"input_tokens":14012 how to login to a router'), "auth")

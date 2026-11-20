@@ -45,7 +45,8 @@ CODEX_CANNOT_DISABLE = {"unified_exec": "reads true even when disabled; shell_to
 # A feature whose stage column reads "removed" no longer exists in that Codex build, so its true/false value means
 # nothing (0.165.0-alpha lists `worktrees  removed  true` and ignores --disable). shell_tool is never excused this way.
 
-_AUTH = re.compile(r"\b(not logged in|please run /login|invalid (api key|authentication)|unauthorized|401)\b", re.I)
+_AUTH = re.compile(r"\b(not logged in|please run /login|invalid (api key|authentication)|unauthorized|401|"
+                   r"failed to authenticate|oauth session expired)\b", re.I)
 _QUOTA = re.compile(r"\b(usage limit|quota|limit reached|credit balance)\b", re.I)
 _RATE = re.compile(r"\b(rate.?limit(ed)?|429|overloaded|too many requests)\b", re.I)
 # The provider's own service is down or unreachable (OpenAI's 503s of 20 November 2026): worth trying the other provider.
