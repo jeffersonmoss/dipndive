@@ -48,6 +48,10 @@ CODEX_CANNOT_DISABLE = {"unified_exec": "reads true even when disabled; shell_to
 _AUTH = re.compile(r"\b(not logged in|please run /login|invalid (api key|authentication)|unauthorized|401)\b", re.I)
 _QUOTA = re.compile(r"\b(usage limit|quota|limit reached|credit balance)\b", re.I)
 _RATE = re.compile(r"\b(rate.?limit(ed)?|429|overloaded|too many requests)\b", re.I)
+# The provider's own service is down or unreachable (OpenAI's 503s of 20 November 2026): worth trying the other provider.
+_OUTAGE = re.compile(r"\b(50[0234]|service unavailable|bad gateway|gateway time-?out|internal server error|"
+                     r"no healthy upstream|upstream connect error|remote connection failure|failed to connect|"
+                     r"connection (reset|refused)|stream disconnected|request timed out)\b", re.I)
 
 
 def _classify_error_message(msg: str) -> str:
@@ -58,6 +62,8 @@ def _classify_error_message(msg: str) -> str:
         return "auth"
     if _RATE.search(msg):
         return "rate_limited"
+    if _OUTAGE.search(msg):
+        return "provider_unavailable"
     return "model_failed"
 
 

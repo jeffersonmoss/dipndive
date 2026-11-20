@@ -220,7 +220,8 @@ class Classify(unittest.TestCase):
         self.assertEqual(c("You have hit your usage limit. Log in to upgrade"), "quota")
         self.assertEqual(c("model overloaded"), "rate_limited")
         self.assertEqual(c("Not logged in - Please run /login"), "auth")
-        self.assertEqual(c("stream disconnected"), "model_failed")
+        self.assertEqual(c("stream disconnected"), "provider_unavailable")  # an outage since 1.9: Claude stands in
+        self.assertEqual(c("empty result"), "model_failed")
 
     def test_token_count_is_not_401(self):  # finding 5
         self.assertNotEqual(models._classify_error_message('"input_tokens":14012 how to login to a router'), "auth")
@@ -287,7 +288,7 @@ class FakeModels(unittest.TestCase):
     def test_codex_error_event_classified_not_token_count(self):  # finding 5
         with self.assertRaises(DipDiveError) as c:
             self.codex("print(json.dumps({'type':'turn.completed','usage':{'input_tokens':14012}}))\nprint(json.dumps({'type':'error','message':'stream disconnected'}))\nsys.exit(1)")
-        self.assertEqual(c.exception.code, "model_failed")
+        self.assertEqual(c.exception.code, "provider_unavailable")  # not auth (the 14012 is a token count)
 
     def test_codex_ok(self):
         out = self.codex("o=sys.argv[sys.argv.index('-o')+1]\nopen(o,'w').write('summary')\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'summary'}}))\nprint(json.dumps({'type':'turn.completed'}))")

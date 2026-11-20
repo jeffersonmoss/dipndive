@@ -35,8 +35,15 @@ const MESSAGES = {
   interrupted: "The companion restarted during this job. Press the button again.",
   request_id_conflict: "Internal request conflict. Right-click the link again.",
   bad_request: "The companion refused that question. Try a shorter one.",
+  provider_unavailable: "The AI service is down right now. Try again in a few minutes.",
   [STALE_CODE]: STALE_MESSAGE,
 };
+
+// The companion answers with Claude when Codex's service is down (answered_mode is then set on the job)
+export const FALLBACK_NOTE = "Codex was unavailable, so Claude answered.";
+export function doneStatus(j) {
+  return j && typeof j.answered_mode === "string" && j.answered_mode.startsWith("claude-") ? `Done. ${FALLBACK_NOTE}` : "Done.";
+}
 
 export function describeError(code, message) {
   if (code === "auth") return `${message || "Sign-in problem"} Sign in again on the iMac.`;
@@ -481,11 +488,11 @@ export class Controller {
                 channelUrl: channel ? (typeof j.channel_url === "string" ? j.channel_url : null) : this.s.channelUrl, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
       const entryId = typeof j.log_id === "string" && j.log_id ? j.log_id : jobId;
-      this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: "Done.", busy: false, entryId,
+      this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: doneStatus(j), busy: false, entryId,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
       this.noteRev(j.history_rev);
       await this.recordTrail({ url: j.url || this.slot.url, jobId, entryId, title: this.s.title, channel: this.s.channel,
-                               channelUrl: this.s.channelUrl, mode: j.mode || this.s.mode, result: j.result_markdown, ts: Date.now() });
+                               channelUrl: this.s.channelUrl, mode: j.answered_mode || j.mode || this.s.mode, result: j.result_markdown, ts: Date.now() });
       if (!this.s.thread.length) await this.loadQa(entryId);  // questions asked about this entry before
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
@@ -897,7 +904,8 @@ export class Controller {
     if (r.status >= 400) { this.restoreDraft(q, describeError(r.json.error_code, r.json.error_message)); return; }
     const j = r.json;
     if (j.state === "done") {
-      this.emit({ thread: [...this.s.thread, { q, a: j.result_markdown || "" }], asking: null, askError: null });
+      this.emit({ thread: [...this.s.thread, { q, a: j.result_markdown || "" }], asking: null, askError: null,
+                  ...(j.answered_mode ? { status: FALLBACK_NOTE } : {}) });
     } else if (j.state === "error") {
       this.restoreDraft(q, describeError(j.error_code, j.error_message));
     } else {

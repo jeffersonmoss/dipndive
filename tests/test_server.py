@@ -567,3 +567,53 @@ def tearDownModule():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodexFallback(Base):
+    """When OpenAI's service is down (provider_unavailable), a Codex job is answered by Claude once."""
+
+    def _patch(self, codex_error):
+        calls = []
+        orig = service.call_model
+
+        def fake(provider, level, title, url, text, question=None, history=None, summary=None):
+            calls.append(provider)
+            if provider == "codex":
+                raise service.DipDiveError(codex_error, "Reconnecting... 5/5 (unexpected status 503 Service Unavailable)")
+            return f"claude {level} text"
+        service.call_model = fake
+        self.addCleanup(setattr, service, "call_model", orig)
+        return calls
+
+    def test_outage_classified(self):
+        msg = ("Reconnecting... 5/5 (unexpected status 503 Service Unavailable: upstream connect error or "
+               "disconnect/reset before headers. reset reason: remote connection failure, url: wss://chatgpt.com/x)")
+        self.assertEqual(models._classify_error_message(msg), "provider_unavailable")
+        self.assertEqual(models._classify_error_message("usage limit reached"), "quota")
+        self.assertEqual(models._classify_error_message("something odd"), "model_failed")
+
+    def test_codex_outage_falls_back_to_claude_and_is_labelled(self):
+        calls = self._patch("provider_unavailable")
+        _, r = self.submit("codex-dip", rid="fb1")
+        j = self.wait(r["job_id"])
+        self.assertEqual((j["state"], j["result_markdown"], j["answered_mode"]), ("done", "claude dip text", "claude-dip"))
+        self.assertEqual(calls, ["codex", "claude"])
+        with open(LOG) as f:
+            self.assertIn("| Claude Dip |", f.read())
+        # a later Codex request is not served Claude's cached text: it tries Codex again
+        _, r2 = self.submit("codex-dip", rid="fb2", force=True)
+        self.wait(r2["job_id"])
+        self.assertEqual(calls, ["codex", "claude", "codex", "claude"])
+
+    def test_other_codex_errors_do_not_fall_back(self):
+        calls = self._patch("quota")
+        _, r = self.submit("codex-dip", rid="fb3")
+        j = self.wait(r["job_id"])
+        self.assertEqual((j["state"], j["error_code"], j["answered_mode"]), ("error", "quota", None))
+        self.assertEqual(calls, ["codex"])
+
+    def test_normal_job_has_no_answered_mode(self):
+        self._patch("provider_unavailable")
+        _, r = self.submit("claude-dip", rid="fb4")
+        j = self.wait(r["job_id"])
+        self.assertEqual((j["state"], j["answered_mode"]), ("done", None))

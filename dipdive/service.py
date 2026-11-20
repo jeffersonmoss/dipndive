@@ -457,7 +457,8 @@ class Service:
             return
         for entry in list(j.get("entries") or []):
             try:
-                qa.record(self.qa_dir, entry, j.get("question") or "", j["result_markdown"], j["mode"], j["job_id"])
+                qa.record(self.qa_dir, entry, j.get("question") or "", j["result_markdown"],
+                          j.get("answered_mode") or j["mode"], j["job_id"])
             except Exception as e:
                 try:
                     joblog.write({"qa_record_error": f"{type(e).__name__}: {e}", "entry": entry, "url": j.get("url")})
@@ -486,6 +487,8 @@ class Service:
         # log_id: the history entry this summary's text is filed under (another job's id when the result was reused)
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"], **creator,
                 "log_id": j.get("log_id") if isinstance(j.get("log_id"), str) else None,
+                # set only when a different provider answered (Claude standing in for an unavailable Codex)
+                "answered_mode": j.get("answered_mode") if j.get("answered_mode") != j["mode"] else None,
                 "url": j["url"], "question": j.get("question"), "result_markdown": j["result_markdown"], "error_code": j["error_code"],
                 "error_message": j["error_message"], "clear_generation": self.generation,
                 # True while this summary's entry is in the history log, False while it is kept as removed (unticked in
@@ -662,15 +665,17 @@ class Service:
             if cached is None:
                 self._set(j, state="summarizing")
                 with self.model_sem:
-                    cached = call_model(prov, level, s["title"], s["url"], s["text"],
-                                        question=j.get("question"), history=j.get("history"),
-                                        summary=j.get("summary"))
+                    cached, used = self._call_with_fallback(j, prov, level, s)
+                if used != j["mode"]:  # Claude answered for Codex: filed under Claude's own cache key and label
+                    rp = os.path.join(self.res_dir, _sha(j["norm_id"], used, model_id(used), PROMPT_VERSION,
+                                                         s["hash"], *([j["qkey"]] if j.get("qkey") else [])) + ".json")
                 with self.lock:
                     if j["generation"] == self.generation:
                         _atomic_write(rp, {"result": cached, "created": time.time()})
             # Logged before the job reads as done, so a panel that sees "done" also sees whether it has a log entry.
             if fresh and j["mode"] in historylog.LOGGED_MODES and j["generation"] == self.generation:
-                if self._log_history(j, s["title"], cached, (s.get("meta") or {}).get("channel")):
+                if self._log_history(j, s["title"], cached, (s.get("meta") or {}).get("channel"),
+                                     mode=j.get("answered_mode") or j["mode"]):
                     log_id = j["job_id"]
                     with self.lock:  # a later cache hit on this result points at the same entry
                         if j["generation"] == self.generation:
@@ -693,11 +698,36 @@ class Service:
             joblog.write({"internal_error": traceback.format_exc(), "url": j["url"], "mode": j["mode"]})
             self._set(j, state="error", error_code="internal_error", error_message=f"{type(e).__name__}: {e}")
 
-    def _log_history(self, j, title, summary, channel=None):
+    def _call_with_fallback(self, j, prov, level, s):
+        """Run the model for job j. When Codex fails because OpenAI's service is down or unreachable
+        (provider_unavailable), the same request goes to Claude once. Returns (text, mode that answered); a fallback
+        also sets j["answered_mode"], which the panel shows and the history log and Q&A record use."""
+        args = (level, s["title"], s["url"], s["text"])
+        kw = dict(question=j.get("question"), history=j.get("history"), summary=j.get("summary"))
+        try:
+            return call_model(prov, *args, **kw), j["mode"]
+        except DipDiveError as e:
+            if prov != "codex" or e.code != "provider_unavailable":
+                raise
+            first = e
+        used = f"claude-{level}"
+        try:
+            joblog.write({"codex_fallback": first.message, "url": j["url"], "mode": j["mode"], "to": used})
+        except BaseException:
+            pass
+        self._set(j, answered_mode=used)
+        try:
+            return call_model("claude", *args, **kw), used
+        except DipDiveError as e2:
+            self._set(j, answered_mode=None)
+            raise DipDiveError(e2.code, f"Codex was unavailable ({first.message[:120]}), and Claude also failed: "
+                                        f"{e2.message}"[:400])
+
+    def _log_history(self, j, title, summary, channel=None, mode=None):
         """Append the finished summary to the durable history log, tagged with the job id. Returns True when it was
         written. Never raises: a log failure goes to the job log."""
         try:
-            historylog.append(title or "", j["mode"], j["url"], summary, channel=channel, job_id=j["job_id"])
+            historylog.append(title or "", mode or j["mode"], j["url"], summary, channel=channel, job_id=j["job_id"])
             return True
         except BaseException as e:
             try:
