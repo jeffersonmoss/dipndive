@@ -86,9 +86,27 @@ export function creatorVideosUrl(channelUrl) {
 
 // What the creator line shows for a controller state: { name, href }. Hidden (name "") when there is no name; href is null for
 // plain text (articles, and any channel page that is not a YouTube @handle or /channel/UC... address).
+// 1.11: the video's length and publication date follow the name on the same line ("Channel · 12:34 · 3 Nov 2026"); `full`
+// is the whole line, shown on hover when it is cut short with an ellipsis.
 export function creatorView(s) {
   const name = typeof s?.channel === "string" ? s.channel.trim() : "";
-  return { name, href: name ? creatorVideosUrl(s.channelUrl) : null };
+  const details = [formatDuration(s?.duration), formatPublished(s?.published)].filter(Boolean);
+  return { name, href: name ? creatorVideosUrl(s.channelUrl) : null, details, full: [name, ...details].filter(Boolean).join(" · ") };
+}
+
+// 754 -> "12:34", 3723 -> "1:02:03"; "" for anything that is not a positive number of seconds.
+export function formatDuration(sec) {
+  if (typeof sec !== "number" || !Number.isFinite(sec) || sec <= 0) return "";
+  const t = Math.round(sec), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// "2026-11-03" -> "3 Nov 2026"; "" for anything else.
+export function formatPublished(day) {
+  const m = typeof day === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(day) : null;
+  if (!m || +m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31) return "";
+  return `${+m[3]} ${MONTHS[+m[2] - 1]} ${m[1]}`;
 }
 
 // The title link opens the summarized page in the tab he is looking at (the active tab of the panel's window), not a new

@@ -172,17 +172,27 @@ function render(s) {
 // named a YouTube channel page; otherwise plain text. Built with textContent, never innerHTML.
 function renderCreator(s) {
   const el = $("creator");
-  const { name, href } = creatorView(s);
+  const { name, href, details, full } = creatorView(s);
   el.replaceChildren();
-  el.hidden = !name;
-  if (!name) return;
-  if (!href) { el.textContent = name; return; }
-  const a = document.createElement("a");
-  a.href = href;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  a.textContent = name;
-  el.appendChild(a);
+  el.hidden = !full;
+  el.title = full;   // one line, cut with an ellipsis when it does not fit; the whole line on hover
+  if (!full) return;
+  if (name && href) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = name;
+    el.appendChild(a);
+  } else if (name) {
+    el.append(name);
+  }
+  if (details.length) {
+    const d = document.createElement("span");
+    d.className = "details";
+    d.textContent = (name ? " · " : "") + details.join(" · ");
+    el.appendChild(d);
+  }
 }
 
 // ---------- the Saved checkbox ----------

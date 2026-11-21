@@ -255,6 +255,17 @@ def channel_url(info) -> str:
     return ""
 
 
+_DAY_RE = re.compile(r"^(\d{4})-?(\d{2})-?(\d{2})")
+
+
+def published_day(v) -> str:
+    """A publication date as YYYY-MM-DD from "20261120", "2026-11-20" or "2026-11-20T08:00...", else empty (never raises)."""
+    m = _DAY_RE.match(v.strip()) if isinstance(v, str) else None
+    if not m or not ("01" <= m.group(2) <= "12" and "01" <= m.group(3) <= "31"):
+        return ""
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+
 def fetch_youtube(url: str, vid: str) -> Source:
     canon = f"https://www.youtube.com/watch?v={vid}"
     with tempdir("yt-dlp metadata and one caption track") as d:
@@ -287,7 +298,8 @@ def fetch_youtube(url: str, vid: str) -> Source:
         raise DipDiveError("no_captions", "caption track was empty")
     meta = {"duration": info.get("duration"), "track": lang, "auto": is_auto,
             "language": info.get("language"), "channel": channel_name(info),
-            "live_status": info.get("live_status")}
+            "live_status": info.get("live_status"),
+            "published": published_day(info.get("upload_date")) or published_day(info.get("release_date"))}
     curl = channel_url(info)
     if curl:
         meta["channel_url"] = curl
@@ -467,7 +479,8 @@ def fetch_article(url: str) -> Source:
     md = trafilatura.extract_metadata(html)
     title = (md.title if md and md.title else final)
     site = getattr(md, "sitename", None) if md else None
-    return Source("article", final, title, final, text, {"channel": site.strip() if isinstance(site, str) else ""})
+    return Source("article", final, title, final, text, {"channel": site.strip() if isinstance(site, str) else "",
+                                                         "published": published_day(getattr(md, "date", None) if md else None)})
 
 
 def acquire(url: str) -> Source:

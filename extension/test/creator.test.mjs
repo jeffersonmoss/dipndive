@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { creatorVideosUrl, creatorView } from "../lib/urls.js";
+import { creatorVideosUrl, creatorView, formatDuration, formatPublished } from "../lib/urls.js";
 import { rig, slot } from "./rig.mjs";
 
 const read = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
@@ -24,13 +24,15 @@ test("creatorVideosUrl: anything else is not a link", () => {
   }
 });
 
+const nh = ({ name, href }) => ({ name, href });
+
 test("creatorView: a link with the name, plain text without a good address, hidden without a name", () => {
-  assert.deepEqual(creatorView({ channel: "TEDx Talks", channelUrl: HANDLE }), { name: "TEDx Talks", href: `${HANDLE}/videos` });
-  assert.deepEqual(creatorView({ channel: "The Daily Test", channelUrl: null }), { name: "The Daily Test", href: null }, "an article's site name is plain text");
-  assert.deepEqual(creatorView({ channel: "X", channelUrl: "https://evil.test/@x" }), { name: "X", href: null });
-  assert.deepEqual(creatorView({ channel: "  ", channelUrl: HANDLE }), { name: "", href: null }, "no name: hidden, even with an address");
-  assert.deepEqual(creatorView({ channel: null, channelUrl: null }), { name: "", href: null });
-  assert.deepEqual(creatorView({}), { name: "", href: null });
+  assert.deepEqual(nh(creatorView({ channel: "TEDx Talks", channelUrl: HANDLE })), { name: "TEDx Talks", href: `${HANDLE}/videos` });
+  assert.deepEqual(nh(creatorView({ channel: "The Daily Test", channelUrl: null })), { name: "The Daily Test", href: null }, "an article's site name is plain text");
+  assert.deepEqual(nh(creatorView({ channel: "X", channelUrl: "https://evil.test/@x" })), { name: "X", href: null });
+  assert.deepEqual(nh(creatorView({ channel: "  ", channelUrl: HANDLE })), { name: "", href: null }, "no name: hidden, even with an address");
+  assert.deepEqual(nh(creatorView({ channel: null, channelUrl: null })), { name: "", href: null });
+  assert.deepEqual(nh(creatorView({})), { name: "", href: null });
 });
 
 test("the controller carries channel and channel_url from the job JSON, and clears them with the title on a new source", async () => {
@@ -56,7 +58,7 @@ test("an article job shows its site name and no address; a source cached without
   await r.c.init(1); await r.tick();
   assert.equal(r.state.last.channel, "Old Cache");
   assert.equal(r.state.last.channelUrl, null);
-  assert.deepEqual(creatorView(r.state.last), { name: "Old Cache", href: null });
+  assert.deepEqual(nh(creatorView(r.state.last)), { name: "Old Cache", href: null });
 });
 
 test("a job without any creator leaves the line empty", async () => {
@@ -96,8 +98,8 @@ test("panel.js: the creator is drawn with textContent and a link carrying noopen
   assert.match(js, /renderCreator\(s\);/, "render() calls it");
 });
 
-test("manifest version is 1.10", () => {
-  assert.equal(JSON.parse(read("manifest.json")).version, "1.10");
+test("manifest version is 1.11", () => {
+  assert.equal(JSON.parse(read("manifest.json")).version, "1.11");
 });
 
 // ---- 1.6: the title opens the page in the current tab ----
@@ -134,4 +136,28 @@ test("only a plain left click is taken over; modified and middle clicks keep the
 test("panel.js wires the title to openInCurrentTab for plain clicks only", () => {
   const js = read("panel.js");
   assert.match(js, /\$\("title"\)\.addEventListener\("click", \(e\) => \{[\s\S]*?if \(!isPlainClick\(e\)[\s\S]*?e\.preventDefault\(\);[\s\S]*?openInCurrentTab\(chrome\.tabs, winInfo\?\.id/);
+});
+
+test("1.11: duration and publication date follow the name on one line, the whole line for the hover text", () => {
+  assert.equal(formatDuration(754), "12:34");
+  assert.equal(formatDuration(3723), "1:02:03");
+  assert.equal(formatDuration(59), "0:59");
+  for (const bad of [0, -5, null, "60", NaN, undefined]) assert.equal(formatDuration(bad), "");
+  assert.equal(formatPublished("2026-11-03"), "3 Nov 2026");
+  for (const bad of ["2026-13-01", "20261103", "", null, 5]) assert.equal(formatPublished(bad), "");
+  const v = creatorView({ channel: "TEDx Talks", channelUrl: HANDLE, duration: 754, published: "2026-11-03" });
+  assert.deepEqual(v.details, ["12:34", "3 Nov 2026"]);
+  assert.equal(v.full, "TEDx Talks · 12:34 · 3 Nov 2026");
+  assert.equal(creatorView({ channel: "Site", published: "2026-01-09" }).full, "Site · 9 Jan 2026", "an article has a date, no length");
+  assert.equal(creatorView({ channel: "Old Cache" }).full, "Old Cache", "a source cached before 1.11");
+});
+
+test("the controller carries duration and published from the job JSON and onto the trail item", async () => {
+  const r = rig({ slot: slot(), mode: "claude-dip" });
+  r.server.creator = { channel: "TEDx Talks", duration: 754, published: "2026-11-03" };
+  await r.c.init(1); await r.tick();
+  assert.equal(r.state.last.duration, 754);
+  assert.equal(r.state.last.published, "2026-11-03");
+  assert.equal(r.c.lastItem.duration, 754);
+  assert.equal(r.c.lastItem.published, "2026-11-03");
 });

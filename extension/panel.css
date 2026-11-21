@@ -48,7 +48,9 @@ body {
 header #title { font-weight: 600; font-size: 15px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; display: block; }
 header #title:not([href]) { color: var(--fg); }
 /* The creator under the title: black in light mode, white in dark (--fg), a link only when the channel page is known. */
-header #creator { margin-top: 3px; font-size: 13px; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+header #creator { margin-top: 3px; font-size: 13px; font-weight: 500; color: var(--fg);
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header #creator .details { font-weight: 400; color: var(--muted, var(--fg)); }
 header #creator a { color: var(--fg); text-decoration: none; }
 header #creator a:hover { text-decoration: underline; }
 #buttons { --u: calc((100% - 32px) / 5); display: grid; grid-template-columns: repeat(5, var(--u)); justify-content: center; gap: 8px; }

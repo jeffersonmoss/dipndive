@@ -101,7 +101,8 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
         return respond(200, { job_id: m[1], state: done ? (j.fail ? "error" : "done") : "summarizing", title: "A Title", url: j.url, mode: j.mode,
           result_markdown: done && !j.fail ? (j.mode.endsWith("-ask") ? `Answer to: ${j.question} [${(j.history || []).length} earlier]` : `Summary for ${j.mode}`) : null, error_code: done && j.fail ? j.fail : null, error_message: null, clear_generation: server.clearGen,
           history_saved: done && !j.fail && j.logged ? j.saved : null, history_rev: server.rev || 0, log_id: done && j.logged ? (j.logId || m[1]) : null,
-          ...(j.channel ? { channel: j.channel } : {}), ...(j.channel_url ? { channel_url: j.channel_url } : {}) });
+          ...(j.channel ? { channel: j.channel } : {}), ...(j.channel_url ? { channel_url: j.channel_url } : {}),
+          ...(j.duration ? { duration: j.duration } : {}), ...(j.published ? { published: j.published } : {}) });
       }
       if ((m = path.match(/^\/qa\?entry=(.+)$/))) return respond(200, { entry: m[1], turns: (server.qa || {})[decodeURIComponent(m[1])] || [] });
       // GET /playlist (dipdive/service.py playlist): `server.playlist` is { list_id, title, entries: [{ id, title }] }

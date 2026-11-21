@@ -188,6 +188,15 @@ class Channel(unittest.TestCase):
         self.assertEqual(self._youtube(dict(base, uploader="Only Uploader")).meta["channel"], "Only Uploader")
         self.assertEqual(self._youtube(dict(base)).meta["channel"], "")
 
+    def test_youtube_source_carries_publication_day(self):
+        base = {"title": "Vid", "language": "en", "subtitles": {"en": [{"url": "https://x/a", "ext": "json3"}]},
+                "automatic_captions": {}}
+        self.assertEqual(self._youtube(dict(base, upload_date="20261103")).meta["published"], "2026-11-03")
+        self.assertEqual(self._youtube(dict(base, release_date="20250102")).meta["published"], "2025-01-02")
+        for bad in ({}, {"upload_date": "2026"}, {"upload_date": "20261340"}, {"upload_date": 20261103}):
+            self.assertEqual(self._youtube(dict(base, **bad)).meta["published"], "", bad)
+        self.assertEqual(acquire.published_day("2026-11-03T08:00:00Z"), "2026-11-03")
+
     def test_youtube_source_carries_channel_url_only_when_it_is_a_youtube_channel_page(self):
         base = {"title": "Vid", "language": "en", "subtitles": {"en": [{"url": "https://x/a", "ext": "json3"}]},
                 "automatic_captions": {}}
@@ -326,6 +335,14 @@ class Server(FakeModels):
         self.assertEqual((j["channel"], j["channel_url"]), ("TEDx Talks", "https://www.youtube.com/@TEDx"))
         # a later read of the job answers from the job itself (the stored fields), not from the source file
         self.assertEqual(self.req("GET", "/jobs/" + j["job_id"])[1]["channel_url"], "https://www.youtube.com/@TEDx")
+
+    def test_job_json_carries_duration_and_published(self):
+        j = self._job_with_source("dp1", {"channel": "T", "duration": 3723.4, "published": "2026-11-03"})
+        self.assertEqual((j["duration"], j["published"]), (3723, "2026-11-03"))
+        self.assertEqual(self.req("GET", "/jobs/" + j["job_id"])[1]["published"], "2026-11-03")
+        j = self._job_with_source("dp2", {"channel": "T", "duration": None})
+        self.assertNotIn("duration", j)
+        self.assertNotIn("published", j)
 
     def test_source_cached_without_channel_url_returns_channel_only(self):
         j = self._job_with_source("cu2", {"channel": "Old Cache"})

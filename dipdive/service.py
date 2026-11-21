@@ -41,6 +41,11 @@ def _text_or_none(v):
     return v.strip() if isinstance(v, str) and v.strip() else None
 
 
+def _duration_or_none(v):
+    """Seconds as a whole number when yt-dlp gave a positive duration, else None (live streams, articles)."""
+    return int(round(v)) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 10 ** 7 else None
+
+
 def norm_source_id(url: str) -> str:
     """Cheap normalized source id for dedupe and the source cache (no network)."""
     u = unwrap(url.strip())
@@ -510,7 +515,9 @@ class Service:
     def public(self, j):
         # The creator, stored on the job when its source was read (never re-read here). channel_url exists only for YouTube
         # sources fetched with one; a source cached before it was kept answers with the channel alone.
-        creator = {k: j[k] for k in ("channel", "channel_url") if j.get(k)}
+        # duration (seconds) and published (YYYY-MM-DD) follow the creator on the panel's line (1.11); missing for sources
+        # cached before 1.11 that lack them, and duration always for articles.
+        creator = {k: j[k] for k in ("channel", "channel_url", "duration", "published") if j.get(k)}
         # log_id: the history entry this summary's text is filed under (another job's id when the result was reused)
         return {"job_id": j["job_id"], "mode": j["mode"], "state": j["state"], "title": j["title"], **creator,
                 "log_id": j.get("log_id") if isinstance(j.get("log_id"), str) else None,
@@ -673,7 +680,8 @@ class Service:
             s = self._get_source(j)
             meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
             self._set(j, title=s["title"], source_ready=True, source_hash=s["hash"],
-                      channel=_text_or_none(meta.get("channel")), channel_url=_text_or_none(meta.get("channel_url")))
+                      channel=_text_or_none(meta.get("channel")), channel_url=_text_or_none(meta.get("channel_url")),
+                      duration=_duration_or_none(meta.get("duration")), published=_text_or_none(meta.get("published")))
             if j["mode"] == "source":
                 self._set(j, state="done")
                 return

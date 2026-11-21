@@ -78,7 +78,7 @@ export class Controller {
     this.micDev = deps.micDevices || null;
     this.micSeq = 0;
     this.s = {
-      configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null, channel: null, channelUrl: null,
+      configured: false, source: null, mode: DEFAULT_MODE, jobId: null, jobState: null, title: null, channel: null, channelUrl: null, duration: null, published: null,
       result: null, resultMode: null, error: null, status: "", busy: false, pinError: null,
       codexOk: null, codexReason: "",
       // the "Save this Dip to history" checkbox: true or false while the summary on screen has an entry in the companion's
@@ -401,7 +401,7 @@ export class Controller {
   resetView(extra = {}) {
     this.stopTimer();
     this.savedRev = -1;  // the newest history-log revision this panel has seen for the box (see takeSaved)
-    this.emit({ jobId: null, jobState: null, title: null, channel: null, channelUrl: null, result: null, resultMode: null, error: null, pinError: null, entryId: null,
+    this.emit({ jobId: null, jobState: null, title: null, channel: null, channelUrl: null, duration: null, published: null, result: null, resultMode: null, error: null, pinError: null, entryId: null,
                 saved: null, savingSaved: false, savedUnknown: false, ...extra });
   }
 
@@ -548,7 +548,9 @@ export class Controller {
     // The creator (channel, and its page for YouTube) comes from the companion's job JSON, kept like the title and cleared with it.
     const channel = typeof j.channel === "string" && j.channel.trim() ? j.channel.trim() : null;
     this.emit({ title: j.title || this.s.title, channel: channel || this.s.channel,
-                channelUrl: channel ? (typeof j.channel_url === "string" ? j.channel_url : null) : this.s.channelUrl, source: { url: j.url || this.slot.url }, jobState: j.state });
+                channelUrl: channel ? (typeof j.channel_url === "string" ? j.channel_url : null) : this.s.channelUrl,
+                duration: typeof j.duration === "number" ? j.duration : this.s.duration,
+                published: typeof j.published === "string" ? j.published : this.s.published, source: { url: j.url || this.slot.url }, jobState: j.state });
     if (j.state === "done") {
       const entryId = typeof j.log_id === "string" && j.log_id ? j.log_id : jobId;
       this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: doneStatus(j), busy: false, entryId,
@@ -556,7 +558,7 @@ export class Controller {
       this.noteRev(j.history_rev);
       const pl = normPlaylist(this.slot && this.slot.playlist);
       this.lastItem = { url: j.url || this.slot.url, jobId, entryId, title: this.s.title, channel: this.s.channel,
-                        channelUrl: this.s.channelUrl, mode: j.answered_mode || j.mode || this.s.mode, result: j.result_markdown, ts: Date.now(),
+                        channelUrl: this.s.channelUrl, duration: this.s.duration, published: this.s.published, mode: j.answered_mode || j.mode || this.s.mode, result: j.result_markdown, ts: Date.now(),
                         ...(pl ? { playlist: pl } : {}) };
       await this.recordTrail(this.lastItem);
       if (!this.s.thread.length) await this.loadQa(entryId);  // questions asked about this entry before
@@ -608,7 +610,7 @@ export class Controller {
     this.lastItem = item;
     this.resetView({ status: "", busy: false });
     this.emit({ playlist: pl, source: { url: item.url }, jobId: item.jobId, jobState: "done", title: item.title || null, channel: item.channel || null,
-                channelUrl: item.channelUrl || null, result: item.result, resultMode: item.mode, entryId: item.entryId || item.jobId });
+                channelUrl: item.channelUrl || null, duration: item.duration || null, published: item.published || null, result: item.result, resultMode: item.mode, entryId: item.entryId || item.jobId });
     void this.loadQa(item.entryId || item.jobId);
     void this.refreshSaved();
   }
