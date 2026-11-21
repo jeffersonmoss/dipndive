@@ -340,6 +340,8 @@ class Server(FakeModels):
         j = self._job_with_source("dp1", {"channel": "T", "duration": 3723.4, "published": "2026-11-03"})
         self.assertEqual((j["duration"], j["published"]), (3723, "2026-11-03"))
         self.assertEqual(self.req("GET", "/jobs/" + j["job_id"])[1]["published"], "2026-11-03")
+
+    def test_job_without_duration_or_date_omits_them(self):
         j = self._job_with_source("dp2", {"channel": "T", "duration": None})
         self.assertNotIn("duration", j)
         self.assertNotIn("published", j)
