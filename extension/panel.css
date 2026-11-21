@@ -201,8 +201,8 @@ body.busy #status::after { content: ""; display: inline-block; width: 10px; heig
 #recover-btn:disabled { opacity: .6; cursor: default; }
 #recover-status:not(:empty) { margin-top: 8px; font-size: 12px; color: var(--fg); }
 
-/* playlist row (1.10): two long, low violet pills with stemmed arrows, the position between them */
-#plrow { display: flex; align-items: center; gap: 8px; }
+/* playlist row (1.10), right under the five buttons: two long, low violet pills with stemmed arrows, the position between them */
+#plrow { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; }
 #plrow[hidden] { display: none; }
 .plbtn { flex: 1 1 0; min-width: 64px; height: 26px; padding: 0 10px; display: flex; align-items: center; justify-content: center;
   border-radius: 999px; border: 1px solid var(--pl-edge); background: var(--pl); color: var(--on-pl); cursor: pointer;
