@@ -96,8 +96,8 @@ test("panel.js: the creator is drawn with textContent and a link carrying noopen
   assert.match(js, /renderCreator\(s\);/, "render() calls it");
 });
 
-test("manifest version is 1.9", () => {
-  assert.equal(JSON.parse(read("manifest.json")).version, "1.9");
+test("manifest version is 1.10", () => {
+  assert.equal(JSON.parse(read("manifest.json")).version, "1.10");
 });
 
 // ---- 1.6: the title opens the page in the current tab ----

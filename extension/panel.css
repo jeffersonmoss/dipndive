@@ -12,6 +12,8 @@
   --mode-pressed-bg: radial-gradient(circle at 50% 58%, #ffffff 0, #f1efea 72%);
   --mode-pressed-inset: inset 0 3px 8px rgba(0, 0, 0, .18);
   --fav-outline: rgba(0, 0, 0, .45);
+  /* the playlist arrows: violet pills, unlike any other control */
+  --pl: #6a48d4; --pl-edge: #4a2ea3; --on-pl: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -25,6 +27,7 @@
     --mode-pressed-bg: radial-gradient(circle at 50% 58%, #161616 0, #000 72%);
     --mode-pressed-inset: inset 0 4px 10px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .06);
     --fav-outline: rgba(255, 255, 255, .5);
+    --pl: #7d5ff0; --pl-edge: #4f37b0;
   }
 }
 * { box-sizing: border-box; }
@@ -197,3 +200,17 @@ body.busy #status::after { content: ""; display: inline-block; width: 10px; heig
 #recover-btn:hover, #recover-btn:focus-visible { border-color: var(--link); color: var(--link); }
 #recover-btn:disabled { opacity: .6; cursor: default; }
 #recover-status:not(:empty) { margin-top: 8px; font-size: 12px; color: var(--fg); }
+
+/* playlist row (1.10): two long, low violet pills with stemmed arrows, the position between them */
+#plrow { display: flex; align-items: center; gap: 8px; }
+#plrow[hidden] { display: none; }
+.plbtn { flex: 1 1 0; min-width: 64px; height: 26px; padding: 0 10px; display: flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1px solid var(--pl-edge); background: var(--pl); color: var(--on-pl); cursor: pointer;
+  box-shadow: 0 2px 0 var(--pl-edge); }
+.plbtn svg { width: 100%; max-width: 96px; height: 14px; }
+.plbtn:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 var(--pl-edge); }
+.plbtn:disabled { opacity: .3; cursor: default; box-shadow: none; }
+.plbtn:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+#plpos { flex: 0 1 auto; max-width: 42%; display: flex; flex-direction: column; align-items: center; line-height: 1.15; min-width: 0; }
+#plcount { font-size: 12px; font-weight: 600; white-space: nowrap; }
+#pltitle { font-size: 11px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

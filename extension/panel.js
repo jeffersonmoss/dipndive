@@ -9,6 +9,7 @@ import { createMediaClient } from "./lib/media-hush.js";
 import { listMics, micInfo } from "./lib/micdevice.js";
 import { openHistoryHere } from "./lib/history.js";
 import { request } from "./lib/api.js";
+import { normPlaylist, positionLabel } from "./lib/playlist.js";
 import { HANDOFF_SITES, buildHandoffText, fillHandoffComposer, handoffEnabled, injectionSite, validateHandoffUrl } from "./lib/handoff-sites.js";
 import { creatorView, isPlainClick, openInCurrentTab } from "./lib/urls.js";
 import { HistoryRow, rowStatus, rowsVisible } from "./lib/history-row.js";
@@ -259,6 +260,20 @@ function openField() {
   return true;
 }
 
+function renderPlaylist(s, show) {
+  const pl = show ? normPlaylist(s.playlist) : null;
+  $("plrow").hidden = !pl;
+  if (!pl) return;
+  $("plprev").disabled = pl.index <= 0;
+  $("plnext").disabled = pl.index >= pl.entries.length - 1;
+  $("plcount").textContent = positionLabel(pl);
+  $("pltitle").textContent = pl.title;
+  $("plpos").title = pl.title ? `${pl.title}: ${positionLabel(pl)}` : positionLabel(pl);
+  const near = (d) => pl.entries[pl.index + d]?.title;
+  $("plprev").title = near(-1) ? `Previous: ${near(-1)}` : "Previous video in the playlist";
+  $("plnext").title = near(1) ? `Next: ${near(1)}` : "Next video in the playlist";
+}
+
 function renderAsk(s) {
   // The bottom row is there whenever the companion is set up, so History, Back and Forward are always one click away;
   // the mic and Ask only once there is a source to ask about.
@@ -268,6 +283,7 @@ function renderAsk(s) {
   $("trailfwd").disabled = !s.trailForward;
   const show = s.configured && !!s.source;
   for (const id of ["mic", "askgo", "askspace"]) $(id).hidden = !show;
+  renderPlaylist(s, show);
   if (!show) {
     for (const id of ["micmsg", "micsetup", "askerror", "askinput"]) $(id).hidden = true;
     fieldOpen = false;
@@ -491,6 +507,8 @@ $("askinput").addEventListener("blur", () => { if (!$("askinput").value.trim() &
 $("askspace").addEventListener("click", () => { openField(); });
 window.addEventListener("resize", sizeField);  // a narrower panel wraps the question onto more lines
 // ---------- back and forward (lib/trail.js): buttons, Alt or Cmd + arrow keys, and a two-finger swipe ----------
+$("plprev").addEventListener("click", () => { void ctl.stepPlaylist(-1); });
+$("plnext").addEventListener("click", () => { void ctl.stepPlaylist(1); });
 $("trailback").addEventListener("click", () => { void ctl.goTrail(-1); });
 $("trailfwd").addEventListener("click", () => { void ctl.goTrail(1); });
 document.addEventListener("keydown", (e) => {

@@ -79,6 +79,52 @@ def youtube_id(url: str):
     return None, False
 
 
+_LIST = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+PLAYLIST_MAX = 200
+
+
+def playlist_id(url: str):
+    """The YouTube playlist id in a link (`list=`), on a /playlist page or a /watch link inside a playlist, else None."""
+    u = urllib.parse.urlparse(unwrap(url.strip()))
+    host = (u.hostname or "").lower()
+    if not (host == "youtube.com" or host.endswith(".youtube.com")):
+        return None
+    if u.path not in ("/playlist", "/watch"):
+        return None
+    lid = (urllib.parse.parse_qs(u.query).get("list") or [""])[0]
+    return lid if _LIST.match(lid) else None
+
+
+def fetch_playlist(list_id: str, video_id: str = None) -> dict:
+    """The playlist's title and its first PLAYLIST_MAX playable videos, in order: {list_id, title, entries:[{id, title}]}.
+    A Mix (RD...) exists only around a video, so it is read from the watch link. Private and deleted videos are left out."""
+    if not _LIST.match(list_id or ""):
+        raise DipDiveError("not_a_playlist", "bad playlist id")
+    if list_id.startswith("RD") and video_id and _ID.match(video_id):
+        src = f"https://www.youtube.com/watch?v={video_id}&list={list_id}"
+    else:
+        src = f"https://www.youtube.com/playlist?list={list_id}"
+    out = _ytdlp(["-J", "--flat-playlist", "--yes-playlist", "--playlist-end", str(PLAYLIST_MAX), src], T_META)
+    try:
+        d = json.loads(out)
+    except json.JSONDecodeError:
+        raise DipDiveError("extract_failed", "playlist listing was not JSON")
+    entries = []
+    for e in d.get("entries") or []:
+        if not isinstance(e, dict):
+            continue
+        vid, title = e.get("id"), e.get("title")
+        if not (isinstance(vid, str) and _ID.match(vid)):
+            continue
+        if title in ("[Private video]", "[Deleted video]") or e.get("availability") in ("private", "needs_auth"):
+            continue
+        entries.append({"id": vid, "title": title.strip() if isinstance(title, str) else ""})
+    if not entries:
+        raise DipDiveError("empty_playlist", "the playlist has no playable videos")
+    title = d.get("title") if isinstance(d.get("title"), str) else ""
+    return {"list_id": list_id, "title": title.strip(), "entries": entries[:PLAYLIST_MAX]}
+
+
 # ---------- 3.3.3 to 3.3.5 YouTube ----------
 
 def _classify_ytdlp(err: str):

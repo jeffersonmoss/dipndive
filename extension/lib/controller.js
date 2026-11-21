@@ -8,6 +8,7 @@ import { MIC, VoiceInput } from "./voice.js";
 import { MIC_DEVICE, micWarning, resolveMic } from "./micdevice.js";
 import { DEFAULT_MODE, migrateMode, normalizeMode } from "./modes.js";
 import { TRAIL, canBack, canForward, normTrail, pushTrail, stepTrail } from "./trail.js";
+import { fromCompanion, normPlaylist, playlistLink, stepPlaylist, watchUrl } from "./playlist.js";
 
 export const POLL_MS = 1500;
 export const ASK_POLL_MS = 1200;
@@ -35,6 +36,8 @@ const MESSAGES = {
   interrupted: "The companion restarted during this job. Press the button again.",
   request_id_conflict: "Internal request conflict. Right-click the link again.",
   bad_request: "The companion refused that question. Try a shorter one.",
+  not_a_playlist: "That link is not a YouTube playlist.",
+  empty_playlist: "This playlist has no videos that can be summarized (they may be private or deleted).",
   provider_unavailable: "The AI service is down right now. Try again in a few minutes.",
   [STALE_CODE]: STALE_MESSAGE,
 };
@@ -89,7 +92,10 @@ export class Controller {
       preferredMic: "", micWarn: "",
       // the history entry the summary on screen is filed under (questions are kept with it), and the back/forward buttons
       entryId: null, trailBack: false, trailForward: false,
+      // the YouTube playlist the summary on screen belongs to ({ listId, title, entries, index }, lib/playlist.js), or null
+      playlist: null,
     };
+    this.lastItem = null;  // the trail item of the summary on screen, so a playlist that arrives later can be added to it
     this.trail = normTrail(null);
     this.qaSeq = 0;
     this.voice = new VoiceInput({
@@ -226,10 +232,18 @@ export class Controller {
     if (slot.pendingMode) slot = { ...slot, pendingMode: migrateMode(slot.pendingMode) };
     this.slot = slot;
     if (slot.consumed && slot.jobId) {
-      this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)) });
+      this.emit({ mode: this.effectiveMode(normalizeMode(slot.mode || this.s.mode)), playlist: normPlaylist(slot.playlist) });
       await this.beginTracking(slot.jobId);
       return;
     }
+    // Playlists: a slot made by the playlist arrows already carries its list. A playlist page is read first and its first
+    // video is summarized; a video opened from inside a playlist is summarized at once while the list is read alongside.
+    const link = slot.playlist ? null : playlistLink(slot.url);
+    if (slot.playlist) this.emit({ playlist: normPlaylist(slot.playlist) });
+    else if (link && !link.videoId) {
+      if (!(await this.openPlaylist(slot))) return;
+      slot = this.slot;
+    } else this.emit({ playlist: null });
     // A fresh right-click uses the last mode chosen anywhere; an unacknowledged resubmit keeps the mode it
     // was first sent with, so the same requestId never meets a different mode.
     let mode = slot.pendingMode;
@@ -239,7 +253,56 @@ export class Controller {
       mode = this.effectiveMode(normalizeMode(st.mode));
     }
     this.emit({ mode });
+    if (link && link.videoId) void this.attachPlaylist(slot.requestId, slot.url);
     await this.submit(mode, { requestId: slot.requestId, force: false, fromSlot: true, recoveryMode });
+  }
+
+  // ---------- playlists (lib/playlist.js) ----------
+  readPlaylist(url) {
+    return request(this.d.fetch, this.cfg, "GET", `/playlist?url=${encodeURIComponent(url)}`, null, 45000);
+  }
+
+  // A playlist page: read its videos, then point the (still unsent) slot at the first one. False when it could not be read.
+  async openPlaylist(slot) {
+    const gen = ++this.selGen;
+    this.resetView({ status: "Reading the playlist...", busy: true });
+    this.emit({ playlist: null });
+    let r;
+    try { r = await this.readPlaylist(slot.url); } catch (e) { this.failure(gen, e); return false; }
+    if (gen !== this.selGen || !this.slot || this.slot.requestId !== slot.requestId) return false;
+    if (r.status === 401) { this.emit({ error: "The token was rejected. Check the options page.", status: "", busy: false }); return false; }
+    const pl = r.status === 200 ? fromCompanion(r.json) : null;
+    if (!pl) { this.emit({ error: describeError(r.json?.error_code, r.json?.error_message), status: "", busy: false }); return false; }
+    this.slot = { ...this.slot, url: watchUrl(pl.entries[pl.index].id), playlist: pl };
+    await this.d.storage.set({ [slotKey(this.windowId)]: this.slot });
+    this.emit({ playlist: pl, source: { url: this.slot.url } });
+    return true;
+  }
+
+  // A video opened from inside a playlist: its summary is already on its way; the arrows appear when the list arrives.
+  async attachPlaylist(requestId, url) {
+    let r;
+    try { r = await this.readPlaylist(url); } catch { return; }
+    if (!this.slot || this.slot.requestId !== requestId || this.slot.playlist) return;
+    const pl = r.status === 200 && r.json && r.json.video_in_list ? fromCompanion(r.json) : null;
+    if (!pl) return;
+    this.slot = { ...this.slot, playlist: pl };
+    try { await this.d.storage.set({ [slotKey(this.windowId)]: this.slot }); } catch { /* kept for this panel */ }
+    this.emit({ playlist: pl });
+    if (this.lastItem && this.lastItem.jobId === this.s.jobId) await this.recordTrail({ ...this.lastItem, playlist: pl });
+  }
+
+  // The long arrows: summarize the previous (-1) or next (+1) video of the playlist with the selected mode. The playlist
+  // stays one stop on the back/forward trail (lib/trail.js). Returns true when it moved.
+  async stepPlaylist(delta) {
+    const next = stepPlaylist(this.s.playlist, delta);
+    if (!next || !this.s.configured) return false;
+    if (this.s.mic.state !== MIC.IDLE) this.voice.cancel();
+    const slot = { ...makeSlot(watchUrl(next.entries[next.index].id), this.windowId, this.d.uuid()), pendingMode: this.s.mode, playlist: next };
+    await this.d.storage.set({ [slotKey(this.windowId)]: slot });
+    await pruneSlots(this.d.storage);
+    await this.onSlot(slot);
+    return true;
   }
 
   // Writes a fresh slot for `url` to this window's key and submits it through onSlot with this panel's own selected mode.
@@ -491,8 +554,11 @@ export class Controller {
       this.emit({ result: j.result_markdown, resultMode: j.mode || this.s.mode, status: doneStatus(j), busy: false, entryId,
                   saved: typeof j.history_saved === "boolean" ? j.history_saved : null });
       this.noteRev(j.history_rev);
-      await this.recordTrail({ url: j.url || this.slot.url, jobId, entryId, title: this.s.title, channel: this.s.channel,
-                               channelUrl: this.s.channelUrl, mode: j.answered_mode || j.mode || this.s.mode, result: j.result_markdown, ts: Date.now() });
+      const pl = normPlaylist(this.slot && this.slot.playlist);
+      this.lastItem = { url: j.url || this.slot.url, jobId, entryId, title: this.s.title, channel: this.s.channel,
+                        channelUrl: this.s.channelUrl, mode: j.answered_mode || j.mode || this.s.mode, result: j.result_markdown, ts: Date.now(),
+                        ...(pl ? { playlist: pl } : {}) };
+      await this.recordTrail(this.lastItem);
       if (!this.s.thread.length) await this.loadQa(entryId);  // questions asked about this entry before
     } else if (j.state === "error") {
       this.emit({ error: describeError(j.error_code, j.error_message), status: "", busy: false });
@@ -536,9 +602,12 @@ export class Controller {
     this.selGen++;                 // a summary still on its way belongs to where the panel was
     this.stopTimer();
     this.resetAsk();               // its thread and draft go; this item's questions are loaded below
-    this.slot = { url: item.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: true, jobId: item.jobId, mode: item.mode };
+    const pl = normPlaylist(item.playlist);
+    this.slot = { url: item.url, requestId: this.d.uuid(), windowId: this.windowId, ts: Date.now(), consumed: true, jobId: item.jobId, mode: item.mode,
+                  ...(pl ? { playlist: pl } : {}) };
+    this.lastItem = item;
     this.resetView({ status: "", busy: false });
-    this.emit({ source: { url: item.url }, jobId: item.jobId, jobState: "done", title: item.title || null, channel: item.channel || null,
+    this.emit({ playlist: pl, source: { url: item.url }, jobId: item.jobId, jobState: "done", title: item.title || null, channel: item.channel || null,
                 channelUrl: item.channelUrl || null, result: item.result, resultMode: item.mode, entryId: item.entryId || item.jobId });
     void this.loadQa(item.entryId || item.jobId);
     void this.refreshSaved();

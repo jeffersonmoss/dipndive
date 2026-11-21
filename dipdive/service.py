@@ -102,6 +102,7 @@ class Service:
         self.watched_index = os.path.join(self.dir, "watched-video-index.json")
         self.fetch_sem = threading.Semaphore(MAX_FETCH)
         self.model_sem = threading.Semaphore(MAX_MODEL)
+        self._playlists = {}  # (playlist id, video for a Mix) -> (time read, listing), see playlist()
         self.state_path = os.path.join(self.dir, "state.json")
         self.clipboard_path = os.path.join(self.dir, "clipboard-queue.json")
         self.generation = 0
@@ -464,6 +465,32 @@ class Service:
                     joblog.write({"qa_record_error": f"{type(e).__name__}: {e}", "entry": entry, "url": j.get("url")})
                 except BaseException:
                     pass
+
+    def playlist(self, url):
+        """GET /playlist: the videos of the playlist a link points into, and where that link's own video sits in it
+        (0 when the link names no video or one not among the first PLAYLIST_MAX). Kept 15 minutes per playlist."""
+        from . import acquire as acq
+        lid = acq.playlist_id(url)
+        if not lid:
+            return 400, {"error_code": "not_a_playlist", "error_message": "no YouTube playlist in that link"}
+        vid, _ = acq.youtube_id(acq.unwrap(url.strip()))
+        key = (lid, vid if lid.startswith("RD") else None)
+        cache = self._playlists
+        hit = cache.get(key)
+        if hit and time.time() - hit[0] < 900:
+            pl = hit[1]
+        else:
+            try:
+                pl = acq.fetch_playlist(lid, vid)
+            except DipDiveError as e:
+                return 502 if e.code in ("extract_failed", "rate_limited") else 404, \
+                    {"error_code": e.code, "error_message": e.message}
+            with self.lock:
+                cache[key] = (time.time(), pl)
+                for k in [k for k, v in cache.items() if time.time() - v[0] >= 900]:
+                    cache.pop(k, None)
+        ids = [e["id"] for e in pl["entries"]]
+        return 200, {**pl, "index": ids.index(vid) if vid in ids else 0, "video_in_list": vid in ids}
 
     def qa_for(self, entry):
         return qa.read(self.qa_dir, entry)

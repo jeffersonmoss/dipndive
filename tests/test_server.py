@@ -617,3 +617,42 @@ class CodexFallback(Base):
         _, r = self.submit("claude-dip", rid="fb4")
         j = self.wait(r["job_id"])
         self.assertEqual((j["state"], j["answered_mode"]), ("done", None))
+
+
+class Playlists(Base):
+    """GET /playlist: the videos of a playlist link (yt-dlp is faked here)."""
+
+    def _fake(self, entries):
+        from dipdive import acquire
+        calls = []
+        orig = acquire.fetch_playlist
+
+        def fake(list_id, video_id=None):
+            calls.append(list_id)
+            return {"list_id": list_id, "title": "Mix of things", "entries": entries}
+        acquire.fetch_playlist = fake
+        self.addCleanup(setattr, acquire, "fetch_playlist", orig)
+        return calls
+
+    def test_ids(self):
+        from dipdive import acquire
+        self.assertEqual(acquire.playlist_id("https://www.youtube.com/playlist?list=PLabc123"), "PLabc123")
+        self.assertEqual(acquire.playlist_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc123"), "PLabc123")
+        self.assertIsNone(acquire.playlist_id("https://www.youtube.com/@someone/videos"))
+        self.assertIsNone(acquire.playlist_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        self.assertIsNone(acquire.playlist_id("https://example.com/playlist?list=PLabc123"))
+
+    def test_listing_position_and_cache(self):
+        ents = [{"id": "aaaaaaaaaaa", "title": "A"}, {"id": "bbbbbbbbbbb", "title": "B"}]
+        calls = self._fake(ents)
+        q = urllib.parse.quote("https://www.youtube.com/watch?v=bbbbbbbbbbb&list=PLabc123", safe="")
+        c, r = self.req("GET", "/playlist?url=" + q)
+        self.assertEqual((c, r["index"], r["video_in_list"], r["title"], len(r["entries"])), (200, 1, True, "Mix of things", 2))
+        c, r = self.req("GET", "/playlist?url=" + urllib.parse.quote("https://www.youtube.com/playlist?list=PLabc123", safe=""))
+        self.assertEqual((c, r["index"], r["video_in_list"]), (200, 0, False))
+        self.assertEqual(calls, ["PLabc123"], "read once, then served from the cache")
+
+    def test_not_a_playlist(self):
+        c, r = self.req("GET", "/playlist?url=" + urllib.parse.quote("https://www.youtube.com/@someone", safe=""))
+        self.assertEqual((c, r["error_code"]), (400, "not_a_playlist"))
+        self.assertEqual(self.req("GET", "/playlist")[0], 400)

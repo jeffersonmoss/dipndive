@@ -161,6 +161,11 @@ def make_handler(svc: Service, token: str):
                         self.end_headers()
                         return
                     return self._send(200, item)
+                if u.path == "/playlist":
+                    url = (urllib.parse.parse_qs(u.query).get("url") or [""])[0]
+                    if not url or len(url) > 4096:
+                        return self._send(400, {"error_code": "bad_request", "error_message": "url is required"})
+                    return self._send(*svc.playlist(url))
                 if u.path == "/history":
                     return self._history(u.query)
                 if u.path == "/qa":

@@ -77,6 +77,12 @@
         </button>
       </div>
     </form>
+    <!-- a YouTube playlist: long arrows under the bottom row page through its videos (the playlist is one back/forward stop) -->
+    <div id="plrow" role="group" aria-label="Playlist" hidden>
+      <button id="plprev" class="plbtn" type="button" aria-label="Previous video in the playlist" title="Previous video in the playlist"><svg viewBox="0 0 72 16" width="72" height="16" aria-hidden="true" focusable="false"><path d="M70 8H4M11.5 1.5 3 8l8.5 6.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div id="plpos"><span id="plcount"></span><span id="pltitle"></span></div>
+      <button id="plnext" class="plbtn" type="button" aria-label="Next video in the playlist" title="Next video in the playlist"><svg viewBox="0 0 72 16" width="72" height="16" aria-hidden="true" focusable="false"><path d="M2 8h66M60.5 1.5 69 8l-8.5 6.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
   </section>
   <script type="module" src="panel.js"></script>
 </body>

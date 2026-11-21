@@ -104,6 +104,15 @@ export function rig({ cfg = { base: "http://c.test", token: "t".repeat(40) }, mo
           ...(j.channel ? { channel: j.channel } : {}), ...(j.channel_url ? { channel_url: j.channel_url } : {}) });
       }
       if ((m = path.match(/^\/qa\?entry=(.+)$/))) return respond(200, { entry: m[1], turns: (server.qa || {})[decodeURIComponent(m[1])] || [] });
+      // GET /playlist (dipdive/service.py playlist): `server.playlist` is { list_id, title, entries: [{ id, title }] }
+      if ((m = path.match(/^\/playlist\?url=(.+)$/))) {
+        server.playlistReads = (server.playlistReads || 0) + 1;
+        const pl = server.playlist;
+        if (!pl) return respond(404, { error_code: "empty_playlist", error_message: "no videos" });
+        const v = new URL(decodeURIComponent(m[1])).searchParams.get("v");
+        const at = pl.entries.findIndex((e) => e.id === v);
+        return respond(200, { ...pl, index: at >= 0 ? at : 0, video_in_list: at >= 0 });
+      }
       if ((m = path.match(/^\/source\?job=(.+)$/))) return respond(200, { title: "A Title", url: "https://v.test/x", text: server.sourceText || "source body", clear_generation: server.clearGen });
       return respond(404, {});
     };

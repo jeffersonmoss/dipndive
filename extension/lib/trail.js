@@ -1,7 +1,8 @@
 // Back and forward through the summaries shown in the panel, the way a browser's buttons work. One trail per computer,
 // shared by every Chrome window (chrome.storage.local "trail"). A new summary after going back cuts off the forward
 // part, like a browser; showing a summary that is already on the trail just moves there.
-// Each item keeps what the panel needs to show it at once: { url, jobId, entryId, title, channel, channelUrl, mode, result, ts }.
+// Each item keeps what the panel needs to show it at once: { url, jobId, entryId, title, channel, channelUrl, mode, result, ts },
+// plus `playlist` for a video of a YouTube playlist (the whole playlist is one stop, see pushTrail).
 
 export const TRAIL = Object.freeze({ key: "trail", max: 100 });
 
@@ -17,6 +18,13 @@ export function normTrail(t) {
 // The trail after a summary is shown. Already on it (the same job): only the position moves.
 export function pushTrail(trail, item) {
   const t = normTrail(trail);
+  // A YouTube playlist is one stop: paging through it (lib/playlist.js) replaces the stop it is on, forward part kept.
+  const list = item && item.playlist && item.playlist.listId;
+  if (list && t.pos >= 0 && t.items[t.pos].playlist && t.items[t.pos].playlist.listId === list) {
+    const items = t.items.slice();
+    items[t.pos] = item;
+    return { items, pos: t.pos };
+  }
   const at = t.items.findIndex((x) => x.jobId === item.jobId);
   if (at >= 0) {
     const items = t.items.slice();
