@@ -2,7 +2,7 @@ import { repairAvailable, recoveryContext, launchRecovery, RECOVERY_HOST } from 
 import { Controller } from "./lib/controller.js";
 import { MODES } from "./lib/modes.js";
 import { renderMarkdown, safeHref } from "./lib/markdown.js";
-import { slotKey } from "./lib/background-core.js";
+import { slotKey, TOGGLE_COMMAND } from "./lib/background-core.js";
 import { installShim } from "./lib/shim.js";
 import { MIC } from "./lib/voice.js";
 import { createMediaClient } from "./lib/media-hush.js";
@@ -591,6 +591,14 @@ chrome.runtime?.onMessage?.addListener((message) => historyRow.onProgress(messag
 const historyUrl = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL("history.html") : new URL("history.html", location.href).href;
 // The service worker does the lookup-or-create (one at a time for every panel), so two quick clicks open one tab. Only when
 // the worker cannot be reached does the panel do it itself.
+// Option+W while this panel is open closes it (the background worker opens it when it is closed; see background-core.js).
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener((command, tab) => {
+    if (command !== TOGGLE_COMMAND || !winInfo || (tab && tab.windowId !== winInfo.id)) return;
+    if (chrome.sidePanel && chrome.sidePanel.close) chrome.sidePanel.close({ windowId: winInfo.id }).catch(() => window.close());
+    else window.close();
+  });
+}
 $("historylink").addEventListener("click", () => { void openHistoryHere(chrome, historyUrl, winInfo?.id); });
 // the gear: Settings (the Options page)
 $("options").addEventListener("click", () => {

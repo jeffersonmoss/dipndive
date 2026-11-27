@@ -7,6 +7,7 @@ import { registerYoutubeActions } from "./youtube-actions.js";
 import { registerMediaHush } from "./media-hush.js";
 
 export const MENU_ID = "dipdive-run";
+export const TOGGLE_COMMAND = "toggle-panel";  // Option+W, see manifest "commands"
 export const slotKey = (windowId) => `slot:${windowId}`;
 
 export const MAX_SLOTS = 20;
@@ -64,6 +65,26 @@ export function registerBackground(chrome, uuid = () => crypto.randomUUID()) {
     const slot = makeSlot(url, windowId, uuid());
     chrome.storage.local.set({ [slotKey(windowId)]: slot }).then(() => pruneSlots(chrome.storage.local));
   });
+  // Option+W (1.12, manifest "commands"): opens the panel in the window in front, or closes it there when it is open.
+  // The worker remembers which windows have the panel open (sidePanel.onOpened/onClosed), but it forgets on a restart,
+  // so an open panel also closes itself on the same key (panel.js): the worker's open() is then a no-op.
+  if (chrome.commands && chrome.commands.onCommand) {
+    const openIn = new Set();
+    chrome.sidePanel.onOpened?.addListener?.((i) => { if (i && i.windowId !== undefined) openIn.add(i.windowId); });
+    chrome.sidePanel.onClosed?.addListener?.((i) => { if (i && i.windowId !== undefined) openIn.delete(i.windowId); });
+    chrome.commands.onCommand.addListener((command, tab) => {
+      if (command !== TOGGLE_COMMAND) return;
+      // Nothing may be awaited before open(): Chrome only honors the key press as a user gesture synchronously.
+      const windowId = tab && tab.windowId;
+      if (windowId === undefined) return;
+      if (openIn.has(windowId) && chrome.sidePanel.close) {
+        openIn.delete(windowId);
+        chrome.sidePanel.close({ windowId }).catch(() => {});
+        return;
+      }
+      chrome.sidePanel.open({ windowId }, swallow);
+    });
+  }
   // The panels' History button asks the service worker to open or reuse the History tab. One worker, one in-flight
   // lookup-or-create shared by every panel and window, so two quick clicks cannot both find no tab and open two.
   if (chrome.runtime.onMessage && chrome.runtime.getURL) {

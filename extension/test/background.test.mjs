@@ -92,3 +92,48 @@ test("toolbar click opens the panel even when it was never used (behavior is set
   assert.deepEqual(m.calls[0], ["behavior", { openPanelOnActionClick: true }]);
   assert.equal(Object.keys(m.store).filter((k) => k.startsWith("slot:")).length, 0);
 });
+
+// 1.12: Option+W opens the panel, or closes it where the worker knows it is open
+function commandChrome() {
+  const m = mockChrome();
+  const E = { cmd: [], opened: [], closed: [] };
+  m.chrome.commands = { onCommand: { addListener: (f) => E.cmd.push(f) } };
+  m.chrome.sidePanel.onOpened = { addListener: (f) => E.opened.push(f) };
+  m.chrome.sidePanel.onClosed = { addListener: (f) => E.closed.push(f) };
+  m.chrome.sidePanel.close = (o) => { m.calls.push(["close", o]); return Promise.resolve(); };
+  return { ...m, E };
+}
+
+test("Option+W opens the panel in the window in front", () => {
+  const m = commandChrome();
+  registerBackground(m.chrome);
+  m.E.cmd[0]("toggle-panel", { windowId: 7 });
+  assert.deepEqual(m.calls.filter((c) => c[0] === "open" || c[0] === "close"), [["open", { windowId: 7 }]]);
+});
+
+test("Option+W closes the panel where it is open, and opens it again after", () => {
+  const m = commandChrome();
+  registerBackground(m.chrome);
+  m.E.opened[0]({ windowId: 7 });
+  m.E.cmd[0]("toggle-panel", { windowId: 7 });
+  m.E.cmd[0]("toggle-panel", { windowId: 7 });
+  assert.deepEqual(m.calls.filter((c) => c[0] === "open" || c[0] === "close"), [["close", { windowId: 7 }], ["open", { windowId: 7 }]]);
+});
+
+test("Option+W ignores other commands, a missing window, and a panel closed by hand", () => {
+  const m = commandChrome();
+  registerBackground(m.chrome);
+  m.E.cmd[0]("something-else", { windowId: 7 });
+  m.E.cmd[0]("toggle-panel", undefined);
+  assert.equal(m.calls.filter((c) => c[0] === "open" || c[0] === "close").length, 0);
+  m.E.opened[0]({ windowId: 3 });
+  m.E.closed[0]({ windowId: 3 });
+  m.E.cmd[0]("toggle-panel", { windowId: 3 });
+  assert.deepEqual(m.calls.filter((c) => c[0] === "open" || c[0] === "close"), [["open", { windowId: 3 }]]);
+});
+
+test("the manifest asks for Option+W (Alt+W) on the toggle command", async () => {
+  const fs = await import("node:fs");
+  const man = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  assert.deepEqual(man.commands["toggle-panel"].suggested_key, { default: "Alt+W", mac: "Alt+W" });
+});
